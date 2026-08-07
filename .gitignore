@@ -1,0 +1,24 @@
+# 密钥与私有数据（绝不入库）
+*.env
+!*.env.example
+pipeline.env
+personal.db
+*.pem
+*.key
+
+# 缓存与大型原料（走 Release 资产或重新生成）
+tts_cache/
+data/raw/
+data/ecdict.csv
+data/eng_sentences.tsv
+data/eng_sentences_cc0.tsv
+data/*.bz2
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# 系统
+.DS_Store

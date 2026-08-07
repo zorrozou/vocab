@@ -1,0 +1,600 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>词航 · 艾宾浩斯背单词</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Noto Sans SC", sans-serif;
+    background: #0e1013; color: #e8e9eb; min-height: 100vh;
+    max-width: 480px; margin: 0 auto; padding: 0 16px 90px; line-height: 1.55;
+  }
+  header { padding: 18px 0 8px; display: flex; align-items: baseline; justify-content: space-between; }
+  .logo { font-size: 20px; font-weight: 700; }
+  .logo small { font-size: 11px; color: #5f6670; font-weight: 400; margin-left: 8px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .chip0 { font-size: 11.5px; color: #aeb4bd; background: #171a1f; border: 1px solid #262b33; border-radius: 999px; padding: 4px 10px; }
+  .chip0 b { color: #e8e9eb; }
+  .card { background: #171a1f; border: 1px solid #262b33; border-radius: 14px; padding: 18px; margin-top: 14px; }
+  h2 { font-size: 13px; color: #8b8f96; font-weight: 500; margin-bottom: 12px; }
+  .big { font-size: 34px; font-weight: 700; display: inline-block; }
+  .playw { display: inline-block; vertical-align: 6px; margin-left: 10px; background: #22262d; border-radius: 50%; width: 38px; height: 38px; line-height: 38px; text-align: center; font-size: 16px; cursor: pointer; border: none; color: #e8e9eb; }
+  .phon { color: #8b8f96; font-size: 14px; margin-top: 2px; }
+  .sense { margin-top: 10px; font-size: 14.5px; color: #cfd4da; }
+  .sense span { display: block; margin-top: 2px; }
+  .sense i { color: #5f9cec; font-style: normal; font-size: 12px; margin-right: 5px; }
+  .sent { margin-top: 12px; padding: 10px 46px 10px 12px; background: #12151a; border-radius: 10px; font-size: 15px; position: relative; }
+  .sent .tag { display: inline-block; font-size: 10px; border-radius: 4px; padding: 1px 6px; margin-right: 7px; vertical-align: 2px; }
+  .tag.s { color: #8b8f96; border: 1px solid #2c323b; }
+  .tag.p { color: #8fd0a8; background: #14301f; }
+  .plays { position: absolute; right: 8px; top: 8px; background: #22262d; border: none; border-radius: 50%; width: 30px; height: 30px; font-size: 13px; cursor: pointer; color: #e8e9eb; }
+  .zh { color: #8b8f96; font-size: 12.5px; margin-top: 4px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+  button.act {
+    border: none; border-radius: 10px; padding: 12px 18px; font-size: 15px;
+    font-weight: 600; cursor: pointer; background: #2f6fed; color: #fff; flex: 1;
+  }
+  button.ghost { background: #22262d; color: #cfd4da; }
+  button.warn { background: #4a2f2f; color: #f0a0a0; }
+  button.ok { background: #1e4633; color: #8fd0a8; }
+  button.icon { background: #22262d; flex: 0 0 auto; padding: 12px 14px; font-weight: 400; }
+  button:disabled { opacity: .45; }
+  .progress { height: 4px; background: #22262d; border-radius: 2px; margin-top: 16px; overflow: hidden; }
+  .progress i { display: block; height: 100%; background: #2f6fed; border-radius: 2px; transition: width .3s; }
+  .muted { color: #8b8f96; font-size: 12.5px; }
+  .center { text-align: center; }
+  .score { font-size: 26px; font-weight: 700; margin-top: 8px; }
+  .rec { color: #f0b45c; }
+  .foot { margin-top: 18px; color: #5f6670; font-size: 11px; text-align: center; line-height: 1.7; }
+  .tools { margin-top: 10px; display: flex; gap: 8px; justify-content: center; }
+  .tools button { flex: 0 0 auto; padding: 6px 12px; font-size: 11.5px; background: #171a1f; color: #5f6670; border: 1px solid #262b33; border-radius: 8px; }
+  .hl { color: #f0b45c; font-weight: 600; }
+  .stat-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 6px; }
+  .stat { background: #12151a; border-radius: 10px; padding: 10px; text-align: center; }
+  .stat b { font-size: 20px; display: block; }
+  .stat span { font-size: 11px; color: #8b8f96; }
+  .opt {
+    display: block; width: 100%; text-align: left; background: #12151a;
+    border: 1px solid #2c323b; border-radius: 10px; padding: 12px 14px;
+    font-size: 15px; color: #e8e9eb; margin-top: 8px; cursor: pointer;
+  }
+  .opt.right { border-color: #2e8b57; background: #14301f; color: #8fd0a8; }
+  .opt.wrong { border-color: #a33; background: #3a1d1d; color: #f0a0a0; }
+  .opt:disabled { cursor: default; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">词航<small>艾宾浩斯背单词</small></div>
+  <div class="muted" id="dateStr"></div>
+</header>
+<div class="chips" id="chips"></div>
+<main id="app"></main>
+<div class="foot" id="foot">
+  调度：FSRS-6（官方 py-fsrs · 保持率 90%）· 定级：网格贝叶斯 · 例句：静态 + GLM 个性化 · 语音：神经网络 TTS<br>
+  <span class="tools">
+    <button id="tNextDay">快进一天（测试）</button>
+    <button id="tReset">清空重来</button>
+  </span>
+</div>
+
+<script>
+"use strict";
+const API = "/vocab";
+const $ = s => document.querySelector(s);
+const today = () => new Date().toISOString().slice(0, 10);
+const addDays = (d, n) => { const t = new Date(d + "T12:00:00"); t.setDate(t.getDate() + n); return t.toISOString().slice(0, 10); };
+const INTERVAL = { 1: 1, 2: 6, 3: 8, 4: 15, 5: 45 };
+
+/* ---------------- 状态 ---------------- */
+let S = JSON.parse(localStorage.getItem("vocab_v1") || "null") || {
+  v: 1, calibrated: false, frontier: 0, pointer: 1, probeCount: 0,
+  posterior: null, pendingNew: [],
+  cards: {}, log: [], personalized: {}, streak: 0, lastDay: null,
+  settings: { newPerDay: 10, dailyCap: 100 }
+};
+const save = () => localStorage.setItem("vocab_v1", JSON.stringify(S));
+let session = { queue: [], idx: 0, learnedToday: 0, reviewedToday: 0 };
+
+/* ---------------- 语音（神经网络 TTS，浏览器兜底） ---------------- */
+let audio = null;
+let audioTimers = [];
+let actx = null, activeSrcs = [];
+function audioCtx() { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); return actx; }
+document.addEventListener("pointerdown", () => { const c = audioCtx(); if (c.state === "suspended") c.resume(); }, { passive: true });
+function playText(text) {
+  stopAudio();
+  const a = new Audio(`${API}/api/v1/tts?text=${encodeURIComponent(text)}`);
+  audio = a;
+  // 没有兜底音：音频若未生成，等待服务器生成完毕自动播放
+  a.play().catch(() => {});
+  return a;
+}
+function stopAudio() {
+  if (audio) { audio.pause(); audio.currentTime = 0; audio = null; }
+  audioTimers.forEach(clearTimeout); audioTimers = [];
+  activeSrcs.forEach(s => { try { s.stop(); } catch (e) {} }); activeSrcs = [];
+}
+async function fetchBuf(text) {
+  const r = await fetch(`${API}/api/v1/tts?text=${encodeURIComponent(text)}`);
+  const ab = await r.arrayBuffer();
+  return await audioCtx().decodeAudioData(ab);
+}
+/* 自动播放链（Web Audio 定时调度，绕开浏览器自动播放限制）：
+   单词 → 停顿（=下一句时长）→ 例句1 → 停顿 → 例句2 → … */
+let seqToken = 0;
+async function autoPlaySequence(word, sentences) {
+  stopAudio();
+  const my = ++seqToken;
+  const items = [word, ...(sentences || [])].filter(Boolean);
+  if (!items.length) return;
+  try {
+    const ctx = audioCtx();
+    if (ctx.state === "suspended") await ctx.resume();
+    const bufs = await Promise.all(items.map(fetchBuf));
+    if (my !== seqToken) return;
+    let t = ctx.currentTime + 0.05;
+    bufs.forEach((buf, i) => {
+      const src = ctx.createBufferSource();
+      src.buffer = buf; src.connect(ctx.destination);
+      src.start(t);
+      activeSrcs.push(src);
+      t += buf.duration + (i < bufs.length - 1 ? Math.max(0.6, bufs[i + 1].duration) : 0);
+    });
+  } catch (e) {
+    playText(items[0]);
+  }
+}
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+function shadow(sentence, onResult) {
+  const rec = new SR();
+  rec.lang = "en-US"; rec.interimResults = false; rec.maxAlternatives = 1;
+  rec.onresult = e => onResult(e.results[0][0].transcript);
+  rec.onerror = () => onResult(null);
+  rec.start();
+}
+const tokens = t => (t.toLowerCase().match(/[a-z']+/g) || []).map(x => x.replace(/^'+|'+$/g, ""));
+
+/* ---------------- 调度（FSRS-6 · 服务端官方 py-fsrs 计算，阶梯回退） ---------------- */
+const tomorrow = () => addDays(today(), 1);
+const LEGACY_STAB = { 1: 1, 2: 6, 3: 8, 4: 15, 5: 45 };  // 旧阶梯卡迁移映射
+
+async function fsrsCall(body) {
+  try {
+    return await fetch(API + "/api/v1/fsrs/review", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    }).then(r => r.json());
+  } catch (e) { return null; }
+}
+function ladderFallback(c, rating) {  // 端点不可用时的本地兜底
+  const INTERVAL = { 1: 1, 2: 6, 3: 8, 4: 15, 5: 45 };
+  if (rating === 1) { c.stage = Math.max(1, (c.stage || 1) - 1); c.due = tomorrow(); c.lt = 0; return; }
+  const mult = rating === 2 ? 0.6 : rating === 4 ? 1.5 : 1;
+  c.stage = Math.min(5, (c.stage || 1) + 1);
+  c.due = addDays(today(), Math.max(1, Math.round(INTERVAL[c.stage] * mult)));
+}
+
+async function learn(word, pos) {
+  let c = S.cards[word];
+  const isNewCard = !c;
+  if (!c) c = S.cards[word] = { stage: 1, due: tomorrow(), lt: 0, pos };
+  const body = c.fsrs
+    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating: 3 }
+    : isNewCard
+      ? { is_new: true, rating: 3 }
+      : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating: 3 };
+  const r = await fsrsCall(body);
+  if (r) { c.fsrs = r; c.due = (r.due || "").slice(0, 10) || tomorrow(); delete c.stage; }
+  else ladderFallback(c, 3);
+  S.log.push({ d: today(), word, rating: 3, kind: "learn" });
+}
+
+async function review(word, rating) {
+  const c = S.cards[word]; if (!c) return;
+  S.log.push({ d: today(), word, rating, kind: "review" });
+  const body = c.fsrs
+    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating }
+    : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating };
+  const r = await fsrsCall(body);
+  if (r) { c.fsrs = r; c.due = (r.due || "").slice(0, 10) || tomorrow(); if (rating === 1) c.lt = 0; delete c.stage; }
+  else ladderFallback(c, rating);
+}
+
+const isMastered = c => c.stage === 6 || (c.fsrs && c.fsrs.stability >= 180);
+
+/* ---------------- 定级（网格贝叶斯） ---------------- */
+const GRID = []; for (let r = 0; r <= 12000; r += 250) GRID.push(r);
+const logistic = x => 1 / (1 + Math.exp(-x));
+function posteriorUpdate(rank, resp) {
+  if (!S.posterior) S.posterior = GRID.map(() => 1 / GRID.length);
+  let sum = 0;
+  S.posterior = S.posterior.map((p, i) => {
+    const pk = logistic((GRID[i] - rank) / 400);
+    const like = resp * pk + (1 - resp) * (1 - pk);
+    const v = p * like; sum += v; return v;
+  });
+  S.posterior = S.posterior.map(v => v / sum);
+  S.probeCount++;
+}
+const postMean = () => S.posterior ? S.posterior.reduce((a, p, i) => a + GRID[i] * p, 0) : 0;
+const postStd = () => { const m = postMean(); return Math.sqrt(S.posterior.reduce((a, p, i) => a + (GRID[i] - m) ** 2 * p, 0)); };
+const converged = () => (postStd() < 500 && S.probeCount >= 12) || S.probeCount >= 40;
+
+/* 定级题库：30 道 4 选 1，一次拉取，答题零网络 */
+let quizSet = [];
+async function loadQuizSet() {
+  if (quizSet.length) return;
+  const r = await fetch(`${API}/api/v1/placement/set?seed=${encodeURIComponent(deviceId() + Date.now())}`).then(r => r.json());
+  quizSet = r.words;
+}
+
+/* ---------------- 例句（缺句时按需生成） ---------------- */
+async function ensureSentence(word) {
+  try {
+    const r = await fetch(`${API}/api/v1/sentence/ensure?word=${encodeURIComponent(word)}`).then(r => r.json());
+    return r.text || "";
+  } catch (e) { return ""; }
+}
+
+/* ---------------- 队列 ---------------- */
+async function buildQueue() {
+  const due = Object.entries(S.cards)
+    .filter(([w, c]) => !isMastered(c) && c.due <= today())
+    .sort((a, b) => a[1].due < b[1].due ? -1 : 1)
+    .map(([w]) => w);
+  const reviews = due.slice(0, S.settings.dailyCap);
+  const nNew = Math.min(S.settings.newPerDay, Math.max(0, S.settings.dailyCap - reviews.length));
+  const news = [];
+  const rest = [...S.pendingNew];
+  while (news.length < nNew && rest.length) news.push(rest.shift());
+  S.pendingNew = rest;
+  if (news.length < nNew) {
+    const r = await fetch(`${API}/api/v1/lexicon/at?pos=${S.pointer}&n=${nNew - news.length + 2}`).then(r => r.json());
+    for (const w of r.words) {
+      if (news.length >= nNew) break;
+      if (!S.cards[w.word] && !news.find(x => x.word === w.word)) news.push(w);
+    }
+  }
+  session.queue = [
+    ...reviews.map(w => ({ kind: "review", word: w })),
+    ...news.map(w => ({ kind: "learn", word: w.word, detail: w }))
+  ];
+  session.idx = 0;
+  const lastNew = news[news.length - 1];
+  if (lastNew && lastNew.pos) S.pointer = lastNew.pos + 1;
+  prefetchDay(news, reviews);
+}
+
+/* 队列确定后立即后台预生成：例句三句套装 + TTS 音频预热，不等翻卡 */
+function prefetchDay(news, reviewWords) {
+  const weak = [...new Set(S.log.filter(l => l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))].slice(0, 15).join(",");
+  const jobs = news.map(w =>
+    fetch(`${API}/api/v1/sentence/trio?word=${encodeURIComponent(w.word)}&weak=${encodeURIComponent(weak)}&cap=${S.pointer + 10}`)
+      .then(r => r.json())
+      .then(r => { if (r.sentences && r.sentences.length) w.sentences = r.sentences; })
+      .catch(() => {})
+  );
+  Promise.all(jobs).then(() => {
+    const texts = [];
+    news.forEach(w => { texts.push(w.word); (w.sentences || []).forEach(s => texts.push(s.text)); });
+    reviewWords.slice(0, 15).forEach(w => texts.push(w));
+    texts.slice(0, 80).forEach(t => fetch(`${API}/api/v1/tts?text=${encodeURIComponent(t)}`).catch(() => {}));
+  });
+}
+
+/* ---------------- 渲染 ---------------- */
+function renderChips() {
+  const learned = Object.keys(S.cards).length;
+  const mastered = Object.values(S.cards).filter(isMastered).length;
+  $("#chips").innerHTML = `
+    <span class="chip0">词汇边界 <b>${S.calibrated ? "≈" + S.frontier : "未定级"}</b></span>
+    <span class="chip0">已学 <b>${learned}</b></span>
+    <span class="chip0">已掌握 <b>${mastered}</b></span>
+    <span class="chip0">连续 <b>${S.streak}</b> 天</span>`;
+}
+
+function home() {
+  renderChips();
+  const el = $("#app");
+  if (!S.calibrated) {
+    el.innerHTML = `<div class="card center">
+      <h2>首次使用 · 智能定级</h2>
+      <p style="font-size:15px;margin:10px 0">30 道词义选择（4 选 1），<br>系统根据你的真实答题成绩估计词汇量，<br>把新词起点放到适合你的位置。</p>
+      <p class="muted">已完成 ${S.probeCount}/30${S.probeCount >= 4 ? ` · 当前估计 ≈${Math.round(postMean())}` : ""}</p>
+      <div class="row"><button class="act" id="bPlace">开始定级</button></div>
+    </div>`;
+    $("#bPlace").onclick = () => place();
+    return;
+  }
+  const dueN = Object.values(S.cards).filter(c => !isMastered(c) && c.due <= today()).length;
+  el.innerHTML = `<div class="card center">
+    <h2>今日任务</h2>
+    <div class="stat-grid">
+      <div class="stat"><b>${dueN}</b><span>待复习</span></div>
+      <div class="stat"><b>${S.settings.newPerDay}</b><span>新词</span></div>
+      <div class="stat"><b>${S.frontier}</b><span>学习位置</span></div>
+    </div>
+    <div class="row"><button class="act" id="bStart">开始今天</button></div>
+    <p class="muted" style="margin-top:10px">先复习到期单词，再学新词</p>
+  </div>`;
+  $("#bStart").onclick = async () => { await buildQueue(); step(); };
+}
+
+/* ---- 定级流程 ---- */
+async function place() {
+  if (!quizSet.length) {
+    $("#app").innerHTML = `<div class="card center"><p class="muted">定级题库加载中…</p></div>`;
+    try { await loadQuizSet(); } catch (e) {
+      $("#app").innerHTML = `<div class="card center"><p class="muted">网络异常，请重试</p><div class="row"><button class="act" onclick="place()">重试</button></div></div>`;
+      return;
+    }
+  }
+  if (S.probeCount >= quizSet.length) { finishPlace(Math.max(1, Math.round(postMean() || 1))); return; }
+  const w = quizSet[S.probeCount];
+  renderChips();
+  $("#app").innerHTML = `<div class="card center">
+    <h2>定级测试 ${S.probeCount + 1}/${quizSet.length} · 选出正确词义</h2>
+    <div><span class="big">${w.word}</span><button class="playw" data-t="${w.word}">▶</button></div>
+    <div style="text-align:left;margin-top:10px">${w.options.map((o, i) => `<button class="opt" data-i="${i}">${o.text}</button>`).join("")}</div>
+    <div class="progress"><i style="width:${S.probeCount / quizSet.length * 100}%"></i></div>
+    <p class="muted" style="margin-top:10px">${S.probeCount >= 4 ? "当前估计 ≈" + Math.round(postMean()) + " 词 · " : ""}答错的词会自动加入学习计划</p>
+  </div>`;
+  bindPlays();
+  playText(w.word);
+  document.querySelectorAll(".opt").forEach(b => b.onclick = () => {
+    const ok = w.options[+b.dataset.i].ok;
+    document.querySelectorAll(".opt").forEach(x => {
+      x.disabled = true;
+      if (w.options[+x.dataset.i].ok) x.classList.add("right");
+    });
+    if (!ok) b.classList.add("wrong");
+    posteriorUpdate(w.pos, ok ? 1 : 0);
+    S.wrongStreak = ok ? 0 : (S.wrongStreak || 0) + 1;
+    if (!ok && !S.pendingNew.find(x => x.word === w.word)) S.pendingNew.push(w);
+    setTimeout(() => {
+      if (S.wrongStreak >= 8) { finishPlace(1); return; }
+      if (S.probeCount >= quizSet.length) { finishPlace(Math.max(1, Math.round(postMean()))); return; }
+      save(); place();
+    }, 650);
+  });
+}
+function finishPlace(r) {
+  S.calibrated = true; S.frontier = Math.max(1, r); S.pointer = S.frontier; save();
+  $("#app").innerHTML = `<div class="card center">
+    <h2>定级完成</h2>
+    <div class="score">${S.frontier}</div>
+    <p class="muted">你的词汇边界 ≈ ${S.frontier}（共探测 ${S.probeCount} 词）<br>新词将从这个位置开始，${S.pendingNew.length} 个探测生词会优先补学</p>
+    <div class="row"><button class="act" id="bGo">开始学习</button></div>
+  </div>`;
+  renderChips();
+  $("#bGo").onclick = home;
+}
+
+/* ---- 学习卡 ---- */
+function step() {
+  stopAudio();
+  if (session.idx >= session.queue.length) return doneDay();
+  const item = session.queue[session.idx];
+  if (item.kind === "learn") showLearn(item);
+  else showReview(item);
+}
+
+async function wordDetail(word, pos) {
+  const r = await fetch(`${API}/api/v1/lexicon/at?pos=${pos}&n=1`).then(r => r.json());
+  return r.words.find(x => x.word === word) || r.words[0];
+}
+
+function sentenceBlock(word, personal, sents) {
+  const TIER = { 1: "基础", 2: "进阶", 3: "挑战" };
+  const list = Array.isArray(sents) ? sents : (sents ? [{ tier: 1, text: sents }] : []);
+  let html = "";
+  if (personal) html += `<div class="sent"><span class="tag p">个性化</span>${personal.text}<button class="plays" data-t="${personal.text}">▶</button>${personal.zh ? `<div class="zh">${personal.zh}</div>` : ""}</div>`;
+  list.forEach(s => {
+    html += `<div class="sent"><span class="tag s">${TIER[s.tier] || "例句"}</span>${s.text}<button class="plays" data-t="${s.text}">▶</button>${s.zh ? `<div class="zh">${s.zh}</div>` : ""}</div>`;
+  });
+  if (!html) html = `<div class="sent" id="pendingSent"><span class="tag s">例句</span><span class="muted">生成中…</span></div>`;
+  return { html, has: !!(personal || list.length), first: personal ? personal.text : (list[0] ? list[0].text : ""),
+           texts: [...(personal ? [personal.text] : []), ...list.map(s => s.text)] };
+}
+
+async function showLearn(item) {
+  const w = item.detail;
+  const personal = S.personalized[w.word];
+  const sents = w.sentences || (w.static ? [{ tier: 1, text: w.static }] : []);
+  const sb = sentenceBlock(w.word, personal, sents);
+  $("#app").innerHTML = `<div class="card">
+    <h2>新词 ${session.idx + 1}/${session.queue.length}（第 ${w.pos} 位）</h2>
+    <div><span class="big">${w.word}</span><button class="playw" data-t="${w.word}">▶</button></div>
+    <div class="phon">${w.phonetic ? "/" + w.phonetic + "/" : ""}</div>
+    <div class="sense">${w.senses.map(s => `<span><i>${s.pos || "·"}</i>${s.text}</span>`).join("")}</div>
+    ${sb.html}
+    <div class="row">
+      ${SR ? `<button class="icon" id="bShadow">🎤 跟读</button>` : ""}
+      <button class="act ok" id="bNext">学会了 →</button>
+    </div>
+    <div class="progress"><i style="width:${session.idx / session.queue.length * 100}%"></i></div>
+    <div class="muted" id="shadowOut" style="margin-top:8px"></div>
+  </div>`;
+  bindPlays();
+  const sentence = sb.first;
+  autoPlaySequence(w.word, sb.texts);
+  if (SR) $("#bShadow").onclick = () => {
+    const target = sentence || window.__pendingSent || "";
+    if (!target) { $("#shadowOut").textContent = "例句还在生成，稍等"; return; }
+    $("#shadowOut").textContent = "请朗读例句…";
+    shadow(target, res => {
+      if (!res) { $("#shadowOut").textContent = "未听清，再试一次"; return; }
+      const exp = tokens(target), got = new Set(tokens(res));
+      const hit = exp.filter(t => got.has(t)).length;
+      const pct = Math.round(hit / exp.length * 100);
+      $("#shadowOut").innerHTML = `识别：${res}<br>完整度 <span class="${pct >= 80 ? "hl" : "rec"}" style="font-size:18px;font-weight:700">${pct}%</span>（演示评分）`;
+    });
+  };
+  $("#bNext").onclick = async () => { await learn(w.word, w.pos); session.learnedToday++; session.idx++; save(); step(); };
+  if (!personal && sents.length < 3) {
+    const weak = [...new Set(S.log.filter(l => l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))].slice(0, 15).join(",");
+    fetch(`${API}/api/v1/sentence/trio?word=${encodeURIComponent(w.word)}&weak=${encodeURIComponent(weak)}&cap=${S.pointer + 10}`)
+      .then(r => r.json()).then(r => {
+        if (!r.sentences || !r.sentences.length) return;
+        const newSb = sentenceBlock(w.word, personal, r.sentences);
+        document.querySelectorAll("#app .sent").forEach(e => e.remove());
+        const anchor = document.querySelector("#app .sense");
+        if (anchor) anchor.insertAdjacentHTML("afterend", newSb.html.replace('id="pendingSent"', ""));
+        bindPlays();
+        if (!sb.first && newSb.texts.length) autoPlaySequence(w.word, newSb.texts);
+      }).catch(() => {});
+  }
+}
+
+function bindPlays() {
+  document.querySelectorAll(".plays,.playw").forEach(b => {
+    b.onclick = ev => { ev.stopPropagation(); playText(b.dataset.t); };
+  });
+}
+
+/* ---- 复习卡：先 4 选 1 测试，再出答案卡 ---- */
+const stageLabel = c => c.fsrs ? (isMastered(c) ? "已掌握" : `稳定≈${Math.round(c.fsrs.stability)}天`) : (c.stage === 6 ? "已掌握" : c.stage === 5 ? "长期池" : "D" + c.stage);
+
+async function showReview(item) {
+  const word = item.word;
+  const c = S.cards[word];
+  let quiz = null;
+  try { quiz = await fetch(`${API}/api/v1/quiz?pos=${c.pos}&seed=${Date.now() % 99991}`).then(r => r.json()); } catch (e) {}
+  if (!quiz || !quiz.options || quiz.options.length < 4) return showReviewClassic(item);
+  $("#app").innerHTML = `<div class="card center">
+    <h2>复习 ${session.idx + 1}/${session.queue.length} · ${stageLabel(c)}</h2>
+    <div><span class="big">${word}</span><button class="playw" data-t="${word}">▶</button></div>
+    <p class="muted" style="margin:10px 0 4px">选出正确词义：</p>
+    <div style="text-align:left">${quiz.options.map((o, i) => `<button class="opt" data-i="${i}">${o.text}</button>`).join("")}</div>
+    <div class="progress"><i style="width:${session.idx / session.queue.length * 100}%"></i></div>
+  </div>`;
+  bindPlays();
+  playText(word);
+  document.querySelectorAll(".opt").forEach(b => b.onclick = () => {
+    const ok = quiz.options[+b.dataset.i].ok;
+    document.querySelectorAll(".opt").forEach(x => {
+      x.disabled = true;
+      if (quiz.options[+x.dataset.i].ok) x.classList.add("right");
+    });
+    if (!ok) b.classList.add("wrong");
+    setTimeout(() => answerCard(item, ok), 650);
+  });
+}
+
+/* 答案卡：答错已记「忘记」，答对再选掌握程度 */
+async function answerCard(item, quizOk) {
+  const word = item.word;
+  const c = S.cards[word];
+  const d = await wordDetail(word, c.pos);
+  let sents = d.sentences || [];
+  if (!sents.length) { const t = await ensureSentence(word); if (t) sents = [{ tier: 1, text: t }]; }
+  const personal = S.personalized[word];
+  const sb = sentenceBlock(word, personal, sents);
+  if (!quizOk) { await review(word, 1); session.reviewedToday++; save(); }
+  $("#app").innerHTML = `<div class="card">
+    <h2>${quizOk ? "✓ 答对了——这次掌握程度？" : "✗ 正确答案"}</h2>
+    <div><span class="big">${word}</span><button class="playw" data-t="${word}">▶</button></div>
+    <div class="phon">${d.phonetic ? "/" + d.phonetic + "/" : ""}</div>
+    <div class="sense">${d.senses.map(s => `<span><i>${s.pos || "·"}</i>${s.text}</span>`).join("")}</div>
+    ${sb.html.replace('id="pendingSent"', "")}
+    ${quizOk
+      ? `<div class="row" style="margin-top:14px">
+          <button class="act ghost" id="r2">困难</button>
+          <button class="act ghost" id="r3">记得</button>
+          <button class="act ok" id="r4">熟练</button>
+        </div>`
+      : `<div class="row" style="margin-top:14px"><button class="act" id="rNext">继续 →</button></div>
+         <p class="muted center" style="margin-top:8px">已记为「忘记」，降级并明天再见</p>`}
+  </div>`;
+  bindPlays();
+  autoPlaySequence(word, sb.texts);
+  const go = async r => { await review(word, r); session.reviewedToday++; session.idx++; save(); step(); };
+  if (quizOk) {
+    $("#r2").onclick = () => go(2); $("#r3").onclick = () => go(3); $("#r4").onclick = () => go(4);
+  } else {
+    $("#rNext").onclick = () => { session.idx++; save(); step(); };
+  }
+}
+
+/* 翻卡旧流程（出题失败时兜底） */
+async function showReviewClassic(item) {
+  const word = item.word;
+  const c = S.cards[word];
+  const d = await wordDetail(word, c.pos);
+  $("#app").innerHTML = `<div class="card center">
+    <h2>复习 ${session.idx + 1}/${session.queue.length} · ${stageLabel(c)}</h2>
+    <div><span class="big">${word}</span><button class="playw" data-t="${word}">▶</button></div>
+    <p class="muted" style="margin:12px 0">先回忆词义，再翻卡核对</p>
+    <div class="row"><button class="act ghost" id="bFlip">显示释义</button></div>
+    <div class="progress"><i style="width:${session.idx / session.queue.length * 100}%"></i></div>
+  </div>`;
+  bindPlays();
+  $("#bFlip").onclick = () => answerCard(item, true);
+}
+
+/* ---- 完成 + 自动触发个性化 ---- */
+function doneDay() {
+  if (S.lastDay !== today()) { S.streak = S.lastDay === addDays(today(), -1) ? S.streak + 1 : 1; S.lastDay = today(); }
+  save(); renderChips();
+  $("#app").innerHTML = `<div class="card center">
+    <h2>今日完成 🎉</h2>
+    <div class="stat-grid">
+      <div class="stat"><b>${session.reviewedToday}</b><span>复习</span></div>
+      <div class="stat"><b>${session.learnedToday}</b><span>新词</span></div>
+      <div class="stat"><b>${S.streak}</b><span>连续天数</span></div>
+    </div>
+    <div class="card" style="background:#12151a;margin-top:14px">
+      <h2>明日个性化例句</h2>
+      <div class="muted" id="genOut">正在为你的薄弱词定制明天的例句…</div>
+    </div>
+  </div>`;
+  autoPersonalize();
+}
+
+async function autoPersonalize() {
+  const date = addDays(today(), 1);
+  if (S.personalizedDay === date) { $("#genOut").textContent = "✓ 明天的个性化例句已就绪"; return; }
+  try {
+    const weak7 = [...new Set(S.log.filter(l => l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))];
+    const nw = await fetch(`${API}/api/v1/lexicon/at?pos=${S.pointer}&n=${S.settings.newPerDay}`).then(r => r.json());
+    const body = {
+      device: deviceId(), date,
+      new_words: nw.words.map(w => w.word), weak_words: weak7.slice(0, 10),
+      learned_max_pos: S.pointer + 10, sync: true
+    };
+    const r = await fetch(API + "/api/v1/personalize", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+    }).then(r => r.json());
+    const p = await fetch(`${API}/api/v1/personalized?device=${deviceId()}&date=${date}`).then(r => r.json());
+    p.sentences.forEach(s => S.personalized[s.target] = { text: s.text, recall: s.recall, zh: s.zh || "" });
+    S.personalizedDay = date;
+    save();
+    $("#genOut").innerHTML = `✓ 已自动生成 ${r.generated} 条（明天的新词 × 你近 7 天的 ${weak7.length} 个薄弱词）` +
+      p.sentences.map(s => `<div class="sent" style="margin-top:6px"><span class="tag p">个性化</span>${s.text}<button class="plays" data-t="${s.text}">▶</button> <span class="zh">（复习词：${s.recall}）</span>${s.zh ? `<div class="zh">${s.zh}</div>` : ""}</div>`).join("");
+    bindPlays();
+  } catch (e) {
+    $("#genOut").textContent = "生成暂不可用，明天用静态例句（不影响学习）";
+  }
+}
+
+function deviceId() {
+  let d = localStorage.getItem("vocab_device");
+  if (!d) { d = "web-" + Math.random().toString(36).slice(2, 10); localStorage.setItem("vocab_device", d); }
+  return d;
+}
+
+/* ---------------- 测试工具 ---------------- */
+$("#tNextDay").onclick = () => {
+  Object.values(S.cards).forEach(c => { if (c.due) c.due = addDays(c.due, -1); });
+  save(); home();
+};
+$("#tReset").onclick = () => { if (confirm("清空全部学习数据？")) { localStorage.removeItem("vocab_v1"); location.reload(); } };
+
+$("#dateStr").textContent = today();
+home();
+</script>
+</body>
+</html>
