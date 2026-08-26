@@ -43,9 +43,16 @@ VMAP = {r["variant"]: r["lemma"] for r in _lx.execute("SELECT variant, lemma FRO
 
 
 def static_sentences(wid):
-    """按档位返回 LLM 成品句（基础/进阶/挑战）；template 占位句不对外"""
+    """按档位返回 LLM 成品句（每档一条，llm-tier-v1 优先）；template 占位句不对外"""
     rows = _lx.execute(
-        "SELECT text, tier, translation FROM sentence WHERE targetWordId=? AND genMethod LIKE 'llm-%' ORDER BY tier LIMIT 3",
+        """SELECT text, tier, translation FROM sentence s
+           WHERE targetWordId=? AND genMethod LIKE 'llm-%'
+             AND id = (SELECT id FROM sentence s2
+                       WHERE s2.targetWordId = s.targetWordId AND s2.tier = s.tier
+                         AND s2.genMethod LIKE 'llm-%'
+                       ORDER BY CASE WHEN s2.genMethod='llm-tier-v1' THEN 0 ELSE 1 END,
+                                s2.id DESC LIMIT 1)
+           ORDER BY tier LIMIT 3""",
         (wid,)).fetchall()
     return [{"tier": r["tier"], "text": r["text"], "zh": r["translation"] or ""} for r in rows]
 
@@ -85,9 +92,9 @@ def llm(prompt):
         return json.loads(r.read())["choices"][0]["message"]["content"].strip().strip('"').splitlines()[0].strip()
 
 
-def validate(cand, target, recall, max_pos):
+def validate(cand, target, recall, max_pos, max_len=MAX_LEN):
     ts = toks(cand)
-    if not (3 <= len(ts) <= MAX_LEN):
+    if not (3 <= len(ts) <= max_len):
         return f"句长{len(ts)}超界"
     hit_t = hit_r = False
     for t in ts:
@@ -106,20 +113,35 @@ def validate(cand, target, recall, max_pos):
     return None
 
 
+def assign_recalls(new_words, weak_words, seed):
+    """薄弱词概率分配：每个薄弱词出现 1~2 次；最多约一半句子带薄弱词，不是每句都织入"""
+    import random as _r
+    rng = _r.Random(seed)
+    if not weak_words:
+        return {}
+    pool = weak_words * 2          # 每词最多 2 次
+    rng.shuffle(pool)
+    targets = new_words[:]
+    rng.shuffle(targets)
+    cap = min(len(pool), max(1, round(len(targets) * 0.5)))
+    return {targets[i]: pool[i] for i in range(cap)}
+
+
 def generate(device, date, new_words, weak_words, max_pos):
     conn = sqlite3.connect(PERSONAL_DB)
     made = 0
-    for k, target in enumerate(new_words):
-        recall = weak_words[k % len(weak_words)] if weak_words else None
+    plan = assign_recalls(new_words, weak_words, f"{device}{date}")
+    for target in new_words:
+        recall = plan.get(target)   # 可能为 None（该句不织入薄弱词）
         t_sense = (SENSE.get(WORD2ID.get(target, -1)) or "")[:50]
         r_sense = (SENSE.get(WORD2ID.get(recall, -1)) or "")[:40] if recall else ""
-        prompt = (f"为背单词 App 写一条英语例句，要求：\n"
+        prompt = (f"为背单词 App 写一条英语例句。要求：\n"
                   f"1. 必须包含目标词 \"{target}\"（词义：{t_sense}）\n"
-                  + (f"2. 必须同时包含复习词 \"{recall}\"（词义：{r_sense}），这是学习者最近没记住的词\n"
-                     if recall else "2. 目标词单独成句\n") +
-                  f"3. 句长 3~12 个单词，句子自然、地道、简单\n"
-                  f"4. 其他用词必须是英语最常见的简单高频词\n"
-                  f"5. 输出格式：英文句子 || 中文翻译，一行，不要任何解释")
+                  + (f"2. 同时自然地包含复习词 \"{recall}\"（词义：{r_sense}）\n" if recall else "") +
+                  f"3. 【真实使用场景】描述日常/工作/学习中的真实情境，两个词要融入情境而不是生硬拼凑\n"
+                  f"4. 句长 6~16 个单词，语法正确、表达地道、有意义\n"
+                  f"5. 除目标词与复习词外，用词为常见高频简单词\n"
+                  f"6. 输出格式：英文句子 || 中文翻译，一行，不要任何解释")
         err = None
         for _ in range(3):
             try:
@@ -131,13 +153,13 @@ def generate(device, date, new_words, weak_words, max_pos):
                 err = f"API错误:{e}"
                 time.sleep(2)
                 continue
-            err = validate(cand, target, recall, max_pos)
+            err = validate(cand, target, recall, max_pos, max_len=16)
             if not err:
                 conn.execute("INSERT INTO sentences VALUES(?,?,?,?,?,?,?)",
                              (device, date, target, recall, cand, time.time(), zh))
                 made += 1
                 break
-        time.sleep(0.3)
+            time.sleep(0.2)
     conn.commit()
     conn.close()
     return made
@@ -328,13 +350,14 @@ TTS_VOICE = os.environ.get("TTS_VOICE", "en-US-AriaNeural")
 
 
 @app.get("/api/v1/tts")
-def tts(text: str = Query(min_length=1, max_length=200)):
+def tts(text: str = Query(min_length=1, max_length=200), v: str = ""):
     import asyncio, hashlib
     import edge_tts
-    key = hashlib.sha1(f"{TTS_VOICE}|{text}".encode()).hexdigest()[:16]
+    voice = v if v in ("en-US-AriaNeural", "en-US-GuyNeural", "en-US-JennyNeural", "en-GB-SoniaNeural") else TTS_VOICE
+    key = hashlib.sha1(f"{voice}|{text}".encode()).hexdigest()[:16]
     f = TTS_DIR / f"{key}.mp3"
     if not f.exists():
-        asyncio.run(edge_tts.Communicate(text, TTS_VOICE).save(str(f)))
+        asyncio.run(edge_tts.Communicate(text, voice).save(str(f)))
     return FileResponse(f, media_type="audio/mpeg")
 
 

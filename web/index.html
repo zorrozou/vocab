@@ -69,7 +69,11 @@
 <body>
 <header>
   <div class="logo">词航<small>艾宾浩斯背单词</small></div>
-  <div class="muted" id="dateStr"></div>
+  <div class="row" style="margin:0;gap:6px;align-items:center">
+    <span class="muted" id="dateStr"></span>
+    <button class="icon" id="btnStats" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px">📊</button>
+    <button class="icon" id="btnSettings" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px">⚙️</button>
+  </div>
 </header>
 <div class="chips" id="chips"></div>
 <main id="app"></main>
@@ -107,10 +111,10 @@ function audioCtx() { if (!actx) actx = new (window.AudioContext || window.webki
 document.addEventListener("pointerdown", () => { const c = audioCtx(); if (c.state === "suspended") c.resume(); }, { passive: true });
 function playText(text) {
   stopAudio();
-  const a = new Audio(`${API}/api/v1/tts?text=${encodeURIComponent(text)}`);
+  const a = new Audio(`${API}/api/v1/tts?text=${encodeURIComponent(text)}&v=${encodeURIComponent(S.settings.voice || "")}`);
   audio = a;
   // 没有兜底音：音频若未生成，等待服务器生成完毕自动播放
-  a.play().catch(() => {});
+  a.play().catch(() => apHint());
   return a;
 }
 function stopAudio() {
@@ -119,7 +123,7 @@ function stopAudio() {
   activeSrcs.forEach(s => { try { s.stop(); } catch (e) {} }); activeSrcs = [];
 }
 async function fetchBuf(text) {
-  const r = await fetch(`${API}/api/v1/tts?text=${encodeURIComponent(text)}`);
+  const r = await fetch(`${API}/api/v1/tts?text=${encodeURIComponent(text)}&v=${encodeURIComponent(S.settings.voice || "")}`);
   const ab = await r.arrayBuffer();
   return await audioCtx().decodeAudioData(ab);
 }
@@ -145,6 +149,7 @@ async function autoPlaySequence(word, sentences) {
       t += buf.duration + (i < bufs.length - 1 ? Math.max(0.6, bufs[i + 1].duration) : 0);
     });
   } catch (e) {
+    apHint();
     playText(items[0]);
   }
 }
@@ -152,7 +157,7 @@ const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
 function shadow(sentence, onResult) {
   const rec = new SR();
   rec.lang = "en-US"; rec.interimResults = false; rec.maxAlternatives = 1;
-  rec.onresult = e => onResult(e.results[0][0].transcript);
+  rec.onresult = e => onResult({ text: e.results[0][0].transcript, confidence: e.results[0][0].confidence });
   rec.onerror = () => onResult(null);
   rec.start();
 }
@@ -187,7 +192,7 @@ async function learn(word, pos) {
       ? { is_new: true, rating: 3 }
       : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating: 3 };
   const r = await fsrsCall(body);
-  if (r) { c.fsrs = r; c.due = (r.due || "").slice(0, 10) || tomorrow(); delete c.stage; }
+  if (r) { c.fsrs = r; c.due = r.due || new Date(addDays(today(), 1) + "T08:00:00").toISOString(); delete c.stage; }
   else ladderFallback(c, 3);
   S.log.push({ d: today(), word, rating: 3, kind: "learn" });
 }
@@ -199,7 +204,7 @@ async function review(word, rating) {
     ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating }
     : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating };
   const r = await fsrsCall(body);
-  if (r) { c.fsrs = r; c.due = (r.due || "").slice(0, 10) || tomorrow(); if (rating === 1) c.lt = 0; delete c.stage; }
+  if (r) { c.fsrs = r; c.due = r.due || new Date(addDays(today(), 1) + "T08:00:00").toISOString(); if (rating === 1) c.lt = 0; delete c.stage; }
   else ladderFallback(c, rating);
 }
 
@@ -242,7 +247,7 @@ async function ensureSentence(word) {
 /* ---------------- 队列 ---------------- */
 async function buildQueue() {
   const due = Object.entries(S.cards)
-    .filter(([w, c]) => !isMastered(c) && c.due <= today())
+    .filter(([w, c]) => !isMastered(c) && new Date(c.due) <= new Date())
     .sort((a, b) => a[1].due < b[1].due ? -1 : 1)
     .map(([w]) => w);
   const reviews = due.slice(0, S.settings.dailyCap);
@@ -281,7 +286,7 @@ function prefetchDay(news, reviewWords) {
     const texts = [];
     news.forEach(w => { texts.push(w.word); (w.sentences || []).forEach(s => texts.push(s.text)); });
     reviewWords.slice(0, 15).forEach(w => texts.push(w));
-    texts.slice(0, 80).forEach(t => fetch(`${API}/api/v1/tts?text=${encodeURIComponent(t)}`).catch(() => {}));
+    texts.slice(0, 80).forEach(t => fetch(`${API}/api/v1/tts?text=${encodeURIComponent(t)}&v=${encodeURIComponent(S.settings.voice || "")}`).catch(() => {}));
   });
 }
 
@@ -309,7 +314,7 @@ function home() {
     $("#bPlace").onclick = () => place();
     return;
   }
-  const dueN = Object.values(S.cards).filter(c => !isMastered(c) && c.due <= today()).length;
+  const dueN = Object.values(S.cards).filter(c => !isMastered(c) && new Date(c.due) <= new Date()).length;
   el.innerHTML = `<div class="card center">
     <h2>今日任务</h2>
     <div class="stat-grid">
@@ -427,10 +432,11 @@ async function showLearn(item) {
     $("#shadowOut").textContent = "请朗读例句…";
     shadow(target, res => {
       if (!res) { $("#shadowOut").textContent = "未听清，再试一次"; return; }
-      const exp = tokens(target), got = new Set(tokens(res));
+      const exp = tokens(target), got = new Set(tokens(res.text));
       const hit = exp.filter(t => got.has(t)).length;
       const pct = Math.round(hit / exp.length * 100);
-      $("#shadowOut").innerHTML = `识别：${res}<br>完整度 <span class="${pct >= 80 ? "hl" : "rec"}" style="font-size:18px;font-weight:700">${pct}%</span>（演示评分）`;
+      const conf = Math.round((res.confidence || 0.7) * 100);
+      $("#shadowOut").innerHTML = `识别：${res.text}<br>完整度 <span class="${pct >= 80 ? "hl" : "rec"}" style="font-size:18px;font-weight:700">${pct}%</span> · 置信度 <span class="${conf >= 75 ? "hl" : "rec"}" style="font-size:18px;font-weight:700">${conf}%</span>`;
     });
   };
   $("#bNext").onclick = async () => { await learn(w.word, w.pos); session.learnedToday++; session.idx++; save(); step(); };
@@ -546,11 +552,22 @@ function doneDay() {
       <div class="stat"><b>${session.learnedToday}</b><span>新词</span></div>
       <div class="stat"><b>${S.streak}</b><span>连续天数</span></div>
     </div>
+    <div id="laterRow" style="margin-top:10px"></div>
     <div class="card" style="background:#12151a;margin-top:14px">
       <h2>明日个性化例句</h2>
       <div class="muted" id="genOut">正在为你的薄弱词定制明天的例句…</div>
     </div>
   </div>`;
+  // 日内步骤：FSRS learning steps 可能让词在当天稍后再到期
+  const now = new Date(), eod = new Date(today() + "T23:59:59");
+  const dueNowN = Object.values(S.cards).filter(c => !isMastered(c) && c.due && new Date(c.due) <= now).length;
+  const laterN = Object.values(S.cards).filter(c => !isMastered(c) && c.due && new Date(c.due) > now && new Date(c.due) <= eod).length;
+  if (dueNowN > 0) {
+    $("#laterRow").innerHTML = `<div class="row"><button class="act ghost" id="bMore">还有 ${dueNowN} 词已到期，继续复习 →</button></div>`;
+    $("#bMore").onclick = async () => { await buildQueue(); step(); };
+  } else if (laterN > 0) {
+    $("#laterRow").innerHTML = `<p class="muted">⏰ 今天晚些时候还有 ${laterN} 个词到期，记得回来</p>`;
+  }
   autoPersonalize();
 }
 
@@ -570,6 +587,7 @@ async function autoPersonalize() {
     }).then(r => r.json());
     const p = await fetch(`${API}/api/v1/personalized?device=${deviceId()}&date=${date}`).then(r => r.json());
     p.sentences.forEach(s => S.personalized[s.target] = { text: s.text, recall: s.recall, zh: s.zh || "" });
+    p.sentences.forEach(s => fetch(`${API}/api/v1/tts?text=${encodeURIComponent(s.text)}&v=${encodeURIComponent(S.settings.voice || "")}`).catch(() => {}));  // 音频预热
     S.personalizedDay = date;
     save();
     $("#genOut").innerHTML = `✓ 已自动生成 ${r.generated} 条（明天的新词 × 你近 7 天的 ${weak7.length} 个薄弱词）` +
@@ -588,10 +606,93 @@ function deviceId() {
 
 /* ---------------- 测试工具 ---------------- */
 $("#tNextDay").onclick = () => {
-  Object.values(S.cards).forEach(c => { if (c.due) c.due = addDays(c.due, -1); });
+  Object.values(S.cards).forEach(c => { if (c.due) c.due = new Date(new Date(c.due).getTime() - 86400000).toISOString(); });
   save(); home();
 };
 $("#tReset").onclick = () => { if (confirm("清空全部学习数据？")) { localStorage.removeItem("vocab_v1"); location.reload(); } };
+
+/* ---------------- P1：统计 / 设置 / 引导 ---------------- */
+function showStats() {
+  stopAudio();
+  const words = Object.entries(S.cards);
+  const buckets = { "≥95%": 0, "90~95%": 0, "80~90%": 0, "60~80%": 0, "<60%": 0 };
+  words.forEach(([w, c]) => {
+    if (!c.fsrs || !c.fsrs.stability) return;
+    const last = [...S.log].reverse().find(l => l.word === w);
+    const t = last ? Math.max(0, (new Date(today()) - new Date(last.d)) / 86400000) : 0;
+    const R = Math.pow(1 + 0.9805 * t / c.fsrs.stability, -0.1542);
+    if (R >= 0.95) buckets["≥95%"]++; else if (R >= 0.9) buckets["90~95%"]++;
+    else if (R >= 0.8) buckets["80~90%"]++; else if (R >= 0.6) buckets["60~80%"]++; else buckets["<60%"]++;
+  });
+  const day0 = today();
+  const loads = Array.from({ length: 14 }, (_, i) => {
+    const d = addDays(day0, i);
+    return { d, n: Object.values(S.cards).filter(c => !isMastered(c) && c.due && c.due.slice(0, 10) === d).length };
+  });
+  loads[0].n += Object.values(S.cards).filter(c => !isMastered(c) && c.due && c.due.slice(0, 10) < day0).length;
+  const maxL = Math.max(1, ...loads.map(x => x.n));
+  const lapseCount = {};
+  S.log.filter(l => l.rating <= 2).forEach(l => lapseCount[l.word] = (lapseCount[l.word] || 0) + 1);
+  const stubborn = Object.entries(lapseCount).filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  $("#app").innerHTML = `<div class="card">
+    <h2>学习统计</h2>
+    <div class="stat-grid">
+      <div class="stat"><b>${words.length}</b><span>已学</span></div>
+      <div class="stat"><b>${words.filter(([, c]) => isMastered(c)).length}</b><span>已掌握</span></div>
+      <div class="stat"><b>${S.streak}</b><span>连续天数</span></div>
+    </div>
+    <h2 style="margin-top:14px">记忆保持率分布（FSRS）</h2>
+    ${Object.entries(buckets).map(([k, n]) => {
+      const tot = Math.max(1, Object.values(buckets).reduce((a, b) => a + b, 0));
+      return `<div class="row" style="margin-top:6px;align-items:center"><span class="muted" style="width:56px">${k}</span><div style="flex:1;height:10px;background:#12151a;border-radius:5px"><div style="width:${n / tot * 100}%;height:100%;background:#2f6fed;border-radius:5px"></div></div><span style="width:34px;text-align:right">${n}</span></div>`;
+    }).join("")}
+    <h2 style="margin-top:14px">未来 14 天负载预测</h2>
+    <div class="row" style="align-items:flex-end;gap:3px;height:64px">
+      ${loads.map(x => `<div style="flex:1;background:#2f6fed;border-radius:3px 3px 0 0;height:${Math.max(3, x.n / maxL * 60)}px" title="${x.d}: ${x.n}词"></div>`).join("")}
+    </div>
+    <div class="row" style="gap:3px">${loads.map((x, i) => `<div class="muted" style="flex:1;text-align:center;font-size:9px">${i % 2 ? "" : x.d.slice(5)}</div>`).join("")}</div>
+    ${stubborn.length ? `<h2 style="margin-top:14px">顽固词（≥2 次没记住）</h2><p style="font-size:14px">${stubborn.map(([w, n]) => `${w} ×${n}`).join(" · ")}</p>` : ""}
+    <div class="row"><button class="act ghost" id="bBack">返回</button></div>
+  </div>`;
+  $("#bBack").onclick = home;
+}
+
+function showSettings() {
+  const st = S.settings;
+  $("#app").innerHTML = `<div class="card">
+    <h2>设置</h2>
+    <p class="muted">每日新词数</p>
+    <div class="row">${[5, 10, 15, 20].map(n => `<button class="ghost" style="flex:1;padding:9px;${st.newPerDay === n ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-new="${n}">${n}</button>`).join("")}</div>
+    <p class="muted" style="margin-top:12px">每日总上限（复习+新词）</p>
+    <div class="row">${[30, 60, 100, 130].map(n => `<button class="ghost" style="flex:1;padding:9px;${st.dailyCap === n ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-cap="${n}">${n}</button>`).join("")}</div>
+    <p class="muted" style="margin-top:12px">朗读嗓音</p>
+    <div class="row">${[["en-US-AriaNeural", "Aria 女声"], ["en-US-GuyNeural", "Guy 男声"], ["en-US-JennyNeural", "Jenny 女声"], ["en-GB-SoniaNeural", "Sonia 英音"]].map(([v, name]) => `<button class="ghost" style="flex:1 1 40%;padding:9px;${(st.voice || "") === v ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-voice="${v}">${name}</button>`).join("")}</div>
+    <div class="row"><button class="act" id="bSave">保存</button></div>
+  </div>`;
+  document.querySelectorAll("[data-new]").forEach(b => b.onclick = () => { st.newPerDay = +b.dataset.new; showSettings(); });
+  document.querySelectorAll("[data-cap]").forEach(b => b.onclick = () => { st.dailyCap = +b.dataset.cap; showSettings(); });
+  document.querySelectorAll("[data-voice]").forEach(b => b.onclick = () => {
+    st.voice = b.dataset.voice;
+    playText("The quick brown fox jumps over the lazy dog.");
+    showSettings();
+  });
+  $("#bSave").onclick = () => { save(); home(); };
+}
+
+let apHintShown = false;
+function apHint() {
+  if (apHintShown || sessionStorage.getItem("apHint")) return;
+  apHintShown = true; sessionStorage.setItem("apHint", "1");
+  const d = document.createElement("div");
+  d.className = "card center";
+  d.style.cssText = "position:fixed;left:50%;bottom:14px;transform:translateX(-50%);z-index:9;padding:10px 16px;font-size:13px;max-width:90%";
+  d.textContent = "🔊 浏览器拦了自动播放，点任意 ▶ 一次，之后就能自动连播了";
+  document.body.appendChild(d);
+  setTimeout(() => d.remove(), 6000);
+}
+
+$("#btnStats").onclick = showStats;
+$("#btnSettings").onclick = showSettings;
 
 $("#dateStr").textContent = today();
 home();
