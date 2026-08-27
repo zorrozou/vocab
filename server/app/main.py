@@ -43,14 +43,15 @@ VMAP = {r["variant"]: r["lemma"] for r in _lx.execute("SELECT variant, lemma FRO
 
 
 def static_sentences(wid):
-    """按档位返回 LLM 成品句（每档一条，llm-tier-v1 优先）；template 占位句不对外"""
+    """每档一条：Tatoeba 自然语料优先，LLM 生成补缺；template 占位句不对外"""
     rows = _lx.execute(
         """SELECT text, tier, translation FROM sentence s
-           WHERE targetWordId=? AND genMethod LIKE 'llm-%'
+           WHERE targetWordId=? AND (genMethod LIKE 'llm-%' OR genMethod='tatoeba')
              AND id = (SELECT id FROM sentence s2
                        WHERE s2.targetWordId = s.targetWordId AND s2.tier = s.tier
-                         AND s2.genMethod LIKE 'llm-%'
-                       ORDER BY CASE WHEN s2.genMethod='llm-tier-v1' THEN 0 ELSE 1 END,
+                         AND (s2.genMethod LIKE 'llm-%' OR s2.genMethod='tatoeba')
+                       ORDER BY CASE s2.genMethod WHEN 'tatoeba' THEN 0
+                                  WHEN 'llm-tier-v1' THEN 1 ELSE 2 END,
                                 s2.id DESC LIMIT 1)
            ORDER BY tier LIMIT 3""",
         (wid,)).fetchall()
@@ -127,20 +128,66 @@ def assign_recalls(new_words, weak_words, seed):
     return {targets[i]: pool[i] for i in range(cap)}
 
 
-def generate(device, date, new_words, weak_words, max_pos):
+def quality_check(sentence, target, recall=None):
+    """自校验：LLM 评审语法+自然度+语义相容性，≥4 分才收"""
+    prompt = (f"你是英语教材评审。给这个给中国学生看的英语例句打分（1~5 整数）：\n"
+              f"\"{sentence}\"\n"
+              f"目标词：{target}" + (f"，复习词：{recall}" if recall else "") +
+              f"\n标准：5=语法正确、自然地道、像真实生活用语、词与词搭配不矛盾；"
+              f"3=语法正确但略生硬或语义勉强；1=语法错误或语义矛盾/牵强。"
+              f"只输出一个数字。")
+    try:
+        out = llm(prompt)
+        m = re.search(r"\d", out)
+        return int(m.group()) if m else 3
+    except Exception:
+        return 4   # 评审失败默认放行，不阻塞
+
+
+def validate_multi(cand, target, recalls, max_pos, max_len=16):
+    """多复习词版校验：目标词 + 每个复习词都必须出现"""
+    ts = toks(cand)
+    if not (3 <= len(ts) <= max_len):
+        return f"句长{len(ts)}超界"
+    hit_t = False
+    hit_set = set()
+    exempt = {target, *recalls}
+    for t in ts:
+        lemma = VMAP.get(t, t)
+        wid = WORD2ID.get(lemma)
+        if wid is None:
+            return f"词库外词汇:{t}"
+        if POS_OF.get(wid, 10 ** 9) > max_pos and lemma not in exempt:
+            return f"超出学习范围:{t}"
+        hit_t |= (t == target or lemma == target)
+        if lemma in recalls:
+            hit_set.add(lemma)
+    if not hit_t:
+        return "未出现目标词"
+    missing = [r for r in recalls if r not in hit_set]
+    if missing:
+        return f"未出现复习词:{'/'.join(missing)}"
+    return None
+
+
+def generate(device, date, weak_words, max_pos):
+    """薄弱词定制：每个薄弱词配 1~2 个其他薄弱词，随机组合成真实场景句"""
+    import random as _r
     conn = sqlite3.connect(PERSONAL_DB)
+    rng = _r.Random(f"{device}{date}")
     made = 0
-    plan = assign_recalls(new_words, weak_words, f"{device}{date}")
-    for target in new_words:
-        recall = plan.get(target)   # 可能为 None（该句不织入薄弱词）
+    for target in weak_words:
+        others = [w for w in weak_words if w != target]
+        rng.shuffle(others)
+        recalls = others[:min(2, len(others))]   # 随机 1~2 个其他薄弱词
         t_sense = (SENSE.get(WORD2ID.get(target, -1)) or "")[:50]
-        r_sense = (SENSE.get(WORD2ID.get(recall, -1)) or "")[:40] if recall else ""
+        r_desc = "、".join(f'"{r}"（{(SENSE.get(WORD2ID.get(r, -1)) or "")[:20]}）' for r in recalls)
         prompt = (f"为背单词 App 写一条英语例句。要求：\n"
                   f"1. 必须包含目标词 \"{target}\"（词义：{t_sense}）\n"
-                  + (f"2. 同时自然地包含复习词 \"{recall}\"（词义：{r_sense}）\n" if recall else "") +
-                  f"3. 【真实使用场景】描述日常/工作/学习中的真实情境，两个词要融入情境而不是生硬拼凑\n"
+                  + (f"2. 同时自然地包含这些复习词：{r_desc}\n" if recalls else "") +
+                  f"3. 【真实使用场景】描述日常/工作/学习中的真实情境，几个词要自然融入同一情境\n"
                   f"4. 句长 6~16 个单词，语法正确、表达地道、有意义\n"
-                  f"5. 除目标词与复习词外，用词为常见高频简单词\n"
+                  f"5. 其余用词为常见高频简单词\n"
                   f"6. 输出格式：英文句子 || 中文翻译，一行，不要任何解释")
         err = None
         for _ in range(3):
@@ -153,17 +200,38 @@ def generate(device, date, new_words, weak_words, max_pos):
                 err = f"API错误:{e}"
                 time.sleep(2)
                 continue
-            err = validate(cand, target, recall, max_pos, max_len=16)
+            err = validate_multi(cand, target, recalls, max_pos)
             if not err:
+                score = quality_check(cand, target, recalls[0] if recalls else None)
+                if score < 4:
+                    err = f"自然度评分{score}<4，请换一个更自然、语义不矛盾的场景重写"
+                    continue
                 conn.execute("INSERT INTO sentences VALUES(?,?,?,?,?,?,?)",
-                             (device, date, target, recall, cand, time.time(), zh))
+                             (device, date, target, ",".join(recalls) if recalls else None,
+                              cand, time.time(), zh))
                 made += 1
                 break
             time.sleep(0.2)
+        # 兜底：组合太难就只含目标词
+        has_one = conn.execute(
+            "SELECT 1 FROM sentences WHERE device=? AND date=? AND target=?",
+            (device, date, target)).fetchone()
+        if not has_one:
+            try:
+                out = llm(f"为背单词 App 的单词 \"{target}\"（词义：{t_sense}）写一条英语例句："
+                          f"真实日常场景、语法正确、自然地道，6~16 词，常见高频词。"
+                          f"输出格式：英文句子 || 中文翻译，一行，不要解释。")
+                cand, _, zh = out.partition("||")
+                cand = cand.strip().strip('"')
+                if not validate_multi(cand, target, [], max_pos) and quality_check(cand, target, None) >= 4:
+                    conn.execute("INSERT INTO sentences VALUES(?,?,?,?,?,?,?)",
+                                 (device, date, target, None, cand, time.time(), zh.strip()))
+                    made += 1
+            except Exception:
+                pass
     conn.commit()
     conn.close()
     return made
-
 
 class PersonalizeIn(BaseModel):
     device: str = Field(min_length=6, max_length=64)
@@ -216,9 +284,9 @@ def personalize(body: PersonalizeIn):
     conn.commit()
     conn.close()
     out = {"queued": True, "date": body.date}
-    if body.sync and body.new_words:
-        out["generated"] = generate(body.device, body.date, body.new_words,
-                                    body.weak_words, body.learned_max_pos)
+    if body.sync and body.weak_words:
+        # 新合约：只为薄弱词定制（新词有自己的静态例句，不需要个性化）
+        out["generated"] = generate(body.device, body.date, body.weak_words, body.learned_max_pos)
     return out
 
 
@@ -563,10 +631,17 @@ class FsrsIn(BaseModel):
     difficulty: float = 0
     due: str | None = None
     rating: int = 3         # 1 Again / 2 Hard / 3 Good / 4 Easy
+    now: str | None = None          # 模拟时钟（测试用；缺省用真实时间）
+    last_review: str | None = None  # 上次复习时间（模拟时钟配套）
 
 
 @app.post("/api/v1/fsrs/review")
 def fsrs_review(body: FsrsIn):
+    now = None
+    if body.now:
+        now = datetime.fromisoformat(body.now.replace("Z", "+00:00"))
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
     c = _FsrsCard()
     if not body.is_new:
         c.state = _FsrsState(body.state)
@@ -575,8 +650,12 @@ def fsrs_review(body: FsrsIn):
         if body.due:
             d = datetime.fromisoformat(body.due.replace("Z", "+00:00"))
             c.due = d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d
-        c.last_review = datetime.now(timezone.utc)
-    c, log = FSRS.review_card(c, _FsrsRating(body.rating))
+        if body.last_review:
+            lr = datetime.fromisoformat(body.last_review.replace("Z", "+00:00"))
+            c.last_review = lr.replace(tzinfo=timezone.utc) if lr.tzinfo is None else lr
+        else:
+            c.last_review = now or datetime.now(timezone.utc)
+    c, log = FSRS.review_card(c, _FsrsRating(body.rating), review_datetime=now)
     return {"state": c.state.value,
             "stability": round(c.stability, 3),
             "difficulty": round(c.difficulty, 3),

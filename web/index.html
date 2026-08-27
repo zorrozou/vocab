@@ -572,14 +572,20 @@ function doneDay() {
 }
 
 async function autoPersonalize() {
-  const date = addDays(today(), 1);
-  if (S.personalizedDay === date) { $("#genOut").textContent = "✓ 明天的个性化例句已就绪"; return; }
+  const date = today();
+  if (S.personalizedDay === date) { $("#genOut").textContent = "✓ 今天的薄弱词例句已就绪"; return; }
   try {
-    const weak7 = [...new Set(S.log.filter(l => l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))];
-    const nw = await fetch(`${API}/api/v1/lexicon/at?pos=${S.pointer}&n=${S.settings.newPerDay}`).then(r => r.json());
+    // 只为"今天觉得不熟练/没记住"的词定制（已掌握的词不再出现）
+    const weakToday = [...new Set(S.log.filter(l => l.d === date && l.rating <= 2).map(l => l.word))]
+      .filter(w => { const c = S.cards[w]; return !c || !isMastered(c); });
+    if (!weakToday.length) {
+      $("#genOut").textContent = "今天没有薄弱词，全部掌握得很好 👍 无需定制";
+      S.personalizedDay = date; save(); return;
+    }
+    $("#genOut").textContent = `正在为今天的 ${weakToday.length} 个薄弱词定制复习例句…`;
     const body = {
       device: deviceId(), date,
-      new_words: nw.words.map(w => w.word), weak_words: weak7.slice(0, 10),
+      new_words: [], weak_words: weakToday.slice(0, 15),
       learned_max_pos: S.pointer + 10, sync: true
     };
     const r = await fetch(API + "/api/v1/personalize", {
@@ -590,8 +596,8 @@ async function autoPersonalize() {
     p.sentences.forEach(s => fetch(`${API}/api/v1/tts?text=${encodeURIComponent(s.text)}&v=${encodeURIComponent(S.settings.voice || "")}`).catch(() => {}));  // 音频预热
     S.personalizedDay = date;
     save();
-    $("#genOut").innerHTML = `✓ 已自动生成 ${r.generated} 条（明天的新词 × 你近 7 天的 ${weak7.length} 个薄弱词）` +
-      p.sentences.map(s => `<div class="sent" style="margin-top:6px"><span class="tag p">个性化</span>${s.text}<button class="plays" data-t="${s.text}">▶</button> <span class="zh">（复习词：${s.recall}）</span>${s.zh ? `<div class="zh">${s.zh}</div>` : ""}</div>`).join("");
+    $("#genOut").innerHTML = `✓ 已为今天 ${weakToday.length} 个薄弱词定制 ${r.generated} 条复习例句（这些词明天复习时优先显示）：` +
+      p.sentences.map(s => `<div class="sent" style="margin-top:6px"><span class="tag p">个性化</span>${s.text}<button class="plays" data-t="${s.text}">▶</button> <span class="zh">（复习词：${[s.target, ...(s.recall ? s.recall.split(",") : [])].join("、")}）</span>${s.zh ? `<div class="zh">${s.zh}</div>` : ""}</div>`).join("");
     bindPlays();
   } catch (e) {
     $("#genOut").textContent = "生成暂不可用，明天用静态例句（不影响学习）";
