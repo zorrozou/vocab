@@ -182,19 +182,19 @@ function ladderFallback(c, rating) {  // 端点不可用时的本地兜底
   c.due = addDays(today(), Math.max(1, Math.round(INTERVAL[c.stage] * mult)));
 }
 
-async function learn(word, pos) {
+async function learn(word, pos, rating = 3) {
   let c = S.cards[word];
   const isNewCard = !c;
   if (!c) c = S.cards[word] = { stage: 1, due: tomorrow(), lt: 0, pos };
   const body = c.fsrs
-    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating: 3 }
+    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating }
     : isNewCard
-      ? { is_new: true, rating: 3 }
-      : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating: 3 };
+      ? { is_new: true, rating }
+      : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating };
   const r = await fsrsCall(body);
   if (r) { c.fsrs = r; c.due = r.due || new Date(addDays(today(), 1) + "T08:00:00").toISOString(); delete c.stage; }
-  else ladderFallback(c, 3);
-  S.log.push({ d: today(), word, rating: 3, kind: "learn" });
+  else ladderFallback(c, rating);
+  S.log.push({ d: today(), word, rating, kind: "learn" });
 }
 
 async function review(word, rating) {
@@ -251,7 +251,22 @@ async function buildQueue() {
     .sort((a, b) => a[1].due < b[1].due ? -1 : 1)
     .map(([w]) => w);
   const reviews = due.slice(0, S.settings.dailyCap);
-  const nNew = Math.min(S.settings.newPerDay, Math.max(0, S.settings.dailyCap - reviews.length));
+  // 提前巩固位：刚学会（≤7天）、FSRS 未到期、未掌握的词，按 P=(1−R)×0.5 概率抽取（≤5个）
+  const nowD = new Date();
+  const earlyPool = Object.entries(S.cards).filter(([w, c]) => {
+    if (isMastered(c) || new Date(c.due) <= nowD) return false;
+    const last = [...S.log].reverse().find(l => l.word === w);
+    if (!last) return false;
+    const elapsed = (nowD - new Date(last.d + "T12:00:00")) / 86400000;
+    if (elapsed > 7 || elapsed < 1) return false;   // 昨天刚过的才进入概率池
+    const S0 = c.fsrs ? Math.max(0.2, c.fsrs.stability) : 2;
+    const R = Math.pow(1 + 0.9805 * elapsed / S0, -0.1542);
+    return Math.random() < (1 - R) * 0.5;
+  }).map(([w]) => w);
+  const early = earlyPool.filter(w => !reviews.includes(w))
+    .slice(0, Math.min(5, Math.max(0, S.settings.dailyCap - reviews.length)));
+  const reviewsAll = [...reviews, ...early];
+  const nNew = Math.min(S.settings.newPerDay, Math.max(0, S.settings.dailyCap - reviewsAll.length));
   const news = [];
   const rest = [...S.pendingNew];
   while (news.length < nNew && rest.length) news.push(rest.shift());
@@ -264,13 +279,13 @@ async function buildQueue() {
     }
   }
   session.queue = [
-    ...reviews.map(w => ({ kind: "review", word: w })),
+    ...reviewsAll.map(w => ({ kind: "review", word: w })),
     ...news.map(w => ({ kind: "learn", word: w.word, detail: w }))
   ];
   session.idx = 0;
   const lastNew = news[news.length - 1];
   if (lastNew && lastNew.pos) S.pointer = lastNew.pos + 1;
-  prefetchDay(news, reviews);
+  prefetchDay(news, reviewsAll);
 }
 
 /* 队列确定后立即后台预生成：例句三句套装 + TTS 音频预热，不等翻卡 */
@@ -381,10 +396,45 @@ function finishPlace(r) {
 /* ---- 学习卡 ---- */
 function step() {
   stopAudio();
-  if (session.idx >= session.queue.length) return doneDay();
+  if (session.idx >= session.queue.length) return maybeQuiz();
   const item = session.queue[session.idx];
   if (item.kind === "learn") showLearn(item);
   else showReview(item);
+}
+
+/* ---- 当日新词验收测试（4选1） ---- */
+function maybeQuiz() {
+  const learnedToday = [...new Set(S.log.filter(l => l.d === today() && l.kind === "learn").map(l => l.word))];
+  if (!learnedToday.length || S.quizDay === today()) return doneDay();
+  quizRound(learnedToday, 0);
+}
+
+async function quizRound(words, i) {
+  if (i >= words.length) { S.quizDay = today(); save(); return doneDay(); }
+  const w = words[i];
+  const pos = S.cards[w] ? S.cards[w].pos : 1200;
+  let q = null;
+  try { q = await fetch(`${API}/api/v1/quiz?pos=${pos}&seed=${Date.now() % 99991}`).then(r => r.json()); } catch (e) {}
+  if (!q || !q.options || q.options.length < 4) return quizRound(words, i + 1);
+  $("#app").innerHTML = `<div class="card center">
+    <h2>验收测试 ${i + 1}/${words.length} · 今天学的还记得吗？</h2>
+    <div><span class="big">${w}</span><button class="playw" data-t="${w}">▶</button></div>
+    <div style="text-align:left;margin-top:10px">${q.options.map((o, k) => `<button class="opt" data-i="${k}">${o.text}</button>`).join("")}</div>
+    <div class="progress"><i style="width:${i / words.length * 100}%"></i></div>
+    <p class="muted" style="margin-top:10px">答对 → 明天复习见 · 答错 → 进入薄弱词，今晚就定制例句</p>
+  </div>`;
+  bindPlays();
+  playText(w);
+  document.querySelectorAll(".opt").forEach(b => b.onclick = async () => {
+    const ok = q.options[+b.dataset.i].ok;
+    document.querySelectorAll(".opt").forEach(x => {
+      x.disabled = true;
+      if (q.options[+x.dataset.i].ok) x.classList.add("right");
+    });
+    if (!ok) b.classList.add("wrong");
+    await review(w, ok ? 3 : 1);   // 答对=Good（D+1 必复习），答错=Again（薄弱词+短间隔）
+    setTimeout(() => quizRound(words, i + 1), 650);
+  });
 }
 
 async function wordDetail(word, pos) {
@@ -418,6 +468,7 @@ async function showLearn(item) {
     ${sb.html}
     <div class="row">
       ${SR ? `<button class="icon" id="bShadow">🎤 跟读</button>` : ""}
+      <button class="act warn" id="bWeak">不熟悉</button>
       <button class="act ok" id="bNext">学会了 →</button>
     </div>
     <div class="progress"><i style="width:${session.idx / session.queue.length * 100}%"></i></div>
@@ -439,7 +490,8 @@ async function showLearn(item) {
       $("#shadowOut").innerHTML = `识别：${res.text}<br>完整度 <span class="${pct >= 80 ? "hl" : "rec"}" style="font-size:18px;font-weight:700">${pct}%</span> · 置信度 <span class="${conf >= 75 ? "hl" : "rec"}" style="font-size:18px;font-weight:700">${conf}%</span>`;
     });
   };
-  $("#bNext").onclick = async () => { await learn(w.word, w.pos); session.learnedToday++; session.idx++; save(); step(); };
+  $("#bWeak").onclick = async () => { await learn(w.word, w.pos, 1); session.learnedToday++; session.idx++; save(); step(); };
+  $("#bNext").onclick = async () => { await learn(w.word, w.pos, 3); session.learnedToday++; session.idx++; save(); step(); };
   if (!personal && sents.length < 3) {
     const weak = [...new Set(S.log.filter(l => l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))].slice(0, 15).join(",");
     fetch(`${API}/api/v1/sentence/trio?word=${encodeURIComponent(w.word)}&weak=${encodeURIComponent(weak)}&cap=${S.pointer + 10}`)
