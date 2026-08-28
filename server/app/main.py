@@ -286,6 +286,11 @@ def personalize(body: PersonalizeIn):
     out = {"queued": True, "date": body.date}
     if body.sync and body.weak_words:
         # 新合约：只为薄弱词定制（新词有自己的静态例句，不需要个性化）
+        # 替换语义：先清掉该设备当天的旧批次，避免新旧堆积
+        conn = sqlite3.connect(PERSONAL_DB)
+        conn.execute("DELETE FROM sentences WHERE device=? AND date=?", (body.device, body.date))
+        conn.commit()
+        conn.close()
         out["generated"] = generate(body.device, body.date, body.weak_words, body.learned_max_pos)
     return out
 

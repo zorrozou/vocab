@@ -624,8 +624,8 @@ function doneDay() {
     </div>
     <div id="laterRow" style="margin-top:10px"></div>
     <div class="card" style="background:#12151a;margin-top:14px">
-      <h2>明日个性化例句</h2>
-      <div class="muted" id="genOut">正在为你的薄弱词定制明天的例句…</div>
+      <h2>今日薄弱词 · 个性化例句</h2>
+      <div class="muted" id="genOut">正在为你的薄弱词定制例句…</div>
     </div>
   </div>`;
   // 日内步骤：FSRS learning steps 可能让词在当天稍后再到期
@@ -643,14 +643,19 @@ function doneDay() {
 
 async function autoPersonalize() {
   const date = today();
-  if (S.personalizedDay === date) { $("#genOut").textContent = "✓ 今天的薄弱词例句已就绪"; return; }
   try {
     // 只为"今天觉得不熟练/没记住"的词定制（已掌握的词不再出现）
     const weakToday = [...new Set(S.log.filter(l => l.d === date && l.rating <= 2).map(l => l.word))]
       .filter(w => { const c = S.cards[w]; return !c || !isMastered(c); });
+    // 去重：薄弱词集合没变化且今天已生成过 → 跳过
+    const weakKey = [...weakToday].sort().join(",");
+    if (S.personalizedDay === date && S.personalizedWeak === weakKey) {
+      $("#genOut").textContent = "✓ 今天的薄弱词例句已就绪";
+      return;
+    }
     if (!weakToday.length) {
       $("#genOut").textContent = "今天没有薄弱词，全部掌握得很好 👍 无需定制";
-      S.personalizedDay = date; save(); return;
+      S.personalizedDay = date; S.personalizedWeak = ""; save(); return;
     }
     $("#genOut").textContent = `正在为今天的 ${weakToday.length} 个薄弱词定制复习例句…`;
     const body = {
@@ -665,6 +670,7 @@ async function autoPersonalize() {
     p.sentences.forEach(s => S.personalized[s.target] = { text: s.text, recall: s.recall, zh: s.zh || "" });
     p.sentences.forEach(s => fetch(`${API}/api/v1/tts?text=${encodeURIComponent(s.text)}&v=${encodeURIComponent(S.settings.voice || "")}`).catch(() => {}));  // 音频预热
     S.personalizedDay = date;
+    S.personalizedWeak = weakKey;
     save();
     $("#genOut").innerHTML = `✓ 已为今天 ${weakToday.length} 个薄弱词定制 ${r.generated} 条复习例句（这些词明天复习时优先显示）：` +
       p.sentences.map(s => `<div class="sent" style="margin-top:6px"><span class="tag p">个性化</span>${s.text}<button class="plays" data-t="${s.text}">▶</button> <span class="zh">（复习词：${[s.target, ...(s.recall ? s.recall.split(",") : [])].join("、")}）</span>${s.zh ? `<div class="zh">${s.zh}</div>` : ""}</div>`).join("");
