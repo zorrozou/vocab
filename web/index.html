@@ -505,6 +505,24 @@ async function showLearn(item) {
         if (!sb.first && newSb.texts.length) autoPlaySequence(w.word, newSb.texts);
       }).catch(() => {});
   }
+  // 巩固句：新词例句 40% 概率织入近期薄弱词（每天 ≤3 次，先查句库共现再生成）
+  const wk = today();
+  if (S.weaveDay !== wk) { S.weaveDay = wk; S.weaveCount = 0; }
+  const weakPool = [...new Set(S.log.filter(l => l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))]
+    .filter(x => x !== w.word && !(S.cards[x] && isMastered(S.cards[x])));
+  if (!personal && weakPool.length && S.weaveCount < 3 && Math.random() < 0.4) {
+    const weakW = weakPool[Math.floor(Math.random() * weakPool.length)];
+    S.weaveCount++; save();
+    fetch(`${API}/api/v1/sentence/weave?word=${encodeURIComponent(w.word)}&weak=${encodeURIComponent(weakW)}&cap=${S.pointer + 10}&device=${deviceId()}`)
+      .then(r => r.json()).then(r => {
+        if (!r.text) return;
+        const anchor = document.querySelector("#app .sense");
+        if (!anchor) return;
+        anchor.insertAdjacentHTML("afterend",
+          `<div class="sent"><span class="tag" style="color:#5f9cec;border:1px solid #2a4a6e">巩固</span>${r.text}<button class="plays" data-t="${r.text}">▶</button> <span class="zh">（复习词：${weakW}）</span>${r.zh ? `<div class="zh">${r.zh}</div>` : ""}</div>`);
+        bindPlays();
+      }).catch(() => {});
+  }
 }
 
 function bindPlays() {

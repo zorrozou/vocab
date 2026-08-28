@@ -505,6 +505,64 @@ def placement_set(seed: str = ""):
     return {"words": items[:30], "seed": seed_val}
 
 
+# ---------- 巩固句：新词 × 近期薄弱词 共现句（先查句库，无则生成）----------
+@app.get("/api/v1/sentence/weave")
+def sentence_weave(word: str = Query(min_length=1, max_length=40),
+                   weak: str = Query(min_length=1, max_length=40),
+                   cap: int = 0, device: str = "anon"):
+    wid = WORD2ID.get(word)
+    rid = WORD2ID.get(weak)
+    if not wid or not rid or wid == rid:
+        return {"text": "", "source": "none"}
+    pos = POS_OF[wid]
+    cap = max(pos, 300, cap)
+    # 1) 句库共现句：wordIds 同时含两个词（规范化为 ,12,34, 后精确匹配）
+    norm = "REPLACE(REPLACE(REPLACE(wordIds,' ',''),'[',','),']',',')"
+    cand = []
+    for r in _lx.execute(
+            f"SELECT text, genMethod FROM sentence WHERE instr({norm}, ?) > 0 AND instr({norm}, ?) > 0",
+            (f",{rid},", f",{wid},")).fetchall():
+        cand.append((r[0], r[1]))
+    if cand:
+        cand.sort(key=lambda x: (0 if x[1] == "tatoeba" else 1, len(x[0])))
+        return {"text": cand[0][0], "source": "pool"}
+    # 2) 无共现句 → LLM 生成（校验 + 自评分）
+    t_sense = (SENSE.get(wid) or "")[:50]
+    w_sense = (SENSE.get(rid) or "")[:40]
+    prompt = (f"为背单词 App 写一条英语例句。要求：\n"
+              f"1. 必须包含目标词 \"{word}\"（词义：{t_sense}）\n"
+              f"2. 同时自然地包含复习词 \"{weak}\"（词义：{w_sense}），这是学习者最近没记住的词\n"
+              f"3. 【真实使用场景】描述日常/工作/学习中的真实情境，两词自然融入同一情境\n"
+              f"4. 句长 6~16 个单词，语法正确、表达地道、有意义\n"
+              f"5. 其余用词为常见高频简单词\n"
+              f"6. 输出格式：英文句子 || 中文翻译，一行，不要任何解释")
+    err = None
+    for _ in range(3):
+        try:
+            out = llm(prompt + (f"\n\n上次失败原因：{err}，请修正。" if err else ""))
+            cand_text, _, zh = out.partition("||")
+            cand_text = cand_text.strip().strip('"')
+        except Exception as e:
+            err = f"API错误:{e}"
+            time.sleep(1.5)
+            continue
+        err = validate_multi(cand_text, word, [weak], cap)
+        if not err and quality_check(cand_text, word, weak) >= 4:
+            conn = sqlite3.connect(PERSONAL_DB)
+            conn.execute("INSERT INTO sentences VALUES(?,?,?,?,?,?,?)",
+                         (device, today_str(), word, weak, cand_text, time.time(), zh.strip()))
+            conn.commit()
+            conn.close()
+            return {"text": cand_text, "zh": zh.strip(), "source": "generated"}
+        time.sleep(0.2)
+    return {"text": "", "source": "none"}
+
+
+def today_str():
+    from datetime import datetime as _dt
+    return _dt.now().strftime("%Y-%m-%d")
+
+
 # ---------- 新词三句套装：1 条句库句 + 2 条生成句（≥10 词）----------
 TIER_RANGE = {1: (3, 10), 2: (10, 16), 3: (10, 20)}
 
