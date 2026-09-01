@@ -447,9 +447,9 @@ function sentenceBlock(word, personal, sents) {
   const TIER = { 1: "基础", 2: "进阶", 3: "挑战" };
   const list = Array.isArray(sents) ? sents : (sents ? [{ tier: 1, text: sents }] : []);
   let html = "";
-  if (personal) html += `<div class="sent"><span class="tag p">个性化</span>${personal.text}<button class="plays" data-t="${personal.text}">▶</button><button class="plays bad" data-t="${personal.text}" data-w="${word}" data-kind="personal">👎</button>${personal.zh ? `<div class="zh">${personal.zh}</div>` : ""}</div>`;
+  if (personal) html += `<div class="sent"><span class="tag p">个性化</span>${personal.text}<button class="plays" data-t="${personal.text}">▶</button><button class="plays bad" data-t="${personal.text}" data-w="${word}" data-kind="personal" title="换一句">↻</button>${personal.zh ? `<div class="zh">${personal.zh}</div>` : ""}</div>`;
   list.forEach(s => {
-    html += `<div class="sent"><span class="tag s">${TIER[s.tier] || "例句"}</span>${s.text}<button class="plays" data-t="${s.text}">▶</button><button class="plays bad" data-t="${s.text}" data-w="${word}" data-kind="static">👎</button>${s.zh ? `<div class="zh">${s.zh}</div>` : ""}</div>`;
+    html += `<div class="sent"><span class="tag s">${TIER[s.tier] || "例句"}</span>${s.text}<button class="plays" data-t="${s.text}">▶</button><button class="plays bad" data-t="${s.text}" data-w="${word}" data-kind="static" title="换一句">↻</button>${s.zh ? `<div class="zh">${s.zh}</div>` : ""}</div>`;
   });
   if (!html) html = `<div class="sent" id="pendingSent"><span class="tag s">例句</span><span class="muted">生成中…</span></div>`;
   return { html, has: !!(personal || list.length), first: personal ? personal.text : (list[0] ? list[0].text : ""),
@@ -520,7 +520,7 @@ async function showLearn(item) {
         const anchor = document.querySelector("#app .sense");
         if (!anchor) return;
         anchor.insertAdjacentHTML("afterend",
-          `<div class="sent"><span class="tag" style="color:#5f9cec;border:1px solid #2a4a6e">巩固</span>${r.text}<button class="plays" data-t="${r.text}">▶</button><button class="plays bad" data-t="${r.text}" data-w="${w.word}" data-kind="weave">👎</button> <span class="zh">（复习词：${weakW}）</span>${r.zh ? `<div class="zh">${r.zh}</div>` : ""}</div>`);
+          `<div class="sent"><span class="tag" style="color:#5f9cec;border:1px solid #2a4a6e">巩固</span>${r.text}<button class="plays" data-t="${r.text}">▶</button><button class="plays bad" data-t="${r.text}" data-w="${w.word}" data-kind="weave" title="换一句">↻</button> <span class="zh">（复习词：${weakW}）</span>${r.zh ? `<div class="zh">${r.zh}</div>` : ""}</div>`);
         bindPlays();
       }).catch(() => {});
   }
@@ -530,17 +530,43 @@ function bindPlays() {
   document.querySelectorAll(".plays,.playw").forEach(b => {
     b.onclick = ev => { ev.stopPropagation(); playText(b.dataset.t); };
   });
-  // 👎 差句反馈：静态句上报隐藏，个性化/巩固句本地移除
+  // ↻ 换一句：上报/移除并重生（用户无需判断好坏，纯偏好操作）
   document.querySelectorAll(".bad").forEach(b => {
     b.onclick = async ev => {
       ev.stopPropagation();
       const w = b.dataset.w, kind = b.dataset.kind, text = b.dataset.t;
       const sentEl = b.closest(".sent");
-      if (kind === "personal") { delete S.personalized[w]; save(); }
-      else {
-        try { await fetch(`${API}/api/v1/sentence/report?word=${encodeURIComponent(w)}&text=${encodeURIComponent(text)}`, { method: "POST" }); } catch (e) {}
-      }
-      if (sentEl) { sentEl.style.opacity = ".35"; sentEl.querySelector(".bad").remove(); }
+      if (sentEl) sentEl.style.opacity = ".35";
+      try {
+        if (kind !== "static") { delete S.personalized[w]; save(); }
+        else { await fetch(`${API}/api/v1/sentence/report?word=${encodeURIComponent(w)}&text=${encodeURIComponent(text)}`, { method: "POST" }); }
+      } catch (e) {}
+      try {
+        if (kind === "static") {
+          // 触发补档并重取该词条
+          await fetch(`${API}/api/v1/sentence/trio?word=${encodeURIComponent(w)}&cap=${S.pointer + 10}`).then(r => r.json());
+          const pos = (S.cards[w] && S.cards[w].pos) || S.pointer;
+          const r2 = await fetch(`${API}/api/v1/lexicon/at?pos=${pos}&n=20`).then(r => r.json());
+          const wd = r2.words.find(x => x.word === w);
+          const fresh = wd && (wd.sentences || []).find(x => x.text !== text);
+          if (fresh && sentEl) {
+            const TIER = { 1: "基础", 2: "进阶", 3: "挑战" };
+            sentEl.outerHTML = `<div class="sent"><span class="tag s">${TIER[fresh.tier] || "例句"}</span>${fresh.text}<button class="plays" data-t="${fresh.text}">▶</button><button class="plays bad" data-t="${fresh.text}" data-w="${w}" data-kind="static" title="换一句">↻</button>${fresh.zh ? `<div class="zh">${fresh.zh}</div>` : ""}</div>`;
+            bindPlays();
+          } else if (sentEl) sentEl.remove();
+        } else {
+          // 个性化/巩固句：单条重生（replace=false 追加，不清批次）
+          await fetch(API + "/api/v1/personalize", { method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ device: deviceId(), date: today(), new_words: [], weak_words: [w], learned_max_pos: S.pointer + 10, sync: true }) });
+          const p = await fetch(`${API}/api/v1/personalized?device=${deviceId()}&date=${today()}`).then(r => r.json());
+          const s = p.sentences.find(x => x.target === w && x.text !== text);
+          if (s && sentEl) {
+            S.personalized[w] = { text: s.text, recall: s.recall, zh: s.zh || "" }; save();
+            sentEl.outerHTML = `<div class="sent"><span class="tag p">个性化</span>${s.text}<button class="plays" data-t="${s.text}">▶</button><button class="plays bad" data-t="${s.text}" data-w="${w}" data-kind="personal" title="换一句">↻</button>${s.zh ? `<div class="zh">${s.zh}</div>` : ""}</div>`;
+            bindPlays();
+          } else if (sentEl) sentEl.remove();
+        }
+      } catch (e) { if (sentEl) sentEl.remove(); }
     };
   });
 }
@@ -678,7 +704,7 @@ async function autoPersonalize() {
       learned_max_pos: S.pointer + 10, sync: true
     };
     const r = await fetch(API + "/api/v1/personalize", {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ...body, replace: true })
     }).then(r => r.json());
     const p = await fetch(`${API}/api/v1/personalized?device=${deviceId()}&date=${date}`).then(r => r.json());
     p.sentences.forEach(s => S.personalized[s.target] = { text: s.text, recall: s.recall, zh: s.zh || "" });

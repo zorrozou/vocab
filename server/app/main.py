@@ -242,6 +242,7 @@ class PersonalizeIn(BaseModel):
     weak_words: list[str] = Field(default_factory=list, max_length=30)
     learned_max_pos: int = Field(default=300, ge=1, le=12000)
     sync: bool = False
+    replace: bool = False   # True=整日替换批次（自动个性化）；False=单词追加（换一句）
 
 
 app = FastAPI(title="vocab-api", version="0.2.0", on_startup=[init_db])
@@ -288,11 +289,12 @@ def personalize(body: PersonalizeIn):
     out = {"queued": True, "date": body.date}
     if body.sync and body.weak_words:
         # 新合约：只为薄弱词定制（新词有自己的静态例句，不需要个性化）
-        # 替换语义：先清掉该设备当天的旧批次，避免新旧堆积
-        conn = sqlite3.connect(PERSONAL_DB)
-        conn.execute("DELETE FROM sentences WHERE device=? AND date=?", (body.device, body.date))
-        conn.commit()
-        conn.close()
+        # replace=True：整日替换批次（自动个性化）；False：单词追加（换一句）
+        if body.replace:
+            conn = sqlite3.connect(PERSONAL_DB)
+            conn.execute("DELETE FROM sentences WHERE device=? AND date=?", (body.device, body.date))
+            conn.commit()
+            conn.close()
         out["generated"] = generate(body.device, body.date, body.weak_words, body.learned_max_pos)
     return out
 
