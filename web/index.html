@@ -64,6 +64,7 @@
   .opt.right { border-color: #2e8b57; background: #14301f; color: #8fd0a8; }
   .opt.wrong { border-color: #a33; background: #3a1d1d; color: #f0a0a0; }
   .opt:disabled { cursor: default; }
+  .plays.bad { right: 44px; color: #8b8f96; }
 </style>
 </head>
 <body>
@@ -446,9 +447,9 @@ function sentenceBlock(word, personal, sents) {
   const TIER = { 1: "基础", 2: "进阶", 3: "挑战" };
   const list = Array.isArray(sents) ? sents : (sents ? [{ tier: 1, text: sents }] : []);
   let html = "";
-  if (personal) html += `<div class="sent"><span class="tag p">个性化</span>${personal.text}<button class="plays" data-t="${personal.text}">▶</button>${personal.zh ? `<div class="zh">${personal.zh}</div>` : ""}</div>`;
+  if (personal) html += `<div class="sent"><span class="tag p">个性化</span>${personal.text}<button class="plays" data-t="${personal.text}">▶</button><button class="plays bad" data-t="${personal.text}" data-w="${word}" data-kind="personal">👎</button>${personal.zh ? `<div class="zh">${personal.zh}</div>` : ""}</div>`;
   list.forEach(s => {
-    html += `<div class="sent"><span class="tag s">${TIER[s.tier] || "例句"}</span>${s.text}<button class="plays" data-t="${s.text}">▶</button>${s.zh ? `<div class="zh">${s.zh}</div>` : ""}</div>`;
+    html += `<div class="sent"><span class="tag s">${TIER[s.tier] || "例句"}</span>${s.text}<button class="plays" data-t="${s.text}">▶</button><button class="plays bad" data-t="${s.text}" data-w="${word}" data-kind="static">👎</button>${s.zh ? `<div class="zh">${s.zh}</div>` : ""}</div>`;
   });
   if (!html) html = `<div class="sent" id="pendingSent"><span class="tag s">例句</span><span class="muted">生成中…</span></div>`;
   return { html, has: !!(personal || list.length), first: personal ? personal.text : (list[0] ? list[0].text : ""),
@@ -519,7 +520,7 @@ async function showLearn(item) {
         const anchor = document.querySelector("#app .sense");
         if (!anchor) return;
         anchor.insertAdjacentHTML("afterend",
-          `<div class="sent"><span class="tag" style="color:#5f9cec;border:1px solid #2a4a6e">巩固</span>${r.text}<button class="plays" data-t="${r.text}">▶</button> <span class="zh">（复习词：${weakW}）</span>${r.zh ? `<div class="zh">${r.zh}</div>` : ""}</div>`);
+          `<div class="sent"><span class="tag" style="color:#5f9cec;border:1px solid #2a4a6e">巩固</span>${r.text}<button class="plays" data-t="${r.text}">▶</button><button class="plays bad" data-t="${r.text}" data-w="${w.word}" data-kind="weave">👎</button> <span class="zh">（复习词：${weakW}）</span>${r.zh ? `<div class="zh">${r.zh}</div>` : ""}</div>`);
         bindPlays();
       }).catch(() => {});
   }
@@ -528,6 +529,19 @@ async function showLearn(item) {
 function bindPlays() {
   document.querySelectorAll(".plays,.playw").forEach(b => {
     b.onclick = ev => { ev.stopPropagation(); playText(b.dataset.t); };
+  });
+  // 👎 差句反馈：静态句上报隐藏，个性化/巩固句本地移除
+  document.querySelectorAll(".bad").forEach(b => {
+    b.onclick = async ev => {
+      ev.stopPropagation();
+      const w = b.dataset.w, kind = b.dataset.kind, text = b.dataset.t;
+      const sentEl = b.closest(".sent");
+      if (kind === "personal") { delete S.personalized[w]; save(); }
+      else {
+        try { await fetch(`${API}/api/v1/sentence/report?word=${encodeURIComponent(w)}&text=${encodeURIComponent(text)}`, { method: "POST" }); } catch (e) {}
+      }
+      if (sentEl) { sentEl.style.opacity = ".35"; sentEl.querySelector(".bad").remove(); }
+    };
   });
 }
 

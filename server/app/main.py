@@ -47,9 +47,11 @@ def static_sentences(wid):
     rows = _lx.execute(
         """SELECT text, tier, translation FROM sentence s
            WHERE targetWordId=? AND (genMethod LIKE 'llm-%' OR genMethod='tatoeba')
+             AND COALESCE(flag,'') != 'reported'
              AND id = (SELECT id FROM sentence s2
                        WHERE s2.targetWordId = s.targetWordId AND s2.tier = s.tier
                          AND (s2.genMethod LIKE 'llm-%' OR s2.genMethod='tatoeba')
+                         AND COALESCE(s2.flag,'') != 'reported'
                        ORDER BY CASE s2.genMethod WHEN 'tatoeba' THEN 0
                                   WHEN 'llm-tier-v1' THEN 1 ELSE 2 END,
                                 s2.id DESC LIMIT 1)
@@ -375,6 +377,26 @@ def lexicon_probes():
             out.append({"word": d["word"], "pos": d["pos"],
                         "sense": d["senses"][0]["text"] if d["senses"] else ""})
     return {"words": out}
+
+
+# ---------- 例句反馈：用户标记差句 → 隐藏并重生 ----------
+@app.post("/api/v1/sentence/report")
+def sentence_report(word: str = Query(min_length=1, max_length=40),
+                    text: str = Query(min_length=1, max_length=300),
+                    device: str = ""):
+    n = 0
+    wid = WORD2ID.get(word)
+    if wid:
+        n += _lxw.execute(
+            "UPDATE sentence SET flag='reported' WHERE targetWordId=? AND text=?",
+            (wid, text)).rowcount
+        _lxw.commit()
+    # 个性化/巩固句存在个人库——直接删除（可再生）
+    conn = sqlite3.connect(PERSONAL_DB)
+    n += conn.execute("DELETE FROM sentences WHERE text=?", (text,)).rowcount
+    conn.commit()
+    conn.close()
+    return {"ok": True, "reported": n}
 
 
 # ---------- 复习 4 选 1 测试 ----------
