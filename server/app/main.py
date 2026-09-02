@@ -8,7 +8,7 @@
   GET  /api/v1/lexicon/latest|download  词库版本与整包下载
   GET  /                          测试页（static/index.html）
 """
-import json, os, re, sqlite3, time, urllib.request
+import json, os, re, sqlite3, threading, time, urllib.request
 from pathlib import Path
 
 from fastapi import FastAPI, Query
@@ -89,9 +89,10 @@ def llm(prompt):
         f"{LLM_BASE}/chat/completions",
         data=json.dumps({"model": LLM_MODEL, "messages": [{"role": "user", "content": prompt}],
                          "thinking": {"type": "disabled"}, "temperature": 0.7,
-                         "max_tokens": 200}).encode(),
+                         **({"max_tokens": int(os.environ["LLM_MAX_TOKENS"])}
+                            if os.environ.get("LLM_MAX_TOKENS") else {})}).encode(),
         headers={"Authorization": f"Bearer {LLM_KEY}", "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=45) as r:
+    with urllib.request.urlopen(req, timeout=120) as r:
         return json.loads(r.read())["choices"][0]["message"]["content"].strip().strip('"').splitlines()[0].strip()
 
 
@@ -147,20 +148,28 @@ def quality_check(sentence, target, recall=None):
 
 
 def validate_multi(cand, target, recalls, max_pos, max_len=16):
-    """多复习词版校验：目标词 + 每个复习词都必须出现"""
+    """多复习词版校验：目标词 + 每个复习词都必须出现；
+    词汇约束带 1500 位过档余量与 1 个词库外容忍（hy4 常用词排序偏后，exam 类词不应误杀）"""
     ts = toks(cand)
     if not (3 <= len(ts) <= max_len):
         return f"句长{len(ts)}超界"
     hit_t = False
     hit_set = set()
     exempt = {target, *recalls}
+    oov = 0
+    over = 0
     for t in ts:
         lemma = VMAP.get(t, t)
         wid = WORD2ID.get(lemma)
         if wid is None:
-            return f"词库外词汇:{t}"
-        if POS_OF.get(wid, 10 ** 9) > max_pos and lemma not in exempt:
-            return f"超出学习范围:{t}"
+            oov += 1
+            if oov > 1:
+                return f"词库外词汇:{t}"
+            continue
+        if POS_OF.get(wid, 10 ** 9) > max_pos + 1500 and lemma not in exempt:
+            over += 1
+            if over > 2:
+                return f"超出学习范围:{t}"
         hit_t |= (t == target or lemma == target)
         if lemma in recalls:
             hit_set.add(lemma)
@@ -173,12 +182,15 @@ def validate_multi(cand, target, recalls, max_pos, max_len=16):
 
 
 def generate(device, date, weak_words, max_pos):
-    """薄弱词定制：每个薄弱词配 1~2 个其他薄弱词，随机组合成真实场景句"""
+    """薄弱词定制：每个薄弱词配 1~2 个其他薄弱词，随机组合成真实场景句。
+    hy4 等慢速推理模型下按词并行（4 工人），整体耗时不随词数线性增长。"""
     import random as _r
-    conn = sqlite3.connect(PERSONAL_DB)
+    from concurrent.futures import ThreadPoolExecutor
+    conn = sqlite3.connect(PERSONAL_DB, check_same_thread=False)
+    ins_lock = threading.Lock()
     rng = _r.Random(f"{device}{date}")
-    made = 0
-    for target in weak_words:
+
+    def gen_one(target):
         others = [w for w in weak_words if w != target]
         rng.shuffle(others)
         recalls = others[:min(2, len(others))]   # 随机 1~2 个其他薄弱词
@@ -208,30 +220,32 @@ def generate(device, date, weak_words, max_pos):
                 if score < 4:
                     err = f"自然度评分{score}<4，请换一个更自然、语义不矛盾的场景重写"
                     continue
-                conn.execute("INSERT INTO sentences VALUES(?,?,?,?,?,?,?)",
-                             (device, date, target, ",".join(recalls) if recalls else None,
-                              cand, time.time(), zh))
-                made += 1
-                break
+                with ins_lock:
+                    conn.execute("INSERT INTO sentences VALUES(?,?,?,?,?,?,?)",
+                                 (device, date, target, ",".join(recalls) if recalls else None,
+                                  cand, time.time(), zh))
+                    conn.commit()
+                return 1
             time.sleep(0.2)
         # 兜底：组合太难就只含目标词
-        has_one = conn.execute(
-            "SELECT 1 FROM sentences WHERE device=? AND date=? AND target=?",
-            (device, date, target)).fetchone()
-        if not has_one:
-            try:
-                out = llm(f"为背单词 App 的单词 \"{target}\"（词义：{t_sense}）写一条英语例句："
-                          f"真实日常场景、语法正确、自然地道，6~16 词，常见高频词。"
-                          f"输出格式：英文句子 || 中文翻译，一行，不要解释。")
-                cand, _, zh = out.partition("||")
-                cand = cand.strip().strip('"')
-                if not validate_multi(cand, target, [], max_pos) and quality_check(cand, target, None) >= 4:
+        try:
+            out = llm(f"为背单词 App 的单词 \"{target}\"（词义：{t_sense}）写一条英语例句："
+                      f"真实日常场景、语法正确、自然地道，6~16 词，常见高频词。"
+                      f"输出格式：英文句子 || 中文翻译，一行，不要解释。")
+            cand, _, zh = out.partition("||")
+            cand = cand.strip().strip('"')
+            if not validate_multi(cand, target, [], max_pos) and quality_check(cand, target, None) >= 4:
+                with ins_lock:
                     conn.execute("INSERT INTO sentences VALUES(?,?,?,?,?,?,?)",
                                  (device, date, target, None, cand, time.time(), zh.strip()))
-                    made += 1
-            except Exception:
-                pass
-    conn.commit()
+                    conn.commit()
+                return 1
+        except Exception:
+            pass
+        return 0
+
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        made = sum(ex.map(gen_one, weak_words))
     conn.close()
     return made
 
@@ -295,7 +309,11 @@ def personalize(body: PersonalizeIn):
             conn.execute("DELETE FROM sentences WHERE device=? AND date=?", (body.device, body.date))
             conn.commit()
             conn.close()
-        out["generated"] = generate(body.device, body.date, body.weak_words, body.learned_max_pos)
+        # 慢速模型（hy4 推理）下异步生成，POST 立即返回，GET 轮询取结果
+        import threading as _th
+        _th.Thread(target=generate, args=(body.device, body.date, body.weak_words, body.learned_max_pos),
+                   daemon=True).start()
+        out["background"] = True
     return out
 
 
