@@ -49,16 +49,18 @@ def main():
     args = ap.parse_args()
     conn, seq, pos_of, id2word, word2id, pos_tag, senses_core, vmap = load()
     cur = conn.cursor()
+    cur.execute("CREATE TABLE IF NOT EXISTS polish_state(wordId INTEGER PRIMARY KEY, doneAt TEXT)")
+    conn.commit()
 
     tasks = []
     for i in range(args.start, min(args.end, len(seq)) + 1):
         wid = seq[i - 1][0]
+        if cur.execute("SELECT 1 FROM polish_state WHERE wordId=?", (wid,)).fetchone():
+            continue
         rows = cur.execute(
-            """SELECT id, text, tier FROM sentence
-               WHERE targetWordId=? AND genMethod LIKE 'llm-%'
-                 AND NOT EXISTS (SELECT 1 FROM sentence t
-                                 WHERE t.targetWordId=sentence.targetWordId
-                                   AND t.tier=sentence.tier AND t.genMethod='tatoeba')
+            """SELECT id, text, tier, genMethod FROM sentence
+               WHERE targetWordId=? AND (genMethod LIKE 'llm-%' OR genMethod='tatoeba')
+                 AND COALESCE(flag,'') != 'reported'
                ORDER BY tier""",
             (wid,)).fetchall()
         if rows:
@@ -85,7 +87,7 @@ def main():
 
     def polish(task):
         i, wid, w, rows = task
-        lines = "\n".join(f"{k+1}: {t}" for k, (_, t, _) in enumerate(rows))
+        lines = "\n".join(f"{k+1}: {t}" for k, (_, t, _, _) in enumerate(rows))
         prompt = f"""你是英语教材编辑。以下是单词 "{w}"（词义：{(senses_core.get(wid) or '')[:50]}）的 {len(rows)} 条例句：
 {lines}
 
@@ -111,7 +113,7 @@ def main():
             k, score, rewrite, zh = int(m.group(1)), int(m.group(2)), m.group(3), m.group(4)
             if k < 1 or k > len(rows):
                 continue
-            sid, old_text, tier = rows[k - 1]
+            sid, old_text, tier, gen_method = rows[k - 1]
             with counter:
                 stats["reviewed"] += 1
             if score >= 4 or rewrite == "-":
@@ -119,6 +121,14 @@ def main():
                     stats["kept"] += 1
                 continue
             rewrite = rewrite.strip().strip('"')
+            if gen_method == "tatoeba":
+                # 语料句是真实语料，低分不重写，直接隐藏
+                with db_lock:
+                    cur.execute("UPDATE sentence SET flag='reported' WHERE id=?", (sid,))
+                    conn.commit()
+                with counter:
+                    stats["rewritten"] += 1
+                continue
             err = validate(rewrite, tier, wid)
             if err:
                 with counter:
@@ -131,6 +141,9 @@ def main():
             rew += 1
             with counter:
                 stats["rewritten"] += 1
+        with db_lock:
+            cur.execute("INSERT OR IGNORE INTO polish_state(wordId, doneAt) VALUES(?, datetime('now'))", (wid,))
+            conn.commit()
         with counter:
             stats["words"] += 1
             if stats["words"] % 100 == 0:

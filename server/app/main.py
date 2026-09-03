@@ -133,18 +133,36 @@ def assign_recalls(new_words, weak_words, seed):
     return {targets[i]: pool[i] for i in range(cap)}
 
 
+# 交叉评审模型配置（缺省用主模型；生产建议配成另一厂商以消除同模型盲区）
+JUDGE_BASE = os.environ.get("LLM_JUDGE_BASE_URL", LLM_BASE).rstrip("/")
+JUDGE_KEY = os.environ.get("LLM_JUDGE_API_KEY", LLM_KEY)
+JUDGE_MODEL = os.environ.get("LLM_JUDGE_MODEL", LLM_MODEL)
+
+
+def judge_llm(prompt):
+    """评审调用：走独立的评审模型配置（交叉模型，消除同模型自评盲区）"""
+    req = urllib.request.Request(
+        f"{JUDGE_BASE}/chat/completions",
+        data=json.dumps({"model": JUDGE_MODEL, "messages": [{"role": "user", "content": prompt}],
+                         "thinking": {"type": "disabled"}, "temperature": 0.2}).encode(),
+        headers={"Authorization": f"Bearer {JUDGE_KEY}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as r:
+        return json.loads(r.read())["choices"][0]["message"]["content"].strip()
+
+
 def quality_check(sentence, target, recall=None):
-    """自校验：LLM 评审语法+自然度+语义相容性，≥4 分才收"""
-    prompt = (f"你是英语教材评审。给这个给中国学生看的英语例句打分（1~5 整数）：\n"
+    """评审（交叉模型 + 分项 rubric）：语法/搭配/语义/场景 各 ≥4 才收"""
+    prompt = (f"你是英语教材评审。给这个给中国学生看的英语例句按四个维度打分（各 1~5 整数）：\n"
               f"\"{sentence}\"\n"
               f"目标词：{target}" + (f"，复习词：{recall}" if recall else "") +
-              f"\n标准：5=语法正确、自然地道、像真实生活用语、词与词搭配不矛盾、搭配符合母语者习惯；"
-              f"3=语法正确但略生硬或语义勉强或搭配不地道；1=语法错误、语义矛盾、生造词组或中式英语。"
-              f"只输出一个数字。")
+              f"\n维度与标准（5=完全达标，1=严重问题）：\n"
+              f"语法 = 语法正确；搭配 = 符合母语者习惯、无生造词组或中式英语；"
+              f"语义 = 词与词不矛盾不牵强；场景 = 像真实生活中会说的话\n"
+              f"只输出四个数字，空格分隔（如：5 5 4 5）。")
     try:
-        out = llm(prompt)
-        m = re.search(r"\d", out)
-        return int(m.group()) if m else 3
+        out = judge_llm(prompt)
+        nums = [int(x) for x in re.findall(r"\d", out)][:4]
+        return min(nums) if nums else 3
     except Exception:
         return 4   # 评审失败默认放行，不阻塞
 
