@@ -17,9 +17,9 @@ Web 单页学习应用已功能完整上线（定级/学习/复习/FSRS/个性�
 |---|---|
 | 词库 | 10,991 词（L1 903 / L2 1749 / L3 2000 / L4 1500 / L5 3000 / L6 1839） |
 | 义项 | 21,212 条（核心/扩展/领域分级） |
-| 例句 | 53,770 条（语料句 20,414 + LLM 33,356；三档配齐 8,426 词，零例句词 0） |
+| 例句 | 53,782 条（语料句 20,414 + LLM 33,368；三档配齐 8,426+ 词，零例句词 0） |
 | 中文翻译 | 53,027 句（98.6%） |
-| 音频缓存 | **64,579 个 mp3（`data/tts_cache/`）** |
+| 音频缓存 | **69,210 个 mp3（`data/tts_cache/`）** |
 | 定级题库 | 30 题 4 选 1，15 词频带 × 2，按请求随机抽题 |
 
 ## 3. 线上服务清单（175.27.210.206）
@@ -28,7 +28,7 @@ Web 单页学习应用已功能完整上线（定级/学习/复习/FSRS/个性�
 |---|---|---|
 | vocab-api | `~/vocab-api/`（systemd `vocab-api.service`，127.0.0.1:8000） | FastAPI；重启 `sudo systemctl restart vocab-api` |
 | 词库 | `~/vocab-api/data/lexicon_v0.1.sqlite` | 7.4MB，WAL 模式 |
-| 音频缓存 | **64,579 个 mp3（`data/tts_cache/`）** |
+| 音频缓存 | **69,210 个 mp3（`data/tts_cache/`）** |
 | 模型配置 | `/etc/vocab-api/vocab-api.env`（服务）· `pipeline.env`（批量） | 服务=hy3，批量=glm-5.2；`run-pipeline` 包装命令注入批量配置 |
 | nginx | `/etc/nginx/sites-enabled/default` | `location /vocab/` 反代；主站证书 TrustAsia 已过期（2026-07-10），Let's Encrypt 因 DNSPod 境外 webblock 无法签——待处理 |
 | 日志 | `journalctl -u vocab-api` · `~/vocab-api/*.log` | 量产日志在 vocab-api 根目录 |
@@ -100,5 +100,5 @@ cd ~/vocab-api/data && tar -czf ~/tts_cache_$(date +%F).tar.gz tts_cache
 ## 8. 仓库资源说明
 
 - `data/lexicon_v0.1.sqlite`：2026-08-07 快照（服务器上是活库，持续追加例句；以服务器为准，定期回拉）
-- 音频缓存体积大不入 git 历史：**GitHub Release 资产 `tts_cache.tar.gz`**（546MB，37,597 文件，2026-08-10 打包，含收尾批全部产出），解压至 `data/` 即可完整复现
+- 音频缓存体积大不入 git 历史：**GitHub Release 资产 `tts_cache.tar.gz`**（1.24GB，69,210 文件，2026-09-03 打包，含全部产出），解压至 `data/` 即可完整复现
 - 大型原始语料（ECDICT csv、Tatoeba tsv）不入库，获取方式见 `docs/词库建设方案.md`
