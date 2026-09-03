@@ -11,9 +11,11 @@
 import json, os, re, sqlite3, threading, time, urllib.request
 from pathlib import Path
 
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Header, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
+
+from app.auth import mount_auth, user_by_token
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -262,6 +264,7 @@ class PersonalizeIn(BaseModel):
 
 
 app = FastAPI(title="vocab-api", version="0.2.0", on_startup=[init_db])
+mount_auth(app)
 
 
 @app.get("/", include_in_schema=False)
@@ -296,7 +299,10 @@ def demo_daily(pos: int = Query(default=1200, ge=1, le=4600)):
 
 
 @app.post("/api/v1/personalize")
-def personalize(body: PersonalizeIn):
+def personalize(body: PersonalizeIn, authorization: str = Header(default="")):
+    uid = user_by_token(authorization)
+    if uid:
+        body.device = f"u{uid}"
     conn = sqlite3.connect(PERSONAL_DB)
     conn.execute("INSERT INTO requests(device, date, payload, created) VALUES(?,?,?,?)",
                  (body.device, body.date, body.model_dump_json(), time.time()))
@@ -320,8 +326,12 @@ def personalize(body: PersonalizeIn):
 
 
 @app.get("/api/v1/personalized")
-def personalized(device: str = Query(min_length=6, max_length=64),
-                 date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$")):
+def personalized(device: str = Query(min_length=2, max_length=64),
+                 date: str = Query(pattern=r"^\d{4}-\d{2}-\d{2}$"),
+                 authorization: str = Header(default="")):
+    uid = user_by_token(authorization)
+    if uid:
+        device = f"u{uid}"
     conn = sqlite3.connect(PERSONAL_DB)
     rows = conn.execute(
         "SELECT target, recall, text, zh FROM sentences WHERE device=? AND date=? ORDER BY created",
@@ -558,7 +568,11 @@ def placement_set(seed: str = ""):
 @app.get("/api/v1/sentence/weave")
 def sentence_weave(word: str = Query(min_length=1, max_length=40),
                    weak: str = Query(min_length=1, max_length=40),
-                   cap: int = 0, device: str = "anon"):
+                   cap: int = 0, device: str = "anon",
+                   authorization: str = Header(default="")):
+    uid = user_by_token(authorization)
+    if uid:
+        device = f"u{uid}"
     wid = WORD2ID.get(word)
     rid = WORD2ID.get(weak)
     if not wid or not rid or wid == rid:
