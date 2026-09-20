@@ -76,7 +76,7 @@ struct LearnCardView: View {
             }
         }
         .onAppear { setup() }
-        .onDisappear { app.audio.stop() }
+        // 卡片级不做 onDisappear stop：旧卡的 stop 可能晚于新卡开播触发，误杀新卡音频；新卡开播时会自行 stop 旧链
     }
 
     private var sensesView: some View {
@@ -244,7 +244,7 @@ struct ReviewQuizView: View {
             }
         }
         .task { await loadQuiz() }
-        .onDisappear { app.audio.stop() }
+        // 卡片级不做 onDisappear stop：旧卡的 stop 可能晚于新卡开播触发，误杀新卡音频；新卡开播时会自行 stop 旧链
     }
 
     private var quizCard: some View {
@@ -329,7 +329,7 @@ struct AnswerCardView: View {
             }
         }
         .task { await setup() }
-        .onDisappear { app.audio.stop() }
+        // 卡片级不做 onDisappear stop：旧卡的 stop 可能晚于新卡开播触发，误杀新卡音频；新卡开播时会自行 stop 旧链
     }
 
     private var sentenceArea: some View {
