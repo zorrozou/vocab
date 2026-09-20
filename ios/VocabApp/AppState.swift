@@ -144,7 +144,12 @@ final class AppState {
         route = .home
     }
 
-    func authed(_ r: AuthResponse) async {
+    /// 登录/注册成功后的状态装载
+    /// - 服务器有存档 → 服务器为准
+    /// - 否则有本机槽位 → 用槽位并推上服务器
+    /// - 注册新账号：绝不并入当前内存进度（新账号 = 全新开始 + 定级）
+    /// - 登录老账号且两端都空 → 才把当前（游客）进度并入
+    func authed(_ r: AuthResponse, isRegistration: Bool = false) async {
         saveLocal()   // 归档当前（游客/上一账号）进度
         let a = Auth(userId: r.user.id, username: r.user.username,
                      nickname: r.user.nickname, token: r.token)
@@ -155,16 +160,15 @@ final class AppState {
             UserDefaults.standard.set(d, forKey: "vocab_profile")
         }
         UserDefaults.standard.set(false, forKey: "vocab_guest")
-        // 服务器为准 → 本地槽位 → 游客进度并入
         if let remote = try? await api.pullState().state {
             S = remote
         } else if let local = loadLocal(slot: slotKey) {
             S = local
             try? await api.pushState(S)
-        } else if !S.cards.isEmpty {
-            try? await api.pushState(S)
+        } else if !isRegistration && !S.cards.isEmpty {
+            try? await api.pushState(S)   // 游客进度并入老账号
         } else {
-            S = LearningState()
+            S = LearningState()           // 新账号全新开始
         }
         saveLocal()
         route = .home

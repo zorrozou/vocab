@@ -64,7 +64,7 @@ struct AuthView: View {
                                 : try await APIClient.shared.register(username: username.trimmingCharacters(in: .whitespaces),
                                                                       password: password,
                                                                       nickname: nickname.trimmingCharacters(in: .whitespaces))
-                            await app.authed(r)
+                            await app.authed(r, isRegistration: !isLogin)
                         } catch {
                             msg = "✗ \(error.localizedDescription)"
                             busy = false

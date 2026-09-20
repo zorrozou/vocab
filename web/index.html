@@ -901,12 +901,12 @@ function authForm(mode) {
       });
       const d = await r.json();
       if (!r.ok) { $("#aMsg").textContent = "✗ " + (d.detail || "失败"); return; }
-      await onAuthed(d);
+      await onAuthed(d, mode === "register");
     } catch (e) { $("#aMsg").textContent = "✗ 网络异常"; }
   };
 }
 
-async function onAuthed(d) {
+async function onAuthed(d, isRegister) {
   archiveCurrent();   // 先归档当前（游客或上一个账号）的进度
   AUTH = { userId: d.user.id, username: d.user.username, nickname: d.user.nickname, token: d.token };
   localStorage.setItem("vocab_auth", JSON.stringify(AUTH));
@@ -919,8 +919,12 @@ async function onAuthed(d) {
   } else if (loadSlot(slotKey)) {
     S = Object.assign(defaultState(), S);
     pushState();                      // 本机有这个账号的存档 → 推上服务器
-  } else if (Object.keys(S.cards || {}).length) {
-    pushState();                      // 游客进度并入账号
+  } else if (!isRegister && Object.keys(S.cards || {}).length) {
+    pushState();                      // 游客进度并入老账号（仅登录时）
+  } else {
+    S = defaultState();               // 注册新账号 = 全新开始（出定级），不并入任何现成进度
+    localStorage.setItem("vocab_v1", JSON.stringify(S));
+    pushState();
   }
   renderUserTag();
   home();
