@@ -50,6 +50,7 @@ struct PlacementView: View {
             app.placementSet = try await APIClient.shared.placementSet(
                 seed: app.deviceId() + "\(Int(Date().timeIntervalSince1970))")
         } catch {
+            print("[VocabApp] placementSet 失败: \(error)")
             loadError = true
         }
     }
