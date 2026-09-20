@@ -214,9 +214,8 @@ struct ReviewQuizView: View {
 
     @State private var quiz: Quiz?
     @State private var phase: Phase = .loading
-    @State private var fallback = false   // 出题失败走翻卡旧流程
 
-    enum Phase { case loading, quizzing, answering(Bool) }
+    enum Phase { case loading, quizzing, flipping, answering(Bool) }
 
     private var card: CardState? { app.S.cards[word] }
 
@@ -238,6 +237,8 @@ struct ReviewQuizView: View {
                     ProgressView().padding(.top, 60)
                 case .quizzing:
                     quizCard
+                case .flipping:
+                    flipCard
                 case .answering(let ok):
                     AnswerCardView(word: word, quizOk: ok, onNext: next)
                 }
@@ -270,10 +271,22 @@ struct ReviewQuizView: View {
             quiz = q
             phase = .quizzing
         } else {
-            // 出题失败 → 翻卡兜底
-            fallback = true
-            phase = .answering(true)
+            // 出题失败 → 翻卡兜底（先回忆，再翻卡核对，与 web 一致）
+            phase = .flipping
         }
+    }
+
+    /// 翻卡兜底卡：出题接口挂时的降级流程
+    private var flipCard: some View {
+        Card {
+            HStack(alignment: .center, spacing: 10) {
+                BigWord(word: word)
+                PlayButton(text: word)
+            }
+            Text("先回忆词义，再翻卡核对").font(.system(size: 14)).foregroundStyle(Theme.muted)
+            PrimaryButton(title: "显示释义") { phase = .answering(true) }
+        }
+        .onAppear { app.audio.play(word, voice: app.S.settings.voice) }
     }
 
     private func next() {
@@ -433,6 +446,11 @@ struct AcceptanceQuizView: View {
         quiz = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991)
         if quiz?.options.count != 4 { quiz = nil }
         loading = false
+        if quiz == nil {
+            // 出题失败自动跳过（与 web 一致），避免卡在死页面
+            try? await Task.sleep(nanoseconds: 500_000_000)
+            advance()
+        }
     }
 
     private func answer(ok: Bool) {
@@ -440,15 +458,19 @@ struct AcceptanceQuizView: View {
         Task {
             await app.review(word: w, rating: ok ? 3 : 1)
             app.save()
-            await MainActor.run {
-                if i + 1 < words.count {
-                    i += 1
-                    app.audio.play(words[i], voice: app.S.settings.voice)
-                    Task { await load() }
-                } else {
-                    app.markDayDone()
-                }
-            }
+            await MainActor.run { advance() }
+        }
+    }
+
+    private func advance() {
+        if i + 1 < words.count {
+            i += 1
+            app.audio.play(words[i], voice: app.S.settings.voice)
+            Task { await load() }
+        } else {
+            // 验收测试真正跑完才标记 quizDay（markDayDone 不管这个字段）
+            app.S.quizDay = DayUtil.today()
+            app.markDayDone()
         }
     }
 }

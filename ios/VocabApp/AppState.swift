@@ -62,12 +62,27 @@ final class AppState {
             .appendingPathComponent("\(Config.stateFilePrefix)_\(slot).json")
     }
 
+    private func userURL(for slot: String) -> URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("\(Config.stateFilePrefix)_\(slot).user")
+    }
+
     private func saveLocal() {
         guard let data = try? JSONEncoder().encode(S) else { return }
         try? data.write(to: stateURL(for: slotKey), options: .atomic)
+        // 槽位署名：服务端删号后 uid 会被复用，凭署名防止旧槽位错配给同名新账号
+        try? (auth?.username ?? "guest").write(to: userURL(for: slotKey), atomically: true, encoding: .utf8)
     }
 
-    private func loadLocal(slot: String) -> LearningState? {
+    private func loadLocal(slot: String, forUsername: String? = nil) -> LearningState? {
+        // 有主槽位（非游客）：必须有署名且用户名一致才认
+        // （uid 复用/旧版本无署名槽位一律不信任——反正服务器存档优先，损失为零）
+        if let u = forUsername, slot != "guest" {
+            guard let sidecar = try? String(contentsOf: userURL(for: slot), encoding: .utf8),
+                  sidecar == u else {
+                return nil
+            }
+        }
         guard let data = try? Data(contentsOf: stateURL(for: slot)),
               let s = try? JSONDecoder().decode(LearningState.self, from: data) else { return nil }
         return s
@@ -118,7 +133,7 @@ final class AppState {
             // 服务器状态优先；拉不到用本地槽位
             if let remote = try? await api.pullState().state {
                 S = remote
-            } else if let local = loadLocal(slot: slotKey) {
+            } else if let local = loadLocal(slot: slotKey, forUsername: a.username) {
                 S = local
             }
             saveLocal()
@@ -150,7 +165,11 @@ final class AppState {
     /// - 注册新账号：绝不并入当前内存进度（新账号 = 全新开始 + 定级）
     /// - 登录老账号且两端都空 → 才把当前（游客）进度并入
     func authed(_ r: AuthResponse, isRegistration: Bool = false) async {
-        saveLocal()   // 归档当前（游客/上一账号）进度
+        // 归档当前进度——但空状态不归档（切换/登出后 S 已被重置，
+        // 此时归档会把游客等旧槽位覆盖成空白，造成进度丢失）
+        if !S.cards.isEmpty || S.probeCount > 0 || !S.log.isEmpty {
+            saveLocal()
+        }
         let a = Auth(userId: r.user.id, username: r.user.username,
                      nickname: r.user.nickname, token: r.token)
         auth = a
@@ -162,7 +181,7 @@ final class AppState {
         UserDefaults.standard.set(false, forKey: "vocab_guest")
         if let remote = try? await api.pullState().state {
             S = remote
-        } else if let local = loadLocal(slot: slotKey) {
+        } else if let local = loadLocal(slot: slotKey, forUsername: r.user.username) {
             S = local
             try? await api.pushState(S)
         } else if !isRegistration && !S.cards.isEmpty {
@@ -320,7 +339,8 @@ final class AppState {
             S.streak = S.lastDay == DayUtil.addDays(today, -1) ? S.streak + 1 : 1
             S.lastDay = today
         }
-        S.quizDay = today
+        // 注意：不在这里设 quizDay——只有验收测试真正跑完才能标记（与 web 一致），
+        // 否则同一天二次学习的新词会永远错过验收。
         save()
     }
 
@@ -350,6 +370,12 @@ final class AppState {
         let weakKey = weakToday.sorted().joined(separator: ",")
         if S.personalizedDay == date && S.personalizedWeak == weakKey {
             onStatus("✓ 今天的薄弱词例句已就绪")
+            // 重进完成页时把已生成的例句一并回显（否则列表会丢）
+            let rows = weakToday.compactMap { w -> PersonalizedOut.Row? in
+                guard let p = S.personalized[w] else { return nil }
+                return PersonalizedOut.Row(target: w, recall: p.recall, text: p.text, zh: p.zh)
+            }
+            if !rows.isEmpty { onRows?(rows) }
             return
         }
         guard !weakToday.isEmpty else {
