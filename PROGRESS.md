@@ -79,6 +79,13 @@ Web 单页学习应用已功能完整上线（定级/学习/复习/FSRS/个性�
 - **断点续跑**：`polish_state` 表记录已处理词，重跑自动跳过（polish_sentences.py）
 - 抽查 12 条打磨后句子：语法正确、场景真实、翻译到位
 
+### 2026-09-20（M1 iOS App 骨架开工）
+- **使用数据确认原型验证成功**：主账号 09-03~09-18 共 330 条学习/复习日志、81 卡、推进到 L3（pointer 4133）
+- **iOS 工程骨架落地 `ios/`**（SwiftUI + XcodeGen，17 个 Swift 文件）：与 Web 版 1:1 对齐——定级/每日队列/两段复习卡/三档例句/自动连播/验收测试/自动个性化/FSRS 走服务端/多用户与 state 跨端同构同步
+- **跟读评分 M1**：SFSpeechRecognizer 设备端（完整度+置信度）；M1.5 升级 SpeechAnalyzer
+- 工程质量：全部非 UI 代码经 Swift 6.4 类型检查零错误；LearningState 手写容错 Decodable 防跨端丢字段
+- 待用户装 Xcode 后 `xcodegen` 生成工程真机跑（步骤见 ios/README.md）
+
 ## 5. 已知问题与遗留
 
 | 优先级 | 事项 |
@@ -92,9 +99,9 @@ Web 单页学习应用已功能完整上线（定级/学习/复习/FSRS/个性�
 
 ## 6. 下一步路线图
 
-1. **M1 iOS App**（SwiftUI + SwiftData）：本仓库设计已全部就绪——PRD 见 docs/，调度用 swift-fsrs，转写用 SpeechAnalyzer，词库用本仓库 data/lexicon_v0.1.sqlite 起包
+1. **M1 iOS App**（SwiftUI + XcodeGen）：**骨架已完成（2026-09-20，见 `ios/`）**——调度/例句/音频/账号复用服务端，跟读用 SFSpeechRecognizer；待 Xcode 就位真机验证。后续：M1.5 SpeechAnalyzer、M2 离线包 + 本地通知
 2. 词库内容：L1 虚词精修批、三档配齐率冲到 95%+、Tatoeba 自然句筛入（`pipeline/tatoeba_coverage.py` 已验证筛选率 L1 93%/L2 75%/L3 36%）
-3. v1.5：FSRS 个性化优化器（≥400 条复习日志后本地拟合）、iCloud 同步
+3. v1.5：FSRS 个性化优化器（≥400 条复习日志后本地拟合；主账号已 330 条，接近达标）、iCloud 同步
 4. v2：云端发音精评（Azure/讯飞 GOP）、L4~L6 词包下载、Android
 
 ## 7. 常用运维命令
