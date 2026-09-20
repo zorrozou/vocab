@@ -83,7 +83,10 @@ struct PlacementView: View {
                 }
             }
         }
-        .onAppear { app.audio.play(item.word, voice: app.S.settings.voice) }
+        // 按题号触发：每换一题自动朗读单词（onAppear 只会响第 1 题）
+        .task(id: app.S.probeCount) {
+            app.audio.play(item.word, voice: app.S.settings.voice)
+        }
     }
 
     private func answer(item: PlacementItem, ok: Bool, total: Int) {
