@@ -63,13 +63,23 @@ struct LearnCardView: View {
                     sentenceArea
                     shadowArea
                     HStack(spacing: 10) {
-                        if app.speech.state == .listening {
-                            PrimaryButton(title: "■ 停止", color: Theme.warn) {
-                                app.speech.stopCapture(finalize: true)
+                        // 微信式按住说话：按下开始收音，松手立即评分（15s 兜底超时仍在）
+                        Text(app.speech.state == .listening ? "🎤 松开结束" : "🎤 按住跟读")
+                            .font(.system(size: 15, weight: .medium))
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 11)
+                            .foregroundStyle(app.speech.state == .listening ? .white : Theme.text)
+                            .background(app.speech.state == .listening ? Theme.warn : Color.clear)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.muted.opacity(0.5)))
+                            .contentShape(Rectangle())
+                            .onLongPressGesture(minimumDuration: 0.15, perform: {}) { pressing in
+                                if pressing {
+                                    startShadow()
+                                } else if app.speech.state == .listening {
+                                    app.speech.stopCapture(finalize: true)
+                                }
                             }
-                        } else {
-                            GhostButton(title: "🎤 跟读") { startShadow() }
-                        }
                         PrimaryButton(title: "不熟悉", color: Theme.warn) { act(rating: 1) }
                         PrimaryButton(title: "学会了 →", color: Theme.ok) { act(rating: 3) }
                     }
@@ -127,7 +137,7 @@ struct LearnCardView: View {
     private var shadowArea: some View {
         Group {
             if app.speech.state == .listening {
-                Text(app.speech.liveText.isEmpty ? "请朗读例句…" : app.speech.liveText)
+                Text(app.speech.liveText.isEmpty ? "请朗读例句，读完松开手…" : app.speech.liveText)
                     .font(.system(size: 13)).foregroundStyle(Theme.accentLight)
             } else if !shadowMsg.isEmpty {
                 Text(shadowMsg).font(.system(size: 13)).foregroundStyle(Theme.muted)
