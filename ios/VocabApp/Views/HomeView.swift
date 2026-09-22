@@ -82,7 +82,7 @@ struct HomeView: View {
             HStack(spacing: 0) {
                 StatCell(number: "\(dueCount)", label: "待复习")
                 StatCell(number: "\(app.S.settings.newPerDay)", label: "新词")
-                StatCell(number: levelDisplayName(levelForPos(app.S.pointer)), label: "当前级别")
+                StatCell(number: "≈\(app.S.pointer) · \(levelDisplayName(levelForPos(app.S.pointer)))", label: "当前词汇量")
             }
             Text("先复习到期单词，再学新词").font(.system(size: 12)).foregroundStyle(Theme.muted)
         }
@@ -132,7 +132,11 @@ struct StatCell: View {
     let label: String
     var body: some View {
         VStack(spacing: 3) {
-            Text(number).font(.system(size: 26, weight: .bold)).foregroundStyle(Theme.accentLight)
+            Text(number)
+                .font(.system(size: 26, weight: .bold))
+                .foregroundStyle(Theme.accentLight)
+                .lineLimit(1)
+                .minimumScaleFactor(0.55)   // "≈4150 · 四级" 这类长文自动缩到放得下
             Text(label).font(.system(size: 12)).foregroundStyle(Theme.muted)
         }
         .frame(maxWidth: .infinity)

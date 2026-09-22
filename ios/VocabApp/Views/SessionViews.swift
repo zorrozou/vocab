@@ -45,6 +45,7 @@ struct LearnCardView: View {
     @State private var weave: (text: String, zh: String?, weak: String)?
     @State private var shadowMsg = ""
     @State private var acted = false
+    @State private var sideTasks: [Task<Void, Never>] = []   // 异步补句/织入任务，翻页即取消
 
     var body: some View {
         VStack(spacing: 0) {
@@ -98,6 +99,8 @@ struct LearnCardView: View {
         }
         .onAppear { setup() }
         // 卡片级不做 onDisappear stop：旧卡的 stop 可能晚于新卡开播触发，误杀新卡音频；新卡开播时会自行 stop 旧链
+        // 但异步补句/织入任务要取消，防止翻页后旧卡内容晚到并开播
+        .onDisappear { sideTasks.forEach { $0.cancel() } }
     }
 
     private var sensesView: some View {
@@ -171,12 +174,14 @@ struct LearnCardView: View {
         app.audio.playSequence(word: item.word, sentences: texts, voice: app.S.settings.voice)
         // 例句不足三条且非个性化：按需补三句套装
         if personal == nil && sentences.count < 3 {
-            Task {
+            let t = Task {
                 let weak = StudyEngine.recentWeakWords(app.S, today: DayUtil.today()).prefix(15).joined(separator: ",")
                 do {
                     let r = try await APIClient.shared.trio(word: item.word, weak: weak, cap: app.S.pointer + 10)
+                    guard !Task.isCancelled else { return }   // 卡片已翻走，不补句也不开播
                     if !r.sentences.isEmpty {
                         await MainActor.run {
+                            guard !Task.isCancelled else { return }
                             if personal == nil {
                                 let had = sentences.isEmpty
                                 sentences = r.sentences
@@ -194,14 +199,19 @@ struct LearnCardView: View {
                     Logger.app.error("学习卡 trio 失败 \(item.word, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 }
             }
+            sideTasks.append(t)
         }
         // 巩固句：40% 概率织入近期薄弱词
         if personal == nil {
-            Task {
-                if let w = await app.maybeWeave(for: item.word) {
-                    await MainActor.run { weave = w }
+            let t = Task {
+                if let w = await app.maybeWeave(for: item.word), !Task.isCancelled {
+                    await MainActor.run {
+                        guard !Task.isCancelled else { return }
+                        weave = w
+                    }
                 }
             }
+            sideTasks.append(t)
         }
     }
 
@@ -449,6 +459,9 @@ struct AnswerCardView: View {
         if sentences.isEmpty, let e = try? await APIClient.shared.ensure(word: word), !e.text.isEmpty {
             sentences = [SentenceItem(tier: 1, text: e.text, zh: nil)]
         }
+        // 关键竞态守卫：用户可能在词条加载期间已经翻页（.task 已被取消），
+        // 此时绝不能再开播，否则旧卡声音会盖到新卡上
+        guard !Task.isCancelled else { return }
         let texts = [personal?.text].compactMap { $0 } + sentences.map { $0.text }
         app.audio.playSequence(word: word, sentences: texts, voice: app.S.settings.voice)
         if !quizOk {
