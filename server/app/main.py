@@ -39,6 +39,8 @@ seq = _lx.execute("SELECT id, word FROM lexicon_entry ORDER BY level, frq").fetc
 POS_OF = {r["id"]: i for i, r in enumerate(seq, 1)}
 WORD2ID = {r["word"]: r["id"] for r in seq}
 ID2WORD = {r["id"]: r["word"] for r in seq}
+LVL = {r["id"]: r["level"] for r in _lx.execute("SELECT id, level FROM lexicon_entry")}
+EXAM = {r["id"]: (r["examTags"] or "") for r in _lx.execute("SELECT id, examTags FROM lexicon_entry")}
 SENSE = {r["wordId"]: r["text"] for r in _lx.execute("SELECT wordId, text FROM sense WHERE role='core'")}
 PTAG = {r["wordId"]: (r["pos"] or "") for r in _lx.execute("SELECT wordId, pos FROM sense WHERE role='core'")}
 VMAP = {r["variant"]: r["lemma"] for r in _lx.execute("SELECT variant, lemma FROM variant_map")}
@@ -379,6 +381,7 @@ def word_detail(wid):
     ph = _lx.execute("SELECT phonetic FROM lexicon_entry WHERE id=?", (wid,)).fetchone()
     return {"word": ID2WORD[wid], "pos": POS_OF[wid],
             "phonetic": ph["phonetic"] if ph else "",
+            "level": LVL.get(wid), "examTags": EXAM.get(wid) or "",
             "senses": [{"pos": s["pos"], "text": s["text"]} for s in senses],
             "static": static_sentence(wid),
             "sentences": static_sentences(wid)}

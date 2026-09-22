@@ -44,9 +44,39 @@ struct NewWord: Codable, Equatable {
     var pos: Int
     var sense: String?
     var phonetic: String?
+    var level: Int?
+    var examTags: String?
     var senses: [Sense]?
     var `static`: String?
     var sentences: [SentenceItem]?
+}
+
+// MARK: - 词库等级显示（定义见 pipeline/build_lexicon_*.py）
+
+/// 等级 → 学习者可读名称
+func levelDisplayName(_ level: Int?) -> String {
+    switch level {
+    case 1: return "入门高频"
+    case 2: return "基础三千"
+    case 3: return "四级"
+    case 4: return "六级"
+    case 5: return "雅思托福"
+    case 6: return "万二高阶"
+    default: return ""
+    }
+}
+
+/// 词条缺 level 字段时按学习位置兜底（词库按 level+frq 排序；词库重建后需同步更新区间）
+/// L1 1-903 / L2 904-2652 / L3 2653-4652 / L4 4653-6152 / L5 6153-9152 / L6 9153-10991
+func levelForPos(_ pos: Int) -> Int {
+    switch pos {
+    case ...903: return 1
+    case 904...2652: return 2
+    case 2653...4652: return 3
+    case 4653...6152: return 4
+    case 6153...9152: return 5
+    default: return 6
+    }
 }
 
 struct PersonalizedSentence: Codable, Equatable {

@@ -48,7 +48,7 @@ struct LearnCardView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SessionHeader(title: "新词 \(app.session.idx + 1)/\(app.session.queue.count)（第 \(item.pos) 位）",
+            SessionHeader(title: "新词 \(app.session.idx + 1)/\(app.session.queue.count) · \(levelDisplayName(item.level ?? levelForPos(item.pos)))",
                           progress: Double(app.session.idx) / Double(max(1, app.session.queue.count)))
             // 内容区：可滚动，占满上方剩余空间
             ScrollView {

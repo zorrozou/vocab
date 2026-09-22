@@ -82,7 +82,7 @@ struct HomeView: View {
             HStack(spacing: 0) {
                 StatCell(number: "\(dueCount)", label: "待复习")
                 StatCell(number: "\(app.S.settings.newPerDay)", label: "新词")
-                StatCell(number: "\(app.S.pointer)", label: "学习位置")
+                StatCell(number: levelDisplayName(levelForPos(app.S.pointer)), label: "当前级别")
             }
             Text("先复习到期单词，再学新词").font(.system(size: 12)).foregroundStyle(Theme.muted)
         }
