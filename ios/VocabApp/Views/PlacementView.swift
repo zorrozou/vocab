@@ -65,23 +65,34 @@ struct PlacementView: View {
                 Button("退出") { app.route = .home }.foregroundStyle(Theme.muted)
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
-            ScrollView {
-                Card {
-                    Text("选出正确词义").font(.system(size: 14)).foregroundStyle(Theme.muted)
-                    HStack(alignment: .center, spacing: 10) {
-                        BigWord(word: item.word)
-                        PlayButton(text: item.word)
-                    }
-                    QuizOptionsView(options: item.options) { ok in
-                        answer(item: item, ok: ok, total: set.words.count)
-                    }
-                    ProgressBar(value: Double(app.S.probeCount) / Double(set.words.count))
-                    Text(app.S.probeCount >= 4
-                         ? "当前估计 ≈\(Int(StudyEngine.postMean(app.S))) 词 · 答错的词会自动加入学习计划"
-                         : "答错的词会自动加入学习计划")
-                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+            ProgressBar(value: Double(app.S.probeCount) / Double(set.words.count))
+                .padding(.horizontal, 16)
+            // 单词居中于上方剩余空间
+            Spacer()
+            VStack(spacing: 12) {
+                HStack(alignment: .center, spacing: 10) {
+                    BigWord(word: item.word)
+                    PlayButton(text: item.word)
                 }
+                Text("选出正确词义").font(.system(size: 14)).foregroundStyle(Theme.muted)
             }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        // 选项钉死底部拇指区
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 8) {
+                QuizOptionsView(options: item.options) { ok in
+                    answer(item: item, ok: ok, total: set.words.count)
+                }
+                Text(app.S.probeCount >= 4
+                     ? "当前估计 ≈\(Int(StudyEngine.postMean(app.S))) 词 · 答错的词会自动加入学习计划"
+                     : "答错的词会自动加入学习计划")
+                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial)
         }
         // 按题号触发：每换一题自动朗读单词（onAppear 只会响第 1 题）
         .task(id: app.S.probeCount) {

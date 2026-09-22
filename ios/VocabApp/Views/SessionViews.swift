@@ -50,41 +50,51 @@ struct LearnCardView: View {
         VStack(spacing: 0) {
             SessionHeader(title: "新词 \(app.session.idx + 1)/\(app.session.queue.count)（第 \(item.pos) 位）",
                           progress: Double(app.session.idx) / Double(max(1, app.session.queue.count)))
+            // 内容区：可滚动，占满上方剩余空间
             ScrollView {
-                Card {
-                    HStack(alignment: .center, spacing: 10) {
-                        BigWord(word: item.word)
-                        PlayButton(text: item.word)
+                VStack(spacing: 14) {
+                    Card {
+                        HStack(alignment: .center, spacing: 10) {
+                            BigWord(word: item.word)
+                            PlayButton(text: item.word)
+                        }
+                        if let ph = item.phonetic, !ph.isEmpty {
+                            Text("/\(ph)/").font(.system(size: 15)).foregroundStyle(Theme.muted)
+                        }
+                        sensesView
                     }
-                    if let ph = item.phonetic, !ph.isEmpty {
-                        Text("/\(ph)/").font(.system(size: 15)).foregroundStyle(Theme.muted)
-                    }
-                    sensesView
-                    sentenceArea
+                    Card { sentenceArea }
                     shadowArea
-                    HStack(spacing: 10) {
-                        // 微信式按住说话：按下开始收音，松手立即评分（15s 兜底超时仍在）
-                        Text(app.speech.state == .listening ? "🎤 松开结束" : "🎤 按住跟读")
-                            .font(.system(size: 15, weight: .medium))
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 11)
-                            .foregroundStyle(app.speech.state == .listening ? .white : Theme.text)
-                            .background(app.speech.state == .listening ? Theme.warn : Color.clear)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.muted.opacity(0.5)))
-                            .contentShape(Rectangle())
-                            .onLongPressGesture(minimumDuration: 0.15, perform: {}) { pressing in
-                                if pressing {
-                                    startShadow()
-                                } else if app.speech.state == .listening {
-                                    app.speech.stopCapture(finalize: true)
-                                }
-                            }
-                        PrimaryButton(title: "不熟悉", color: Theme.warn) { act(rating: 1) }
-                        PrimaryButton(title: "学会了 →", color: Theme.ok) { act(rating: 3) }
-                    }
                 }
+                .padding(.vertical, 10)
             }
+        }
+        // 交互区：钉死在底部拇指区，不随内容长度浮动
+        .safeAreaInset(edge: .bottom) {
+            HStack(spacing: 10) {
+                // 微信式按住说话：按下开始收音，松手立即评分（15s 兜底超时仍在）
+                Text(app.speech.state == .listening ? "🎤 松开结束" : "🎤 按住跟读")
+                    .font(.system(size: 15, weight: .medium))
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 11)
+                    .foregroundStyle(app.speech.state == .listening ? .white : Theme.text)
+                    .background(app.speech.state == .listening ? Theme.warn : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.muted.opacity(0.5)))
+                    .contentShape(Rectangle())
+                    .onLongPressGesture(minimumDuration: 0.15, perform: {}) { pressing in
+                        if pressing {
+                            startShadow()
+                        } else if app.speech.state == .listening {
+                            app.speech.stopCapture(finalize: true)
+                        }
+                    }
+                PrimaryButton(title: "不熟悉", color: Theme.warn) { act(rating: 1) }
+                PrimaryButton(title: "学会了 →", color: Theme.ok) { act(rating: 3) }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial)
         }
         .onAppear { setup() }
         // 卡片级不做 onDisappear stop：旧卡的 stop 可能晚于新卡开播触发，误杀新卡音频；新卡开播时会自行 stop 旧链
@@ -248,37 +258,51 @@ struct ReviewQuizView: View {
         VStack(spacing: 0) {
             SessionHeader(title: "复习 \(app.session.idx + 1)/\(app.session.queue.count) · \(stageLabel)",
                           progress: Double(app.session.idx) / Double(max(1, app.session.queue.count)))
-            ScrollView {
-                switch phase {
-                case .loading:
-                    ProgressView().padding(.top, 60)
-                case .quizzing:
-                    quizCard
-                case .flipping:
-                    flipCard
-                case .answering(let ok):
-                    AnswerCardView(word: word, quizOk: ok, onNext: next)
-                }
+            // 各阶段自己管理滚动与底部交互区
+            switch phase {
+            case .loading:
+                Spacer()
+                ProgressView()
+                Spacer()
+            case .quizzing:
+                quizCard
+            case .flipping:
+                flipCard
+            case .answering(let ok):
+                AnswerCardView(word: word, quizOk: ok, onNext: next)
             }
         }
         .task { await loadQuiz() }
         // 卡片级不做 onDisappear stop：旧卡的 stop 可能晚于新卡开播触发，误杀新卡音频；新卡开播时会自行 stop 旧链
     }
 
+    /// 测验卡：单词居中于上方空间，选项钉死在底部拇指区
     private var quizCard: some View {
-        Card {
-            HStack(alignment: .center, spacing: 10) {
-                BigWord(word: word)
-                PlayButton(text: word)
+        VStack(spacing: 0) {
+            Spacer()
+            VStack(spacing: 12) {
+                HStack(alignment: .center, spacing: 10) {
+                    BigWord(word: word)
+                    PlayButton(text: word)
+                }
+                Text("选出正确词义").font(.system(size: 14)).foregroundStyle(Theme.muted)
             }
-            Text("选出正确词义：").font(.system(size: 14)).foregroundStyle(Theme.muted)
-            if let quiz {
-                QuizOptionsView(options: quiz.options) { ok in
-                    phase = .answering(ok)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        .onAppear { app.audio.play(word, voice: app.S.settings.voice) }
+        .safeAreaInset(edge: .bottom) {
+            Group {
+                if let quiz {
+                    QuizOptionsView(options: quiz.options) { ok in
+                        phase = .answering(ok)
+                    }
                 }
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial)
         }
-        .onAppear { app.audio.play(word, voice: app.S.settings.voice) }
     }
 
     private func loadQuiz() async {
@@ -295,15 +319,25 @@ struct ReviewQuizView: View {
 
     /// 翻卡兜底卡：出题接口挂时的降级流程
     private var flipCard: some View {
-        Card {
-            HStack(alignment: .center, spacing: 10) {
-                BigWord(word: word)
-                PlayButton(text: word)
+        VStack(spacing: 0) {
+            Spacer()
+            VStack(spacing: 12) {
+                HStack(alignment: .center, spacing: 10) {
+                    BigWord(word: word)
+                    PlayButton(text: word)
+                }
+                Text("先回忆词义，再翻卡核对").font(.system(size: 14)).foregroundStyle(Theme.muted)
             }
-            Text("先回忆词义，再翻卡核对").font(.system(size: 14)).foregroundStyle(Theme.muted)
-            PrimaryButton(title: "显示释义") { phase = .answering(true) }
+            Spacer()
         }
+        .frame(maxWidth: .infinity)
         .onAppear { app.audio.play(word, voice: app.S.settings.voice) }
+        .safeAreaInset(edge: .bottom) {
+            PrimaryButton(title: "显示释义") { phase = .answering(true) }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.regularMaterial)
+        }
     }
 
     private func next() {
@@ -325,38 +359,54 @@ struct AnswerCardView: View {
     @State private var rated = false
 
     var body: some View {
-        Card {
-            Text(quizOk ? "✓ 答对了——这次掌握程度？" : "✗ 正确答案")
-                .font(.system(size: 18, weight: .bold))
-                .foregroundStyle(quizOk ? Theme.ok : Theme.bad)
-            HStack(alignment: .center, spacing: 10) {
-                BigWord(word: word)
-                PlayButton(text: word)
-            }
-            if let ph = detail?.phonetic, !ph.isEmpty {
-                Text("/\(ph)/").font(.system(size: 15)).foregroundStyle(Theme.muted)
-            }
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array((detail?.senses ?? []).enumerated()), id: \.offset) { _, s in
-                    HStack(alignment: .top, spacing: 6) {
-                        Text(s.pos ?? "·").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.accentLight)
-                        Text(s.text).font(.system(size: 15)).foregroundStyle(Theme.text)
+        VStack(spacing: 0) {
+            // 内容区：可滚动
+            ScrollView {
+                VStack(spacing: 14) {
+                    Card {
+                        Text(quizOk ? "✓ 答对了——这次掌握程度？" : "✗ 正确答案")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundStyle(quizOk ? Theme.ok : Theme.bad)
+                        HStack(alignment: .center, spacing: 10) {
+                            BigWord(word: word)
+                            PlayButton(text: word)
+                        }
+                        if let ph = detail?.phonetic, !ph.isEmpty {
+                            Text("/\(ph)/").font(.system(size: 15)).foregroundStyle(Theme.muted)
+                        }
+                        VStack(alignment: .leading, spacing: 4) {
+                            ForEach(Array((detail?.senses ?? []).enumerated()), id: \.offset) { _, s in
+                                HStack(alignment: .top, spacing: 6) {
+                                    Text(s.pos ?? "·").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.accentLight)
+                                    Text(s.text).font(.system(size: 15)).foregroundStyle(Theme.text)
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    Card { sentenceArea }
+                }
+                .padding(.vertical, 10)
+            }
+        }
+        // 评分/继续：钉死底部拇指区
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 8) {
+                if quizOk {
+                    HStack(spacing: 10) {
+                        GhostButton(title: "困难") { rate(2) }
+                        GhostButton(title: "记得") { rate(3) }
+                        PrimaryButton(title: "熟练", color: Theme.ok) { rate(4) }
+                    }
+                } else {
+                    PrimaryButton(title: "继续 →") { onNext() }
+                    Text("已记为「忘记」，降级并明天再见")
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            sentenceArea
-            if quizOk {
-                HStack(spacing: 10) {
-                    GhostButton(title: "困难") { rate(2) }
-                    GhostButton(title: "记得") { rate(3) }
-                    PrimaryButton(title: "熟练", color: Theme.ok) { rate(4) }
-                }
-            } else {
-                PrimaryButton(title: "继续 →") { onNext() }
-                Text("已记为「忘记」，降级并明天再见")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
-            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial)
         }
         .task { await setup() }
         // 卡片级不做 onDisappear stop：旧卡的 stop 可能晚于新卡开播触发，误杀新卡音频；新卡开播时会自行 stop 旧链
@@ -434,23 +484,34 @@ struct AcceptanceQuizView: View {
         VStack(spacing: 0) {
             SessionHeader(title: "验收测试 \(i + 1)/\(words.count) · 今天学的还记得吗？",
                           progress: Double(i) / Double(max(1, words.count)))
-            ScrollView {
-                Card {
-                    HStack(alignment: .center, spacing: 10) {
-                        BigWord(word: words[min(i, words.count - 1)])
-                        PlayButton(text: words[min(i, words.count - 1)])
-                    }
-                    if loading {
-                        ProgressView()
-                    } else if let quiz {
-                        QuizOptionsView(options: quiz.options) { ok in answer(ok: ok) }
-                    } else {
-                        Text("出题失败，跳过").foregroundStyle(Theme.muted)
-                    }
-                    Text("答对 → 明天复习见 · 答错 → 进入薄弱词，今晚就定制例句")
-                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+            // 单词居中于上方剩余空间
+            Spacer()
+            VStack(spacing: 12) {
+                HStack(alignment: .center, spacing: 10) {
+                    BigWord(word: words[min(i, words.count - 1)])
+                    PlayButton(text: words[min(i, words.count - 1)])
+                }
+                if loading {
+                    ProgressView()
                 }
             }
+            Spacer()
+        }
+        .frame(maxWidth: .infinity)
+        // 选项钉死底部拇指区
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 8) {
+                if !loading, let quiz {
+                    QuizOptionsView(options: quiz.options) { ok in answer(ok: ok) }
+                } else if !loading {
+                    Text("出题失败，自动跳过…").foregroundStyle(Theme.muted)
+                }
+                Text("答对 → 明天复习见 · 答错 → 进入薄弱词，今晚就定制例句")
+                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial)
         }
         .task { await load() }
         .onAppear { app.audio.play(words[min(i, words.count - 1)], voice: app.S.settings.voice) }
@@ -512,18 +573,10 @@ struct DoneView: View {
                             StatCell(number: "\(app.session.learnedToday)", label: "新词")
                             StatCell(number: "\(app.S.streak)", label: "连续天数")
                         }
-                        if app.dueNowCount() > 0 {
-                            PrimaryButton(title: "还有 \(app.dueNowCount()) 词已到期，继续复习 →") {
-                                Task {
-                                    await app.buildQueue()
-                                    app.route = .session
-                                }
-                            }
-                        } else if app.dueLaterTodayCount() > 0 {
+                        if app.dueLaterTodayCount() > 0 && app.dueNowCount() == 0 {
                             Text("⏰ 今天晚些时候还有 \(app.dueLaterTodayCount()) 个词到期，记得回来")
                                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
                         }
-                        GhostButton(title: "返回主页", color: Theme.muted) { app.route = .home }
                     }
                     Card {
                         Text("今日薄弱词 · 个性化例句")
@@ -548,6 +601,23 @@ struct DoneView: View {
                 }
                 .padding(.top, 12)
             }
+        }
+        // 底部行动区钉死拇指区
+        .safeAreaInset(edge: .bottom) {
+            VStack(spacing: 8) {
+                if app.dueNowCount() > 0 {
+                    PrimaryButton(title: "还有 \(app.dueNowCount()) 词已到期，继续复习 →") {
+                        Task {
+                            await app.buildQueue()
+                            app.route = .session
+                        }
+                    }
+                }
+                GhostButton(title: "返回主页", color: Theme.muted) { app.route = .home }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial)
         }
         .task {
             if !marked {

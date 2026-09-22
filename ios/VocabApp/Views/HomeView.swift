@@ -24,6 +24,32 @@ struct HomeView: View {
                 .padding(.top, 12)
             }
         }
+        // 主行动按钮钉死底部拇指区
+        .safeAreaInset(edge: .bottom) {
+            Group {
+                if !app.S.calibrated {
+                    PrimaryButton(title: app.S.probeCount > 0 ? "继续定级" : "开始定级") {
+                        app.route = .placement
+                    }
+                } else {
+                    PrimaryButton(title: starting ? "准备中…" : "开始今天") {
+                        guard !starting else { return }
+                        starting = true
+                        Task {
+                            await app.buildQueue()
+                            starting = false
+                            if app.session.queue.isEmpty {
+                                app.markDayDone()
+                            }
+                            app.route = .session
+                        }
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial)
+        }
     }
 
     private var chips: some View {
@@ -46,9 +72,7 @@ struct HomeView: View {
                 Text("已完成 \(app.S.probeCount)/30\(app.S.probeCount >= 4 ? " · 当前估计 ≈\(Int(StudyEngine.postMean(app.S)))" : "")")
                     .font(.system(size: 13)).foregroundStyle(Theme.muted)
             }
-            PrimaryButton(title: app.S.probeCount > 0 ? "继续定级" : "开始定级") {
-                app.route = .placement
-            }
+            Text("开始按钮在屏幕底部 👇").font(.system(size: 12)).foregroundStyle(Theme.muted)
         }
     }
 
@@ -59,18 +83,6 @@ struct HomeView: View {
                 StatCell(number: "\(dueCount)", label: "待复习")
                 StatCell(number: "\(app.S.settings.newPerDay)", label: "新词")
                 StatCell(number: "\(app.S.pointer)", label: "学习位置")
-            }
-            PrimaryButton(title: starting ? "准备中…" : "开始今天") {
-                guard !starting else { return }
-                starting = true
-                Task {
-                    await app.buildQueue()
-                    starting = false
-                    if app.session.queue.isEmpty {
-                        app.markDayDone()
-                    }
-                    app.route = .session
-                }
             }
             Text("先复习到期单词，再学新词").font(.system(size: 12)).foregroundStyle(Theme.muted)
         }
