@@ -20,7 +20,7 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         NSMicrophoneUsageDescription: 跟读评分需要用麦克风采集你的朗读
-        NSSpeechRecognitionUsageDescription: 跟读评分需要在本机识别你的朗读内容（不会上传）
+        NSSpeechRecognitionUsageDescription: 跟读评分需要识别你的朗读内容（支持本机识别的设备上不会上传）
         NSAppTransportSecurity:
           NSExceptionDomains:
             175.27.210.206:

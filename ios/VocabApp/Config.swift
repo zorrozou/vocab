@@ -1,4 +1,9 @@
 import Foundation
+import OSLog
+
+extension Logger {
+    static let app = Logger(subsystem: "com.zorro.vocab", category: "app")
+}
 
 enum Config {
     /// 生产服务器（nginx /vocab/ → FastAPI）

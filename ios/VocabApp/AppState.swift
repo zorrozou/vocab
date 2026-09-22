@@ -1,4 +1,4 @@
-import Foundation
+import OSLog
 import SwiftUI
 
 /// 会话内瞬态（不持久化）：今日队列与进度
@@ -290,6 +290,13 @@ final class AppState {
                 }
             }
         }
+        // pendingNew 词只有 word+pos（定级遗留），补全音标/义项/静态例句等完整词条
+        for i in news.indices where news[i].senses == nil {
+            if let r = try? await api.lexiconAt(pos: news[i].pos, n: 10),
+               let full = r.words.first(where: { $0.word == news[i].word }) {
+                news[i] = full
+            }
+        }
 
         session = Session()
         session.queue = reviewsAll.map { .review(word: $0) } + news.map { .learn(word: $0) }
@@ -304,17 +311,23 @@ final class AppState {
         let api = self.api
         let cap = S.pointer + 10
         let voice = S.settings.voice
+        Logger.app.info("prefetchDay: \(news.count) 新词, weak=\(weak, privacy: .public)")
         Task { [weak self] in
             guard let self else { return }
-            await withTaskGroup(of: (String, TrioResponse?).self) { group in
+            await withTaskGroup(of: (String, TrioResponse?, String?).self) { group in
                 for w in news {
                     group.addTask {
-                        let r = try? await api.trio(word: w.word, weak: weak, cap: cap)
-                        return (w.word, r)
+                        do {
+                            let r = try await api.trio(word: w.word, weak: weak, cap: cap)
+                            return (w.word, r, nil)
+                        } catch {
+                            return (w.word, nil, String(describing: error))
+                        }
                     }
                 }
                 var texts: [String] = reviewWords.prefix(15).map { $0 }
-                for await (word, r) in group {
+                for await (word, r, err) in group {
+                    if let err { Logger.app.error("trio 失败 \(word, privacy: .public): \(err, privacy: .public)") }
                     if let sents = r?.sentences, !sents.isEmpty {
                         if let i = self.session.queue.firstIndex(where: {
                             if case .learn(let nw) = $0 { return nw.word == word } else { return false }

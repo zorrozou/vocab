@@ -284,6 +284,16 @@ async function buildQueue() {
       if (!S.cards[w.word] && !news.find(x => x.word === w.word)) news.push(w);
     }
   }
+  // pendingNew 词只有 word+pos（定级遗留），补全音标/义项/静态例句，否则学习卡义项区是空的
+  for (const w of news) {
+    if (!w.senses) {
+      try {
+        const r = await fetch(`${API}/api/v1/lexicon/at?pos=${w.pos}&n=10`).then(r => r.json());
+        const full = r.words.find(x => x.word === w.word);
+        if (full) Object.assign(w, full);
+      } catch (e) {}
+    }
+  }
   session.queue = [
     ...reviewsAll.map(w => ({ kind: "review", word: w })),
     ...news.map(w => ({ kind: "learn", word: w.word, detail: w }))
@@ -470,7 +480,7 @@ async function showLearn(item) {
     <h2>新词 ${session.idx + 1}/${session.queue.length}（第 ${w.pos} 位）</h2>
     <div><span class="big">${w.word}</span><button class="playw" data-t="${w.word}">▶</button></div>
     <div class="phon">${w.phonetic ? "/" + w.phonetic + "/" : ""}</div>
-    <div class="sense">${w.senses.map(s => `<span><i>${s.pos || "·"}</i>${s.text}</span>`).join("")}</div>
+    <div class="sense">${(w.senses || []).map(s => `<span><i>${s.pos || "·"}</i>${s.text}</span>`).join("")}</div>
     ${sb.html}
     <div class="row">
       ${SR ? `<button class="icon" id="bShadow">🎤 跟读</button>` : ""}

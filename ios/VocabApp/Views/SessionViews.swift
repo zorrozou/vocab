@@ -1,3 +1,4 @@
+import OSLog
 import SwiftUI
 
 /// 学习会话路由器：队列 → （学习卡/复习卡）→ 当日验收测试 → 完成页
@@ -152,19 +153,25 @@ struct LearnCardView: View {
         if personal == nil && sentences.count < 3 {
             Task {
                 let weak = StudyEngine.recentWeakWords(app.S, today: DayUtil.today()).prefix(15).joined(separator: ",")
-                if let r = try? await APIClient.shared.trio(word: item.word, weak: weak, cap: app.S.pointer + 10),
-                   !r.sentences.isEmpty {
-                    await MainActor.run {
-                        if personal == nil {
-                            let had = sentences.isEmpty
-                            sentences = r.sentences
-                            if had {
-                                app.audio.playSequence(word: item.word,
-                                                       sentences: r.sentences.map { $0.text },
-                                                       voice: app.S.settings.voice)
+                do {
+                    let r = try await APIClient.shared.trio(word: item.word, weak: weak, cap: app.S.pointer + 10)
+                    if !r.sentences.isEmpty {
+                        await MainActor.run {
+                            if personal == nil {
+                                let had = sentences.isEmpty
+                                sentences = r.sentences
+                                if had {
+                                    app.audio.playSequence(word: item.word,
+                                                           sentences: r.sentences.map { $0.text },
+                                                           voice: app.S.settings.voice)
+                                }
                             }
                         }
+                    } else {
+                        Logger.app.warning("学习卡 trio 空返回: \(item.word, privacy: .public)")
                     }
+                } catch {
+                    Logger.app.error("学习卡 trio 失败 \(item.word, privacy: .public): \(error.localizedDescription, privacy: .public)")
                 }
             }
         }
