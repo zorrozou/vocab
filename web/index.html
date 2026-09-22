@@ -91,7 +91,12 @@
 "use strict";
 const API = "/vocab";
 const $ = s => document.querySelector(s);
-const today = () => new Date().toISOString().slice(0, 10);
+/* "今天"用本地日期（UTC 日期会让 UTC+8 用户上午被错判成"昨天"，验收/streak/每日上限全按错日界走） */
+const today = () => {
+  const d = new Date();
+  const p = n => String(n).padStart(2, "0");
+  return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+};
 /* 词库等级名（词库按 level+frq 排序；区间重建后同步更新） */
 const LVL_NAME = { 1: "入门高频", 2: "基础三千", 3: "四级", 4: "六级", 5: "雅思托福", 6: "万二高阶" };
 const lvlOfPos = p => p <= 903 ? 1 : p <= 2652 ? 2 : p <= 4652 ? 3 : p <= 6152 ? 4 : p <= 9152 ? 5 : 6;

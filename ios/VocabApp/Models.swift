@@ -238,13 +238,13 @@ struct FsrsResponse: Codable {
     var scheduled_days: Double?
 }
 
-// MARK: - 日期工具（"今天"用 UTC 日期，与 web 端完全一致，保证跨端同一天）
+// MARK: - 日期工具（"今天"用设备本地日期——UTC 日期会让 UTC+8 用户上午被错判成"昨天"，
+// 导致验收测试/streak/每日上限全部按错误的日界工作。log/due 的历史 UTC 日期戳向前兼容）
 
 enum DayUtil {
     private static let dayFmt: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "yyyy-MM-dd"
-        f.timeZone = TimeZone(identifier: "UTC")
         f.locale = Locale(identifier: "en_US_POSIX")
         return f
     }()
