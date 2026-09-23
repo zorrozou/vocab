@@ -274,7 +274,7 @@ def generate(device, date, weak_words, max_pos):
     return made
 
 class PersonalizeIn(BaseModel):
-    device: str = Field(min_length=6, max_length=64)
+    device: str = Field(min_length=2, max_length=64)   # 登录用户设备号为 "u{uid}" 只有2位，与 GET 端点对齐
     date: str = Field(pattern=r"^\d{4}-\d{2}-\d{2}$")
     new_words: list[str] = Field(default_factory=list, max_length=30)
     weak_words: list[str] = Field(default_factory=list, max_length=30)
