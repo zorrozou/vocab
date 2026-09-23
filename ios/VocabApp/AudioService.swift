@@ -1,6 +1,19 @@
 import AVFoundation
 import Foundation
 
+/// 播放会话恢复：任何"可能被别人改过会话"后的播放前都必须调用。
+/// （跟读会把会话切成 .record；若在 .record 下播 AVAudioPlayer 就是全局失声——
+/// 这是"跟读后没声音"的根因。幂等且廉价，每次播放前断言一次。）
+enum PlaybackSession {
+    static func activate() {
+        #if os(iOS)
+        let s = AVAudioSession.sharedInstance()
+        try? s.setCategory(.playback, mode: .default)
+        try? s.setActive(true)
+        #endif
+    }
+}
+
 /// 朗读服务：TTS 音频（服务器 edge-tts 神经语音）+ App 本地磁盘缓存 + 流式连播链
 /// - 首次播放某文本：从服务器取 mp3（服务端自己也有缓存，命中 ~0.1s，新生成 ~2s），写入本地缓存
 /// - 再次播放同一文本：直接读本地文件，零网络、离线可用
@@ -12,7 +25,6 @@ final class AudioService {
     private(set) var playingText: String?
     private var current: AVAudioPlayer?
     private var chainTask: Task<Void, Never>?
-    private var sessionConfigured = false
 
     // MARK: 本地磁盘缓存（Documents/tts_audio/<sha1>.mp3）
 
@@ -33,16 +45,10 @@ final class AudioService {
         return cacheDir.appendingPathComponent("\(String(format: "%016llx", h)).mp3")
     }
 
-    // MARK: 音频会话
+    // MARK: 音频会话（每次播放前都断言 .playback——跟读会把会话切成 .record）
 
     private func configureSession() {
-        guard !sessionConfigured else { return }
-        sessionConfigured = true
-        #if os(iOS)
-        // .playback：静音开关下也能出声（学习 App 需要）
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-        try? AVAudioSession.sharedInstance().setActive(true)
-        #endif
+        PlaybackSession.activate()
     }
 
     // MARK: 取音频（本地缓存优先，未命中走服务器并写缓存）

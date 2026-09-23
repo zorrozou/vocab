@@ -125,7 +125,6 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					3DBDD1FFF61E584ECC697774 = {
-						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -238,7 +237,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = X5ANMACUCD;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = VocabApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
@@ -259,7 +258,7 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_IDENTITY = "iPhone Developer";
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = X5ANMACUCD;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = VocabApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 27.0;

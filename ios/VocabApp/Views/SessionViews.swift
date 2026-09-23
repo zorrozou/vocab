@@ -449,6 +449,12 @@ struct AnswerCardView: View {
     }
 
     private func setup() async {
+        // 答错的「忘记」评分最先落账（对齐 web）：否则手快翻页会丢 Again、不降级
+        if !quizOk {
+            await app.review(word: word, rating: 1)
+            app.session.reviewedToday += 1
+            app.save()
+        }
         personal = app.S.personalized[word]
         let pos = app.S.cards[word]?.pos ?? app.S.pointer
         if let r = try? await APIClient.shared.lexiconAt(pos: pos, n: 1),
@@ -464,11 +470,6 @@ struct AnswerCardView: View {
         guard !Task.isCancelled else { return }
         let texts = [personal?.text].compactMap { $0 } + sentences.map { $0.text }
         app.audio.playSequence(word: word, sentences: texts, voice: app.S.settings.voice)
-        if !quizOk {
-            await app.review(word: word, rating: 1)
-            app.session.reviewedToday += 1
-            app.save()
-        }
     }
 
     private func rate(_ r: Int) {

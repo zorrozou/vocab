@@ -115,21 +115,24 @@ final class SpeechService: NSObject {
         }
     }
 
-    private func teardownCapture() {
+    private func teardownCapture(cancelTask: Bool = true) {
         engine?.inputNode.removeTap(onBus: 0)
         engine?.stop()
         engine = nil
-        request?.endAudio()
+        request?.endAudio()   // 通知识别器音频结束，让它产出最终结果
         request = nil
-        task?.cancel()
-        task = nil
+        if cancelTask {
+            task?.cancel()
+            task = nil
+        }
     }
 
     /// 用户点「停止」或超时：结束收音，拿到最终结果
     func stopCapture(finalize: Bool) {
         guard state == .listening else { return }
         state = .evaluating
-        teardownCapture()
+        // 松手只结束音频输入，不杀识别任务——让 isFinal 最终结果有机会到达（否则丢最终置信度）
+        teardownCapture(cancelTask: false)
         #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         #endif
@@ -176,7 +179,9 @@ final class SpeechService: NSObject {
         guard !finished else { return }
         finished = true
         timeoutTask?.cancel()
-        teardownCapture()
+        teardownCapture(cancelTask: true)
+        // 评分交付即恢复播放会话——跟读把会话切成了 .record，不恢复则后续 TTS 全部失声
+        PlaybackSession.activate()
         state = .idle
         let cb = onResult
         onResult = nil
