@@ -824,6 +824,9 @@ function showSettings() {
     <div class="row">${[30, 60, 100, 130].map(n => `<button class="ghost" style="flex:1;padding:9px;${st.dailyCap === n ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-cap="${n}">${n}</button>`).join("")}</div>
     <p class="muted" style="margin-top:12px">朗读嗓音</p>
     <div class="row">${[["en-US-AriaNeural", "Aria 女声"], ["en-US-GuyNeural", "Guy 男声"], ["en-US-JennyNeural", "Jenny 女声"], ["en-GB-SoniaNeural", "Sonia 英音"]].map(([v, name]) => `<button class="ghost" style="flex:1 1 40%;padding:9px;${(st.voice || "") === v ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-voice="${v}">${name}</button>`).join("")}</div>
+    <p class="muted" style="margin-top:12px">定级</p>
+    <div class="row"><button class="ghost" style="flex:1;padding:9px" id="bReplace">重新定级（30 题重测词汇边界）</button></div>
+    <p class="muted" style="font-size:12px">随时可测。已学单词、复习进度、连续天数全部保留，只更新词汇边界和后续新词起点。</p>
     <div class="row"><button class="act" id="bSave">保存</button></div>
   </div>`;
   document.querySelectorAll("[data-new]").forEach(b => b.onclick = () => { st.newPerDay = +b.dataset.new; showSettings(); });
@@ -833,6 +836,11 @@ function showSettings() {
     playText("The quick brown fox jumps over the lazy dog.");
     showSettings();
   });
+  $("#bReplace").onclick = () => {
+    if (!confirm("重新回答 30 道词义选择题（全新随机卷），更新词汇边界和新词起点。\n已学单词与进度全部保留。确定开始？")) return;
+    S.posterior = null; S.probeCount = 0; S.wrongStreak = 0; quizSet = [];
+    save(); place();
+  };
   $("#bSave").onclick = () => { save(); home(); };
 }
 

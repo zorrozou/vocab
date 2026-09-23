@@ -193,6 +193,17 @@ final class AppState {
         route = .home
     }
 
+    /// 重新定级：重置探测状态并重抽题库（30 题新随机卷）。
+    /// 已学卡片、FSRS 调度、连续天数全部保留；完成后 frontier/pointer 跳到新边界。
+    func startReplacement() {
+        S.posterior = nil
+        S.probeCount = 0
+        S.wrongStreak = 0
+        placementSet = nil
+        save()
+        route = .placement
+    }
+
     func switchAccount() {
         saveLocal()
         auth = nil

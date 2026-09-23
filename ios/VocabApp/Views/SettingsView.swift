@@ -3,6 +3,7 @@ import SwiftUI
 /// 设置：每日新词 / 每日上限 / 朗读嗓音（与 web 设置项一致）
 struct SettingsView: View {
     @Environment(AppState.self) private var app
+    @State private var showReplaceConfirm = false
 
     private let voices: [(String, String)] = [
         ("en-US-AriaNeural", "Aria 女声"),
@@ -52,7 +53,24 @@ struct SettingsView: View {
                     }
                 }
                 .padding(.top, 12)
+
+                Card {
+                    Text("定级").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    GhostButton(title: "重新定级（30 题重测词汇边界）") {
+                        showReplaceConfirm = true
+                    }
+                    Text("随时可测。已学单词、复习进度、连续天数全部保留，只更新词汇边界和后续新词起点。")
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
+        }
+        .alert("重新定级？", isPresented: $showReplaceConfirm) {
+            Button("开始重测") { app.startReplacement() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("重新回答 30 道词义选择题（全新随机卷），更新词汇边界和新词起点。已学单词与进度全部保留。")
         }
     }
 
