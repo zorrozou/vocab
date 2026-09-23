@@ -155,6 +155,7 @@ final class AppState {
 
     func enterGuest() {
         UserDefaults.standard.set(true, forKey: "vocab_guest")
+        placementSet = nil   // 进游客也清空定级题缓存（与账号隔离）
         S = loadLocal(slot: "guest") ?? LearningState()
         route = .home
     }
@@ -170,6 +171,7 @@ final class AppState {
         if !S.cards.isEmpty || S.probeCount > 0 || !S.log.isEmpty {
             saveLocal()
         }
+        placementSet = nil   // 换账号必须重抽定级题（否则新用户会做到上一个用户的卷子）
         let a = Auth(userId: r.user.id, username: r.user.username,
                      nickname: r.user.nickname, token: r.token)
         auth = a
@@ -210,6 +212,7 @@ final class AppState {
         Task { await api.setToken(nil) }
         Keychain.delete("token")
         UserDefaults.standard.removeObject(forKey: "vocab_profile")
+        placementSet = nil   // 切账号清空定级题缓存
         S = LearningState()
         route = .welcome
     }

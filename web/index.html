@@ -900,7 +900,7 @@ function welcome() {
   </div>`;
   $("#wLogin").onclick = () => authForm("login");
   $("#wRegister").onclick = () => authForm("register");
-  $("#wGuest").onclick = () => { localStorage.setItem("vocab_guest", "1"); loadSlot("vocab_v1_guest"); home(); };
+  $("#wGuest").onclick = () => { quizSet = []; localStorage.setItem("vocab_guest", "1"); loadSlot("vocab_v1_guest"); home(); };
 }
 
 function authForm(mode) {
@@ -935,6 +935,7 @@ function authForm(mode) {
 
 async function onAuthed(d, isRegister) {
   archiveCurrent();   // 先归档当前（游客或上一个账号）的进度
+  quizSet = [];       // 换账号必须重抽定级题（否则新用户会做到上一个用户的卷子）
   AUTH = { userId: d.user.id, username: d.user.username, nickname: d.user.nickname, token: d.token };
   localStorage.setItem("vocab_auth", JSON.stringify(AUTH));
   localStorage.removeItem("vocab_guest");
@@ -975,7 +976,7 @@ async function userMenu() {
   </div>`;
   $("#mBack").onclick = home;
   $("#mSync").onclick = async () => { await pushState(); $("#mMsg").textContent = "✓ 已同步"; };
-  $("#mSwitch").onclick = () => { archiveCurrent(); AUTH = null; localStorage.removeItem("vocab_auth"); renderUserTag(); welcome(); };
+  $("#mSwitch").onclick = () => { archiveCurrent(); quizSet = []; AUTH = null; localStorage.removeItem("vocab_auth"); renderUserTag(); welcome(); };
   $("#mLogout").onclick = async () => {
     await pushState();
     try { await fetch(API + "/api/v1/auth/logout", { method: "POST", headers: authHeaders() }); } catch (e) {}
