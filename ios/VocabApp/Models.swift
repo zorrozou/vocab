@@ -85,6 +85,14 @@ struct PersonalizedSentence: Codable, Equatable {
     var zh: String?
 }
 
+/// 水平追踪状态（自适应水平追踪 v1.2）：后验本体沿用 S.posterior
+struct TrackState: Codable, Equatable {
+    var evalDay: String?      // 今日位置重估是否已生效（每日最多一次）
+    var lowSince: String?     // 游标持续超前于水平的起始日（连续 2 天触发减压）
+    var throttle: Bool?       // 减压阀：true 时新词 5 个/天
+    var lastNote: String?     // 最近一次追踪动作的人话说明（完成页展示）
+}
+
 struct Settings: Codable, Equatable {
     var newPerDay: Int = 10
     var dailyCap: Int = 100
@@ -120,6 +128,7 @@ struct LearningState: Codable, Equatable {
     var wrongStreak: Int = 0
     var personalizedDay: String?
     var personalizedWeak: String?
+    var track: TrackState?          // 自适应水平追踪状态（v1.2 新增，可选兼容旧存档）
 
     init() {}
 
@@ -146,6 +155,7 @@ struct LearningState: Codable, Equatable {
         wrongStreak = try c.decodeIfPresent(Int.self, forKey: .wrongStreak) ?? 0
         personalizedDay = try c.decodeIfPresent(String.self, forKey: .personalizedDay)
         personalizedWeak = try c.decodeIfPresent(String.self, forKey: .personalizedWeak)
+        track = try c.decodeIfPresent(TrackState.self, forKey: .track)
     }
 }
 

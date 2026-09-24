@@ -107,7 +107,7 @@ const INTERVAL = { 1: 1, 2: 6, 3: 8, 4: 15, 5: 45 };
 /* ---------------- 状态 ---------------- */
 function defaultState() {
   return { v: 1, calibrated: false, frontier: 0, pointer: 1, probeCount: 0,
-           posterior: null, pendingNew: [],
+           posterior: null, pendingNew: [], track: null,
            cards: {}, log: [], personalized: {}, streak: 0, lastDay: null,
            settings: { newPerDay: 10, dailyCap: 100 } };
 }
@@ -210,9 +210,11 @@ async function learn(word, pos, rating = 3) {
   if (r) { c.fsrs = r; c.due = r.due || new Date(addDays(today(), 1) + "T08:00:00").toISOString(); delete c.stage; }
   else ladderFallback(c, rating);
   S.log.push({ d: today(), word, rating, kind: "learn" });
+  // 水平追踪观测（v1.2）：不熟悉=强证据；学会了=自评弱证据
+  if (S.calibrated) posteriorUpdate(pos, rating === 1 ? 0 : 1, rating === 1 ? 1.0 : 0.5);
 }
 
-async function review(word, rating) {
+async function review(word, rating, trackWeight) {
   const c = S.cards[word]; if (!c) return;
   S.log.push({ d: today(), word, rating, kind: "review" });
   const body = c.fsrs
@@ -221,6 +223,9 @@ async function review(word, rating) {
   const r = await fsrsCall(body);
   if (r) { c.fsrs = r; c.due = r.due || new Date(addDays(today(), 1) + "T08:00:00").toISOString(); if (rating === 1) c.lt = 0; delete c.stage; }
   else ladderFallback(c, rating);
+  // 水平追踪观测（v1.2）：复习证据弱化（遗忘≠不认识）；验收测试调用方传 1.0
+  const p = S.cards[word] && S.cards[word].pos;
+  if (S.calibrated && p) posteriorUpdate(p, rating === 1 ? 0 : 1, trackWeight !== undefined ? trackWeight : (rating === 1 ? 0.2 : 0.3));
 }
 
 const isMastered = c => c.stage === 6 || (c.fsrs && c.fsrs.stability >= 180);
@@ -228,12 +233,13 @@ const isMastered = c => c.stage === 6 || (c.fsrs && c.fsrs.stability >= 180);
 /* ---------------- 定级（网格贝叶斯） ---------------- */
 const GRID = []; for (let r = 0; r <= 12000; r += 250) GRID.push(r);
 const logistic = x => 1 / (1 + Math.exp(-x));
-function posteriorUpdate(rank, resp) {
+/* v1.2：带权后验更新——weight<1 的弱证据按 like^w 缩放（tempering） */
+function posteriorUpdate(rank, resp, weight = 1.0) {
   if (!S.posterior) S.posterior = GRID.map(() => 1 / GRID.length);
   let sum = 0;
   S.posterior = S.posterior.map((p, i) => {
     const pk = logistic((GRID[i] - rank) / 400);
-    const like = resp * pk + (1 - resp) * (1 - pk);
+    const like = Math.pow(resp * pk + (1 - resp) * (1 - pk), weight);
     const v = p * like; sum += v; return v;
   });
   S.posterior = S.posterior.map(v => v / sum);
@@ -242,6 +248,31 @@ function posteriorUpdate(rank, resp) {
 const postMean = () => S.posterior ? S.posterior.reduce((a, p, i) => a + GRID[i] * p, 0) : 0;
 const postStd = () => { const m = postMean(); return Math.sqrt(S.posterior.reduce((a, p, i) => a + (GRID[i] - m) ** 2 * p, 0)); };
 const converged = () => (postStd() < 500 && S.probeCount >= 12) || S.probeCount >= 40;
+
+/* ---------------- v1.2 自适应水平追踪：每日一次决定发词起点 ---------------- */
+function trackLevelDaily() {
+  if (!S.calibrated || !S.posterior) return;
+  if (S.track && S.track.evalDay === today()) return;   // 每日最多一次
+  const T = Math.round(postMean()), std = postStd();
+  const track = S.track || {};
+  if (T - S.pointer > 500 && std < 800) {
+    track.lastNote = `连续表现超过当前级别，发词位置从 ${S.pointer} 追平到 ≈${T}（${LVL_NAME[lvlOfPos(T)]}），中间词视为已会跳过`;
+    S.pointer = T;
+    track.lowSince = null; track.throttle = false;
+  } else if (S.pointer - T > 500) {
+    if (!track.lowSince) track.lowSince = today();
+    if (track.lowSince <= addDays(today(), -1) && !track.throttle) {
+      track.throttle = true;
+      track.lastNote = `近期新词偏难（水平估值 ≈${T}，游标 ${S.pointer}），新词临时降到 5 个/天，先消化存量`;
+    }
+  } else {
+    if (track.throttle) track.lastNote = `水平追上来了（≈${T}），新词恢复 ${S.settings.newPerDay} 个/天`;
+    track.lowSince = null; track.throttle = false;
+  }
+  track.evalDay = today();
+  S.track = track;
+  save();
+}
 
 /* 定级题库：30 道 4 选 1，一次拉取，答题零网络 */
 let quizSet = [];
@@ -281,7 +312,8 @@ async function buildQueue() {
   const early = earlyPool.filter(w => !reviews.includes(w))
     .slice(0, Math.min(5, Math.max(0, S.settings.dailyCap - reviews.length)));
   const reviewsAll = [...reviews, ...early];
-  const nNew = Math.min(S.settings.newPerDay, Math.max(0, S.settings.dailyCap - reviewsAll.length));
+  trackLevelDaily();   // v1.2：水平追踪每日一次（可能跳位/减压）
+  const nNew = Math.min(S.track && S.track.throttle ? 5 : S.settings.newPerDay, Math.max(0, S.settings.dailyCap - reviewsAll.length));
   const news = [];
   const rest = [...S.pendingNew];
   while (news.length < nNew && rest.length) news.push(rest.shift());
@@ -457,7 +489,7 @@ async function quizRound(words, i) {
       if (q.options[+x.dataset.i].ok) x.classList.add("right");
     });
     if (!ok) b.classList.add("wrong");
-    await review(w, ok ? 3 : 1);   // 答对=Good（D+1 必复习），答错=Again（薄弱词+短间隔）
+    await review(w, ok ? 3 : 1, 1.0);   // 验收是客观实测：权重 1.0（强于复习的 0.2/0.3）
     setTimeout(() => quizRound(words, i + 1), 650);
   });
 }
@@ -686,6 +718,7 @@ function doneDay() {
       <div class="stat"><b>${session.learnedToday}</b><span>新词</span></div>
       <div class="stat"><b>${S.streak}</b><span>连续天数</span></div>
     </div>
+    ${S.calibrated && S.posterior ? `<p style="font-size:12px;color:#5f9cec;margin-top:8px">系统判断你的词汇量 ≈${Math.round(postMean())}（${LVL_NAME[lvlOfPos(Math.round(postMean()))]}），明天从这里发词</p>${S.track && S.track.lastNote ? `<p class="muted" style="font-size:12px;margin-top:4px">${S.track.lastNote}</p>` : ""}` : ""}
     <div id="laterRow" style="margin-top:10px"></div>
     <div class="card" style="background:#12151a;margin-top:14px">
       <h2>今日薄弱词 · 个性化例句</h2>
@@ -838,7 +871,7 @@ function showSettings() {
   });
   $("#bReplace").onclick = () => {
     if (!confirm("重新回答 30 道词义选择题（全新随机卷），更新词汇边界和新词起点。\n已学单词与进度全部保留。确定开始？")) return;
-    S.posterior = null; S.probeCount = 0; S.wrongStreak = 0; quizSet = [];
+    S.posterior = null; S.probeCount = 0; S.wrongStreak = 0; S.track = null; quizSet = [];
     save(); place();
   };
   $("#bSave").onclick = () => { save(); home(); };

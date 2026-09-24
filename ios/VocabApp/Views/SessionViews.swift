@@ -548,7 +548,8 @@ struct AcceptanceQuizView: View {
     private func answer(ok: Bool) {
         let w = words[i]
         Task {
-            await app.review(word: w, rating: ok ? 3 : 1)
+            // 验收是客观实测，水平观测权重 1.0（强于复习的 0.2/0.3）
+            await app.review(word: w, rating: ok ? 3 : 1, trackWeight: 1.0)
             app.save()
             await MainActor.run { advance() }
         }
@@ -586,6 +587,15 @@ struct DoneView: View {
                             StatCell(number: "\(app.session.reviewedToday)", label: "复习")
                             StatCell(number: "\(app.session.learnedToday)", label: "新词")
                             StatCell(number: "\(app.S.streak)", label: "连续天数")
+                        }
+                        // v1.2 水平追踪透明化：告诉用户系统判断的水平和明天的发词位置
+                        if app.S.calibrated, app.S.posterior != nil {
+                            let mean = Int(StudyEngine.postMean(app.S).rounded())
+                            Text("系统判断你的词汇量 ≈\(mean)（\(levelDisplayName(levelForPos(mean)))），明天从这里发词")
+                                .font(.system(size: 12)).foregroundStyle(Theme.accentLight)
+                            if let note = app.S.track?.lastNote, !note.isEmpty {
+                                Text(note).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            }
                         }
                         if app.dueLaterTodayCount() > 0 && app.dueNowCount() == 0 {
                             Text("⏰ 今天晚些时候还有 \(app.dueLaterTodayCount()) 个词到期，记得回来")

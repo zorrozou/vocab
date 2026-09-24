@@ -201,6 +201,7 @@ final class AppState {
         S.posterior = nil
         S.probeCount = 0
         S.wrongStreak = 0
+        S.track = nil          // 追踪状态一并刷新（先验更换）
         placementSet = nil
         save()
         route = .placement
@@ -243,9 +244,17 @@ final class AppState {
         }
         S.cards[word] = c
         S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "learn"))
+        // 水平追踪观测（v1.2）：不熟悉=强证据(resp 0, w1.0)；学会了=自评弱证据(resp 1, w0.5)
+        observeLevel(pos: pos, known: rating != 1, weight: rating == 1 ? 1.0 : 0.5)
     }
 
-    func review(word: String, rating: Int) async {
+    /// 水平观测（v1.2）：每次反馈都是对词汇量后验的一次带权观测
+    func observeLevel(pos: Int, known: Bool, weight: Double) {
+        guard S.calibrated else { return }
+        StudyEngine.posteriorUpdate(&S, rank: pos, resp: known ? 1 : 0, weight: weight)
+    }
+
+    func review(word: String, rating: Int, trackWeight: Double? = nil) async {
         guard var c = S.cards[word] else { return }
         let today = DayUtil.today()
         S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "review"))
@@ -257,6 +266,46 @@ final class AppState {
             StudyEngine.ladderFallback(&c, rating: rating, today: today)
         }
         S.cards[word] = c
+        // 水平追踪观测（v1.2）：复习证据弱化（遗忘≠不认识）；验收测试由调用方传 1.0
+        if let pos = S.cards[word]?.pos {
+            let w = trackWeight ?? (rating == 1 ? 0.2 : 0.3)
+            observeLevel(pos: pos, known: rating != 1, weight: w)
+        }
+    }
+
+    // MARK: 自适应水平追踪（v1.2）：每日一次，用后验水平决定发词起点
+
+    /// 每天首次 buildQueue 时运行：T=后验均值。
+    /// T 超前 pointer >500 且证据够硬(std<800) → pointer 跳到 T（中间词视为已会）；
+    /// pointer 超前 T >500 且连续 2 天 → 减压（新词 5 个/天，不后退——已发词 FSRS 在管）。
+    func trackLevelDaily() {
+        guard S.calibrated, S.posterior != nil else { return }
+        let today = DayUtil.today()
+        if S.track?.evalDay == today { return }   // 每日最多一次
+        let T = Int(StudyEngine.postMean(S).rounded())
+        let std = StudyEngine.postStd(S)
+        var track = S.track ?? TrackState()
+        if Double(T - S.pointer) > 500 && std < 800 {
+            track.lastNote = "连续表现超过当前级别，发词位置从 \(S.pointer) 追平到 ≈\(T)（\(levelDisplayName(levelForPos(T)))），中间词视为已会跳过"
+            S.pointer = T
+            track.lowSince = nil
+            track.throttle = false
+        } else if Double(S.pointer - T) > 500 {
+            if track.lowSince == nil { track.lowSince = today }
+            if track.lowSince! <= DayUtil.addDays(today, -1) && track.throttle != true {
+                track.throttle = true
+                track.lastNote = "近期新词偏难（水平估值 ≈\(T)，游标 \(S.pointer)），新词临时降到 5 个/天，先消化存量"
+            }
+        } else {
+            if track.throttle == true {
+                track.lastNote = "水平追上来了（≈\(T)），新词恢复 \(S.settings.newPerDay) 个/天"
+            }
+            track.lowSince = nil
+            track.throttle = false
+        }
+        track.evalDay = today
+        S.track = track
+        save()
     }
 
     // MARK: 每日队列（到期复习 + 提前巩固概率池 + 新词）
@@ -288,7 +337,10 @@ final class AppState {
         let reviewsAll = reviews + early
 
         // 新词：pendingNew 优先，然后按 pointer 顺序取
-        let nNew = min(S.settings.newPerDay, max(0, cap - reviewsAll.count))
+        // v1.2：先跑水平追踪（可能跳位/减压），新词量用减压后的有效值
+        trackLevelDaily()
+        let newPerDay = (S.track?.throttle == true) ? 5 : S.settings.newPerDay
+        let nNew = min(newPerDay, max(0, cap - reviewsAll.count))
         var news: [NewWord] = []
         var rest = S.pendingNew
         while news.count < nNew, !rest.isEmpty { news.append(rest.removeFirst()) }

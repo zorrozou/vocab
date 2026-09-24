@@ -72,14 +72,16 @@ enum StudyEngine {
 
     static func logistic(_ x: Double) -> Double { 1 / (1 + exp(-x)) }
 
-    static func posteriorUpdate(_ s: inout LearningState, rank: Int, resp: Double) {
+    /// 带权后验更新（v1.2 自适应水平追踪）：weight<1 的弱证据按 like^w 缩放（tempering）
+    static func posteriorUpdate(_ s: inout LearningState, rank: Int, resp: Double, weight: Double = 1.0) {
         if s.posterior == nil {
             s.posterior = [Double](repeating: 1.0 / Double(grid.count), count: grid.count)
         }
         var sum = 0.0
         s.posterior = s.posterior!.enumerated().map { i, p in
             let pk = logistic((grid[i] - Double(rank)) / 400)
-            let like = resp * pk + (1 - resp) * (1 - pk)
+            let raw = resp * pk + (1 - resp) * (1 - pk)
+            let like = pow(raw, weight)
             let v = p * like
             sum += v
             return v
