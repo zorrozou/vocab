@@ -114,6 +114,7 @@ function defaultState() {
 let S = Object.assign(defaultState(), JSON.parse(localStorage.getItem("vocab_v1") || "null") || {});
 const save = () => {
   localStorage.setItem("vocab_v1", JSON.stringify(S));
+  localStorage.setItem("vocab_write_ts", String(Date.now() / 1000));   // 本机最新写入时刻（启动/登录比谁新用）
   if (AUTH) { clearTimeout(save._t); save._t = setTimeout(pushState, 2000); }   // 登录后防抖推送服务器
 };
 let session = { queue: [], idx: 0, learnedToday: 0, reviewedToday: 0 };
@@ -927,7 +928,7 @@ async function pushState() {
 async function pullState() {
   const r = await fetch(API + "/api/v1/me/state", { headers: authHeaders() });
   if (!r.ok) return undefined;
-  return (await r.json()).state;
+  return await r.json();   // {state, updated_at}——updated_at 用于"谁新听谁的"
 }
 
 function renderUserTag() {
@@ -997,9 +998,15 @@ async function onAuthed(d, isRegister) {
   localStorage.removeItem("vocab_guest");
   const server = await pullState();
   const slotKey = `vocab_v1_u${AUTH.userId}`;
-  if (server) {
-    S = Object.assign(defaultState(), server);   // 服务器为准 + 默认字段兜底
-    localStorage.setItem("vocab_v1", JSON.stringify(S));
+  if (server && server.state) {
+    // 谁新听谁的：本机有比服务器更新的未推送学习时，保留本机并补推（防旧档抹新档）
+    const localTs = +(localStorage.getItem("vocab_write_ts") || 0);
+    if (localTs > (server.updated_at || 0) + 2) {
+      pushState();
+    } else {
+      S = Object.assign(defaultState(), server.state);   // 服务器为准 + 默认字段兜底
+      localStorage.setItem("vocab_v1", JSON.stringify(S));
+    }
   } else if (loadSlot(slotKey)) {
     S = Object.assign(defaultState(), S);
     pushState();                      // 本机有这个账号的存档 → 推上服务器
@@ -1055,7 +1062,17 @@ function boot() {
   renderUserTag();
   if (AUTH) {
     pullState().then(remote => {
-      if (remote) { S = Object.assign(defaultState(), remote); localStorage.setItem("vocab_v1", JSON.stringify(S)); }
+      if (remote && remote.state) {
+        // 谁新听谁的（不再服务器无条件覆盖）：本机比服务器新（防抖推送没来得及发/断网）时保留本机并补推，
+        // 否则学过的词会被旧档抹掉、第二天当新词重发（用户实测踩到两次）
+        const localTs = +(localStorage.getItem("vocab_write_ts") || 0);
+        if (localTs > (remote.updated_at || 0) + 2) {
+          pushState();
+        } else {
+          S = Object.assign(defaultState(), remote.state);
+          localStorage.setItem("vocab_v1", JSON.stringify(S));
+        }
+      }
       home();
     }).catch(() => home());
   } else if (localStorage.getItem("vocab_guest")) {

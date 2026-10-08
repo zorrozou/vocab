@@ -142,10 +142,24 @@ final class AppState {
         if let a = restoreAuth() {
             auth = a
             await api.setToken(a.token)
-            // 服务器状态优先；拉不到用本地槽位
-            if let remote = try? await api.pullState().state {
-                S = remote
-            } else if let local = loadLocal(slot: slotKey, forUsername: a.username) {
+            // 谁新听谁的（不再服务器无条件覆盖）：
+            // 上次学习若在防抖推送前退出/断网，本机比服务器新——这时以本机为准并立刻补推，
+            // 否则学过的词会被旧档抹掉、第二天当新词重发（用户实测踩到两次）
+            let local = loadLocal(slot: slotKey, forUsername: a.username)
+            let localTs = UserDefaults.standard.double(forKey: "vocab_write_\(slotKey)")
+            if let remote = try? await api.pullState() {
+                if let rs = remote.state {
+                    if let local, localTs > (remote.updated_at ?? 0) + 2 {
+                        S = local
+                        try? await api.pushState(S)   // 本机更新 → 补推上服务器
+                    } else {
+                        S = rs
+                    }
+                } else if let local {
+                    S = local
+                    try? await api.pushState(S)
+                }
+            } else if let local {
                 S = local
             }
             saveLocal()
@@ -193,8 +207,16 @@ final class AppState {
             UserDefaults.standard.set(d, forKey: "vocab_profile")
         }
         UserDefaults.standard.set(false, forKey: "vocab_guest")
-        if let remote = try? await api.pullState().state {
-            S = remote
+        // 服务器为准 → 但本机槽位比服务器新（有未推送的学习）则以本机为准并补推
+        if let remote = try? await api.pullState(), let rs = remote.state {
+            let local = loadLocal(slot: slotKey, forUsername: r.user.username)
+            let localTs = UserDefaults.standard.double(forKey: "vocab_write_\(slotKey)")
+            if let local, localTs > (remote.updated_at ?? 0) + 2 {
+                S = local
+                try? await api.pushState(S)
+            } else {
+                S = rs
+            }
         } else if let local = loadLocal(slot: slotKey, forUsername: r.user.username) {
             S = local
             try? await api.pushState(S)
