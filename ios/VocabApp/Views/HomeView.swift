@@ -97,6 +97,9 @@ struct TopBar: View {
             Text("词航").font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.text)
             Text(app.auth.map { "· \($0.nickname)" } ?? "· 游客（进度仅本机）")
                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
+            if app.syncFailed {
+                Text("⚠️ 同步失败").font(.system(size: 11)).foregroundStyle(Theme.warn)
+            }
             Spacer()
             Button { app.route = .stats } label: {
                 Image(systemName: "chart.bar").foregroundStyle(Theme.accentLight)

@@ -48,6 +48,7 @@ final class AppState {
     let speech = SpeechService()
     private let api = APIClient.shared
     private var pushTask: Task<Void, Never>?
+    var syncFailed = false   // 上次推送服务器失败（顶栏显示 ⚠️）
 
     var isGuest: Bool { auth == nil }
 
@@ -102,13 +103,21 @@ final class AppState {
 
     /// 保存 = 本地立即 + 登录后防抖 2s 推服务器（与 web 一致）
     func save() {
+        // 状态瘦身：日志只留最近 1200 条（薄弱词窗口 7 天/顽固词统计不受影响；
+        // 不瘦身的话状态会超过 nginx 64KB 限制导致推送静默 413——本次同步分歧的真凶）
+        if S.log.count > 1200 { S.log.removeFirst(S.log.count - 1200) }
         saveLocal()
         guard auth != nil else { return }
         pushTask?.cancel()
         pushTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard let self, !Task.isCancelled else { return }
-            try? await self.api.pushState(self.S)
+            do {
+                try await self.api.pushState(self.S)
+                self.syncFailed = false
+            } catch {
+                self.syncFailed = true   // 推送失败对用户可见（不再静默）
+            }
         }
     }
 
@@ -118,8 +127,10 @@ final class AppState {
         do {
             try await api.pushState(S)
             syncMsg = "✓ 已同步"
+            syncFailed = false
         } catch {
             syncMsg = "同步失败，稍后再试"
+            syncFailed = true
         }
     }
 
