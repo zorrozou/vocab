@@ -223,6 +223,14 @@ async function review(word, rating, trackWeight) {
   const r = await fsrsCall(body);
   if (r) { c.fsrs = r; c.due = r.due || new Date(addDays(today(), 1) + "T08:00:00").toISOString(); if (rating === 1) c.lt = 0; delete c.stage; }
   else ladderFallback(c, rating);
+  // 熟词毕业（用户反馈驱动）：连按两次「熟练」，或按「熟练」时稳定度已≥30天
+  // → 直接跨过已掌握阈值（稳定度≥180），永不再出现。「记得/困难」照常走 FSRS。
+  if (rating === 4) {
+    c.easyStreak = (c.easyStreak || 0) + 1;
+    if (c.easyStreak >= 2 || (c.fsrs && c.fsrs.stability >= 30)) {
+      if (c.fsrs) c.fsrs.stability = Math.max(c.fsrs.stability, 200);
+    }
+  } else if (rating === 1) c.easyStreak = 0;
   // 水平追踪观测（v1.2）：复习证据弱化（遗忘≠不认识）；验收测试调用方传 1.0
   const p = S.cards[word] && S.cards[word].pos;
   if (S.calibrated && p) posteriorUpdate(p, rating === 1 ? 0 : 1, trackWeight !== undefined ? trackWeight : (rating === 1 ? 0.2 : 0.3));
@@ -316,7 +324,11 @@ async function buildQueue() {
   const nNew = Math.min(S.track && S.track.throttle ? 5 : S.settings.newPerDay, Math.max(0, S.settings.dailyCap - reviewsAll.length));
   const news = [];
   const rest = [...S.pendingNew];
-  while (news.length < nNew && rest.length) news.push(rest.shift());
+  // 防重守卫：已在卡片里的词（学过/在复习）绝不再当新词发
+  while (news.length < nNew && rest.length) {
+    const w = rest.shift();
+    if (!S.cards[w.word] && !news.find(x => x.word === w.word)) news.push(w);
+  }
   S.pendingNew = rest;
   if (news.length < nNew) {
     const r = await fetch(`${API}/api/v1/lexicon/at?pos=${S.pointer}&n=${nNew - news.length + 2}`).then(r => r.json());
@@ -376,18 +388,26 @@ function renderChips() {
 function home() {
   renderChips();
   const el = $("#app");
+  // 游客横幅：进度只在本机浏览器，登录后才和手机同步（同步分歧的显性提醒）
+  const guestBanner = IS_GUEST()
+    ? `<div class="card center" style="padding:10px 14px;font-size:13px;border:1px solid #4a6a2e;cursor:pointer" id="gBanner">
+         ⚠️ 游客模式：进度只存本浏览器，不会同步到手机。<b style="color:#5f9cec">点这里登录/注册 →</b>
+       </div>`
+    : "";
   if (!S.calibrated) {
-    el.innerHTML = `<div class="card center">
+    el.innerHTML = guestBanner + `<div class="card center">
       <h2>首次使用 · 智能定级</h2>
       <p style="font-size:15px;margin:10px 0">30 道词义选择（4 选 1），<br>系统根据你的真实答题成绩估计词汇量，<br>把新词起点放到适合你的位置。</p>
       <p class="muted">已完成 ${S.probeCount}/30${S.probeCount >= 4 ? ` · 当前估计 ≈${Math.round(postMean())}` : ""}</p>
       <div class="row"><button class="act" id="bPlace">开始定级</button></div>
     </div>`;
     $("#bPlace").onclick = () => place();
+    const gb0 = $("#gBanner");
+    if (gb0) gb0.onclick = () => welcome();
     return;
   }
   const dueN = Object.values(S.cards).filter(c => !isMastered(c) && new Date(c.due) <= new Date()).length;
-  el.innerHTML = `<div class="card center">
+  el.innerHTML = guestBanner + `<div class="card center">
     <h2>今日任务</h2>
     <div class="stat-grid">
       <div class="stat"><b>${dueN}</b><span>待复习</span></div>
@@ -398,6 +418,8 @@ function home() {
     <p class="muted" style="margin-top:10px">先复习到期单词，再学新词</p>
   </div>`;
   $("#bStart").onclick = async () => { await buildQueue(); step(); };
+  const gb = $("#gBanner");
+  if (gb) gb.onclick = () => welcome();
 }
 
 /* ---- 定级流程 ---- */
@@ -711,6 +733,7 @@ async function showReviewClassic(item) {
 function doneDay() {
   if (S.lastDay !== today()) { S.streak = S.lastDay === addDays(today(), -1) ? S.streak + 1 : 1; S.lastDay = today(); }
   save(); renderChips();
+  if (AUTH) pushState();   // 当日完成立即推服务器（不等防抖），手机端马上同步得到
   $("#app").innerHTML = `<div class="card center">
     <h2>今日完成 🎉</h2>
     <div class="stat-grid">

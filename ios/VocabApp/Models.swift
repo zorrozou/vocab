@@ -18,6 +18,7 @@ struct CardState: Codable, Equatable {
     var lt: Int?              // lapse today 计数（旧逻辑保留）
     var pos: Int?             // 词在学习序列中的位置
     var fsrs: FsrsState?
+    var easyStreak: Int?      // 连续"熟练"次数（毕业判定用；rating 1 归零）
 }
 
 struct LogEntry: Codable, Equatable {

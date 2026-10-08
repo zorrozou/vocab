@@ -70,8 +70,20 @@ final class AppState {
     private func saveLocal() {
         guard let data = try? JSONEncoder().encode(S) else { return }
         try? data.write(to: stateURL(for: slotKey), options: .atomic)
+        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "vocab_write_\(slotKey)")
         // 槽位署名：服务端删号后 uid 会被复用，凭署名防止旧槽位错配给同名新账号
         try? (auth?.username ?? "guest").write(to: userURL(for: slotKey), atomically: true, encoding: .utf8)
+    }
+
+    /// 回到前台：服务器存档比本机新就拉取（学习会话中不打扰）
+    func pullIfNewer() async {
+        guard auth != nil, route != .session else { return }
+        guard let remote = try? await api.pullState(), let rs = remote.state else { return }
+        let localTs = UserDefaults.standard.double(forKey: "vocab_write_\(slotKey)")
+        if (remote.updated_at ?? 0) > localTs + 1 {
+            S = rs
+            saveLocal()
+        }
     }
 
     private func loadLocal(slot: String, forUsername: String? = nil) -> LearningState? {
@@ -265,6 +277,17 @@ final class AppState {
         } else {
             StudyEngine.ladderFallback(&c, rating: rating, today: today)
         }
+        // 熟词毕业（用户反馈驱动）：连按两次「熟练」，或按「熟练」时稳定度已≥30天
+        // → 直接跨过已掌握阈值（稳定度≥180），永不再出现在队列中。「记得/困难」照常走 FSRS。
+        if rating == 4 {
+            c.easyStreak = (c.easyStreak ?? 0) + 1
+            let stab = c.fsrs?.stability ?? 0
+            if (c.easyStreak ?? 0) >= 2 || stab >= 30 {
+                c.fsrs?.stability = max(stab, 200)
+            }
+        } else if rating == 1 {
+            c.easyStreak = 0
+        }
         S.cards[word] = c
         // 水平追踪观测（v1.2）：复习证据弱化（遗忘≠不认识）；验收测试由调用方传 1.0
         if let pos = S.cards[word]?.pos {
@@ -272,8 +295,6 @@ final class AppState {
             observeLevel(pos: pos, known: rating != 1, weight: w)
         }
     }
-
-    // MARK: 自适应水平追踪（v1.2）：每日一次，用后验水平决定发词起点
 
     /// 每天首次 buildQueue 时运行：T=后验均值。
     /// T 超前 pointer >500 且证据够硬(std<800) → pointer 跳到 T（中间词视为已会）；
@@ -343,7 +364,13 @@ final class AppState {
         let nNew = min(newPerDay, max(0, cap - reviewsAll.count))
         var news: [NewWord] = []
         var rest = S.pendingNew
-        while news.count < nNew, !rest.isEmpty { news.append(rest.removeFirst()) }
+        // 防重守卫：已在卡片里的词（学过/在复习）绝不再当新词发
+        while news.count < nNew, !rest.isEmpty {
+            let w = rest.removeFirst()
+            if S.cards[w.word] == nil && !news.contains(where: { $0.word == w.word }) {
+                news.append(w)
+            }
+        }
         S.pendingNew = rest
         if news.count < nNew {
             let want = nNew - news.count + 2

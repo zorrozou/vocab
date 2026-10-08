@@ -16,6 +16,7 @@ struct VocabApp: App {
 
 struct RootView: View {
     @Environment(AppState.self) private var app
+    @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
         ZStack {
@@ -37,6 +38,12 @@ struct RootView: View {
                 SettingsView()
             case .userMenu:
                 UserMenuView()
+            }
+        }
+        // 回到前台：服务器有更新的存档就拉过来（多端同步补漏）
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active {
+                Task { await app.pullIfNewer() }
             }
         }
     }
