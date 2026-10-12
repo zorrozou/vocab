@@ -8,6 +8,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import edge_tts
+from tts_patch import patch_edge_tts
+patch_edge_tts()
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "data" / "lexicon_v0.1.sqlite"
@@ -24,7 +26,7 @@ def key_of(text):
 def main():
     conn = sqlite3.connect(DB, timeout=30)
     words = [r[0] for r in conn.execute("SELECT word FROM lexicon_entry")]
-    sents = [r[0] for r in conn.execute("SELECT text FROM sentence WHERE genMethod LIKE 'llm-%'")]
+    sents = [r[0] for r in conn.execute("SELECT text FROM sentence WHERE genMethod LIKE 'llm-%' OR genMethod='tatoeba'")]
     conn.close()
     todo = [t for t in words + sents if not (TTS_DIR / key_of(t)).exists()]
     print(f"单词 {len(words)} + 例句 {len(sents)}，待生成 {len(todo)} 条音频（嗓音 {VOICE}）", flush=True)

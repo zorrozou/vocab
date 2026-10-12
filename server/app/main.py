@@ -16,6 +16,9 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from app.auth import mount_auth, user_by_token
+from app.tts_patch import patch_edge_tts
+
+patch_edge_tts()   # edge-tts v2 端点迁移补丁（微软 2026-10 迁移致 v1 握手 403）
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"

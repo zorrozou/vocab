@@ -10,6 +10,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import edge_tts
+from tts_patch import patch_edge_tts
+patch_edge_tts()
 
 ROOT = Path(__file__).resolve().parent
 DB = ROOT / "data" / "lexicon_v0.1.sqlite"
