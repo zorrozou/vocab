@@ -494,10 +494,32 @@ def quiz(pos: int = Query(ge=1), seed: int = 0):
             "options": [{"text": f"{pcls}. {t}", "ok": t == correct} for t in opts]}
 
 
-# ---------- TTS（神经网络语音，带磁盘缓存）----------
+# ---------- TTS（神经网络语音，带磁盘缓存；edge-tts 失败时 Kokoro 本地兜底）----------
 TTS_DIR = DATA_DIR / "tts_cache"
 TTS_DIR.mkdir(exist_ok=True)
 TTS_VOICE = os.environ.get("TTS_VOICE", "en-US-AriaNeural")
+
+# Kokoro 本地兜底（零第三方依赖：edge-tts 再挂时接管，见 tts_patch.py 注释）
+_kokoro = None
+_kokoro_lock = threading.Lock()
+
+
+def kokoro_synth(text, out_path):
+    """Kokoro 本地合成（af_heart 女声）→ ffmpeg 转 mp3。模型首次调用时加载。"""
+    global _kokoro
+    with _kokoro_lock:
+        if _kokoro is None:
+            from kokoro_onnx import Kokoro
+            _kokoro = Kokoro(str(BASE_DIR / "tts_models" / "kokoro-v1.0.onnx"),
+                             str(BASE_DIR / "tts_models" / "voices-v1.0.bin"))
+        samples, sr = _kokoro.create(text, voice="af_heart", speed=1.0, lang="en-us")
+    import soundfile as sf
+    wav_path = str(out_path) + ".wav"
+    sf.write(wav_path, samples, sr)
+    import subprocess
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", wav_path,
+                    "-codec:a", "libmp3lame", "-q:a", "4", str(out_path)], check=True)
+    os.unlink(wav_path)
 
 
 @app.get("/api/v1/tts")
@@ -508,7 +530,10 @@ def tts(text: str = Query(min_length=1, max_length=200), v: str = ""):
     key = hashlib.sha1(f"{voice}|{text}".encode()).hexdigest()[:16]
     f = TTS_DIR / f"{key}.mp3"
     if not f.exists():
-        asyncio.run(edge_tts.Communicate(text, voice).save(str(f)))
+        try:
+            asyncio.run(edge_tts.Communicate(text, voice).save(str(f)))
+        except Exception:
+            kokoro_synth(text, f)   # edge-tts 挂了 → Kokoro 本地兜底
     return FileResponse(f, media_type="audio/mpeg")
 
 
