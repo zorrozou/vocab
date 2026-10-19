@@ -104,6 +104,11 @@ struct StatsView: View {
                         Text(stubborn.map { "\($0.0) ×\($0.1)" }.joined(separator: " · "))
                             .font(.system(size: 14)).foregroundStyle(Theme.text)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                        // 顽固词特训：单独组队歼灭（纯复习队列，不进新词）
+                        PrimaryButton(title: "🔥 顽固词特训（\(stubborn.count) 词）", color: Theme.warn) {
+                            app.startStubbornDrill()
+                        }
+                        .padding(.top, 4)
                     }
                 }
                 .padding(.top, 12)

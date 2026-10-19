@@ -74,7 +74,7 @@ struct LearnCardView: View {
         // 交互区：钉死在底部拇指区，不随内容长度浮动
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 10) {
-                ShadowHoldButton(target: personal?.text ?? sentences.first?.text ?? "",
+                ShadowHoldButton(target: shadowTarget(),
                                  onBusy: { shadowMsg = $0 },
                                  onResult: handleShadow)
                 PrimaryButton(title: "不熟悉", color: Theme.warn) { act(rating: 1) }
@@ -213,6 +213,12 @@ struct LearnCardView: View {
             }
             sideTasks.append(t)
         }
+    }
+
+    /// 跟读目标句：选最短的（挑战句 15~20 词一口气读不下来，基础句最适合跟读）
+    private func shadowTarget() -> String {
+        ([personal?.text].compactMap { $0 } + sentences.map { $0.text })
+            .min { $0.count < $1.count } ?? ""
     }
 
     /// 跟读结果处理：展示逐词反馈 + 入档（<60% 记薄弱，当晚定制例句）
@@ -420,7 +426,7 @@ struct AnswerCardView: View {
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
                 // 复习时也能跟读（与 learning 卡共享组件，读不好同样记薄弱）
-                ShadowHoldButton(target: personal?.text ?? sentences.first?.text ?? "",
+                ShadowHoldButton(target: shadowTarget(),
                                  onBusy: { shadowMsg = $0 },
                                  onResult: handleShadow)
                 if quizOk {
@@ -495,6 +501,12 @@ struct AnswerCardView: View {
         guard !Task.isCancelled else { return }
         let texts = [personal?.text].compactMap { $0 } + sentences.map { $0.text }
         app.audio.playSequence(word: word, sentences: texts, voice: app.S.settings.voice)
+    }
+
+    /// 跟读目标句：选最短的（挑战句 15~20 词一口气读不下来，基础句最适合跟读）
+    private func shadowTarget() -> String {
+        ([personal?.text].compactMap { $0 } + sentences.map { $0.text })
+            .min { $0.count < $1.count } ?? ""
     }
 
     /// 跟读结果处理：展示逐词反馈 + 入档（<60% 记薄弱）

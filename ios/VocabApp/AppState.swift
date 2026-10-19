@@ -392,6 +392,22 @@ final class AppState {
         save()
     }
 
+    /// 顽固词特训：把 ≥2 次没记住的词单独组一队复习（不进新词，纯歼灭战）
+    @discardableResult
+    func startStubbornDrill() -> Int {
+        var lapse: [String: Int] = [:]
+        for l in S.log where l.rating <= 2 { lapse[l.word, default: 0] += 1 }
+        let words = S.cards
+            .filter { w, c in (lapse[w] ?? 0) >= 2 && !StudyEngine.isMastered(c) }
+            .map(\.key)
+            .sorted()
+        guard !words.isEmpty else { return 0 }
+        session = Session()
+        session.queue = words.map { .review(word: $0) }
+        route = .session
+        return words.count
+    }
+
     // MARK: 每日队列（到期复习 + 提前巩固概率池 + 新词）
 
     func buildQueue() async {
@@ -451,6 +467,20 @@ final class AppState {
             if let r = try? await api.lexiconAt(pos: news[i].pos, n: 10),
                let full = r.words.first(where: { $0.word == news[i].word }) {
                 news[i] = full
+            }
+        }
+        // 跳段复核：发生过跳位（pointer 已显著领先定级边界）时，每天从跳过区间随机抽 1 个词
+        // 顶替 1 个新词位——给"视为已会"的跳过词一次被抓住的机会。
+        // 答对就过（确认真会），答错它会正常进卡片复习，同时水平后验自动回落纠偏。
+        if nNew > 0, news.count == nNew, S.pointer - S.frontier > 200 {
+            for _ in 0..<6 {   // 最多试 6 个随机位置，避开已入卡的词
+                let randPos = Int.random(in: S.frontier..<S.pointer)
+                guard let r = try? await api.lexiconAt(pos: randPos, n: 1),
+                      let w = r.words.first,
+                      S.cards[w.word] == nil,
+                      !news.contains(where: { $0.word == w.word }) else { continue }
+                news[news.count - 1] = w
+                break
             }
         }
 

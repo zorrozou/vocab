@@ -8,6 +8,13 @@ struct HomeView: View {
     private var learnedCount: Int { app.S.cards.count }
     private var masteredCount: Int { app.S.cards.values.filter { StudyEngine.isMastered($0) }.count }
     private var dueCount: Int { app.dueNowCount() }
+    /// 今日已完成的不同单词数（学习+复习）
+    private var doneToday: Int {
+        let today = DayUtil.today()
+        return Set(app.S.log.filter { $0.d == today }.map(\.word)).count
+    }
+    /// 今日目标总量 = 已完成 + 剩余待复习 + 计划新词
+    private var todayTarget: Int { doneToday + dueCount + app.S.settings.newPerDay }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -79,6 +86,15 @@ struct HomeView: View {
     private var todayCard: some View {
         Card {
             Text("今日任务").font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
+            // 今日进度：已完成 / 目标（复习+新词），一眼看到还差多少
+            VStack(spacing: 4) {
+                HStack {
+                    Text("今日进度").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    Spacer()
+                    Text("\(doneToday) / \(todayTarget)").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accentLight)
+                }
+                ProgressBar(value: todayTarget > 0 ? Double(doneToday) / Double(todayTarget) : 0)
+            }
             HStack(spacing: 0) {
                 StatCell(number: "\(dueCount)", label: "待复习")
                 StatCell(number: "\(app.S.settings.newPerDay)", label: "新词")
