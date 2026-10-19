@@ -136,6 +136,22 @@ final class AppState {
 
     // MARK: 设备 ID（个性化例句分桶，与 web 规则一致）
 
+    private var undoSnapshot: (word: String, card: CardState, logCount: Int)?
+
+    /// 撤销最近一次「忘记」评分（手滑误点）：恢复卡片 FSRS 状态、删除日志、回到出题环节
+    func undoReview() {
+        guard let snap = undoSnapshot else { return }
+        S.cards[snap.word] = snap.card
+        if S.log.count > snap.logCount {
+            S.log.removeLast(S.log.count - snap.logCount)
+        }
+        undoSnapshot = nil
+        if session.reviewedToday > 0 { session.reviewedToday -= 1 }
+        save()
+    }
+
+    // MARK: 设备 ID（个性化例句分桶，与 web 规则一致）
+
     func deviceId() -> String {
         if let auth { return "u\(auth.userId)" }
         let key = "vocab_device"
@@ -302,6 +318,12 @@ final class AppState {
     func review(word: String, rating: Int, trackWeight: Double? = nil) async {
         guard var c = S.cards[word] else { return }
         let today = DayUtil.today()
+        // 答错前快照（撤销用）：防止手滑误记「忘记」无法挽回
+        if rating == 1 {
+            undoSnapshot = (word: word, card: c, logCount: S.log.count)
+        } else {
+            undoSnapshot = nil
+        }
         S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "review"))
         let body = StudyEngine.fsrsBody(for: c, rating: rating, isNewCard: false)
         if let r = try? await api.fsrsReview(body) {

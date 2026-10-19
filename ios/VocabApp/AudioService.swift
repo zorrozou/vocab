@@ -49,6 +49,36 @@ final class AudioService {
 
     private func configureSession() {
         PlaybackSession.activate()
+        Self.evictCacheIfNeeded()
+    }
+
+    // MARK: 缓存容量管理（LRU：超 300MB 删最旧的到 240MB，每天最多检查一次）
+
+    private static let cacheLimitBytes = 300 * 1024 * 1024
+    private static let cacheTargetBytes = 240 * 1024 * 1024
+    private static var lastEvictCheck: TimeInterval = 0
+
+    static func evictCacheIfNeeded() {
+        let now = Date().timeIntervalSince1970
+        guard now - lastEvictCheck > 86400 else { return }
+        lastEvictCheck = now
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: cacheDir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) else { return }
+        var total = 0
+        var items: [(url: URL, size: Int, date: Date)] = []
+        for u in files {
+            let size = (try? u.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+            let date = (try? u.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            total += size
+            items.append((u, size, date))
+        }
+        guard total > cacheLimitBytes else { return }
+        items.sort { $0.date < $1.date }   // 最旧先删
+        for item in items {
+            if total <= cacheTargetBytes { break }
+            try? fm.removeItem(at: item.url)
+            total -= item.size
+        }
     }
 
     // MARK: 取音频（本地缓存优先，未命中走服务器并写缓存）

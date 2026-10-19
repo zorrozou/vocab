@@ -142,7 +142,18 @@ struct LearnCardView: View {
             } else if let r = shadowResult {
                 ShadowResultDisplay(result: r)
             } else if !shadowMsg.isEmpty {
-                Text(shadowMsg).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                if shadowMsg.contains("权限") {
+                    Button(shadowMsg + "（点我去开启）") {
+                        #if canImport(UIKit)
+                        if let u = URL(string: UIApplication.openSettingsURLString) {
+                            UIApplication.shared.open(u)
+                        }
+                        #endif
+                    }
+                    .font(.system(size: 13)).foregroundStyle(Theme.accentLight)
+                } else {
+                    Text(shadowMsg).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                }
             }
         }
     }
@@ -260,7 +271,10 @@ struct ReviewQuizView: View {
             case .flipping:
                 flipCard
             case .answering(let ok):
-                AnswerCardView(word: word, quizOk: ok, onNext: next)
+                AnswerCardView(word: word, quizOk: ok, onNext: next, onUndo: {
+                    app.undoReview()
+                    phase = .loading   // 撤销后回到本题重新作答
+                })
             }
         }
         .task { await loadQuiz() }
@@ -337,12 +351,13 @@ struct ReviewQuizView: View {
     }
 }
 
-/// 答案卡：答错已记「忘记」；答对再选 困难/记得/熟练
+/// 答案卡：答错已记「忘记」（可撤销）；答对再选 困难/记得/熟练
 struct AnswerCardView: View {
     @Environment(AppState.self) private var app
     let word: String
     let quizOk: Bool
     let onNext: () -> Void
+    let onUndo: () -> Void
 
     @State private var detail: NewWord?
     @State private var personal: PersonalizedSentence?
@@ -384,7 +399,18 @@ struct AnswerCardView: View {
                     } else if let r = shadowResult {
                         ShadowResultDisplay(result: r)
                     } else if !shadowMsg.isEmpty {
-                        Text(shadowMsg).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                        if shadowMsg.contains("权限") {
+                            Button(shadowMsg + "（点我去开启）") {
+                                #if canImport(UIKit)
+                                if let u = URL(string: UIApplication.openSettingsURLString) {
+                                    UIApplication.shared.open(u)
+                                }
+                                #endif
+                            }
+                            .font(.system(size: 13)).foregroundStyle(Theme.accentLight)
+                        } else {
+                            Text(shadowMsg).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                        }
                     }
                 }
                 .padding(.vertical, 10)
@@ -407,6 +433,10 @@ struct AnswerCardView: View {
                     PrimaryButton(title: "继续 →") { onNext() }
                     Text("已记为「忘记」，降级并明天再见")
                         .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    // 手滑误点救星：撤销这次「忘记」，回到本题重来
+                    Button("点错了？撤销这次「忘记」") { onUndo() }
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.accentLight)
                 }
             }
             .padding(.horizontal, 14)
