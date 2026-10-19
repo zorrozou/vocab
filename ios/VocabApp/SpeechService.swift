@@ -5,8 +5,9 @@ import Speech
 
 struct ShadowResult {
     let text: String
-    let completeness: Int   // 词命中率 %（对齐 web 算法：目标句词被覆盖比例）
-    let confidence: Int     // 识别置信度 %
+    let completeness: Int             // 词命中率 %（对齐 web 算法：目标句词被覆盖比例）
+    let confidence: Int               // 识别置信度 %
+    let words: [(text: String, confidence: Float)]   // 逐词置信度（逐词标色用）
 }
 
 /// 跟读评分（M1：SFSpeechRecognizer）
@@ -166,13 +167,15 @@ final class SpeechService: NSObject {
         let got = Set(wordTokens(text))
         let hit = exp.filter { got.contains($0) }.count
         let pct = exp.isEmpty ? 0 : Int(Double(hit) / Double(exp.count) * 100)
-        // 置信度：词级置信度均值（0~1）
+        // 置信度：词级置信度均值（0~1）；同时产出逐词置信度用于标色
         var conf = 70
+        var words: [(text: String, confidence: Float)] = []
         if let segments, !segments.isEmpty {
             let avg = segments.map { $0.confidence }.reduce(0, +) / Float(segments.count)
             conf = Int(avg * 100)
+            words = segments.map { ($0.substring, $0.confidence) }
         }
-        return ShadowResult(text: text, completeness: pct, confidence: conf)
+        return ShadowResult(text: text, completeness: pct, confidence: conf, words: words)
     }
 
     private func deliver(_ r: ShadowResult?) {

@@ -15,7 +15,82 @@ enum Theme {
     static let text = Color(.sRGB, red: 0.910, green: 0.930, blue: 0.960, opacity: 1)
 }
 
-// MARK: - 通用组件
+// MARK: - 跟读共享组件（学习卡/复习答案卡通用）
+
+/// 微信式按住说话按钮：按下收音、松手评分
+struct ShadowHoldButton: View {
+    @Environment(AppState.self) private var app
+    let target: String          // 目标句（空则禁用提示）
+    var onBusy: (String) -> Void = { _ in }
+    var onResult: (ShadowResult?) -> Void
+
+    var body: some View {
+        Text(app.speech.state == .listening ? "🎤 松开结束" : "🎤 按住跟读")
+            .font(.system(size: 15, weight: .medium))
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 11)
+            .foregroundStyle(app.speech.state == .listening ? .white : Theme.text)
+            .background(app.speech.state == .listening ? Theme.warn : Color.clear)
+            .clipShape(RoundedRectangle(cornerRadius: 10))
+            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.muted.opacity(0.5)))
+            .contentShape(Rectangle())
+            .onLongPressGesture(minimumDuration: 0.15, perform: {}) { pressing in
+                if pressing {
+                    start()
+                } else if app.speech.state == .listening {
+                    app.speech.stopCapture(finalize: true)
+                }
+            }
+    }
+
+    private func start() {
+        guard !target.isEmpty else { onBusy("例句还在生成，稍等"); return }
+        app.audio.stop()
+        Task {
+            guard await SpeechService.requestPermissions() else {
+                onBusy("需要麦克风和语音识别权限（设置 → 词航）")
+                return
+            }
+            app.speech.start(target: target, onResult: onResult)
+        }
+    }
+}
+
+/// 跟读结果展示：总分 + 逐词置信度标色（绿≥0.7 橙0.4~0.7 红<0.4）
+struct ShadowResultDisplay: View {
+    let result: ShadowResult
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Text("完整度").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                Text("\(result.completeness)%")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(result.completeness >= 80 ? Theme.ok : Theme.warn)
+                Text("置信度").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                Text("\(result.confidence)%")
+                    .font(.system(size: 17, weight: .bold))
+                    .foregroundStyle(result.confidence >= 75 ? Theme.ok : Theme.warn)
+                if result.completeness < 60 {
+                    Text("已记入薄弱词").font(.system(size: 11)).foregroundStyle(Theme.bad)
+                }
+            }
+            if !result.words.isEmpty {
+                result.words.reduce(Text("")) { acc, w in
+                    acc + Text(w.text + " ").foregroundStyle(color(of: w.confidence))
+                }
+                .font(.system(size: 14))
+            } else {
+                Text(result.text).font(.system(size: 13)).foregroundStyle(Theme.muted)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    private func color(of c: Float) -> Color {
+        c >= 0.7 ? Theme.ok : (c >= 0.4 ? Theme.warn : Theme.bad)
+    }
+}
 
 struct Card<Content: View>: View {
     @ViewBuilder var content: Content

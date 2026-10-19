@@ -98,6 +98,8 @@ struct Settings: Codable, Equatable {
     var newPerDay: Int = 10
     var dailyCap: Int = 100
     var voice: String?        // TTS 嗓音；nil=服务器默认 Aria
+    var notifyEnabled: Bool = false   // 每日复习提醒
+    var notifyHour: Int = 21          // 提醒时间（整点）
 
     init() {}
     init(from decoder: Decoder) throws {
@@ -105,6 +107,8 @@ struct Settings: Codable, Equatable {
         newPerDay = try c.decodeIfPresent(Int.self, forKey: .newPerDay) ?? 10
         dailyCap = try c.decodeIfPresent(Int.self, forKey: .dailyCap) ?? 100
         voice = try c.decodeIfPresent(String.self, forKey: .voice)
+        notifyEnabled = try c.decodeIfPresent(Bool.self, forKey: .notifyEnabled) ?? false
+        notifyHour = try c.decodeIfPresent(Int.self, forKey: .notifyHour) ?? 21
     }
 }
 

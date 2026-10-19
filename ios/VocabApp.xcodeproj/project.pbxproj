@@ -17,6 +17,7 @@
 		63A4D24C72D3C97AA2C8525D /* AuthViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED7AFBBDA25365BDF9262EA2 /* AuthViews.swift */; };
 		70C4E4FA06974B92ECB18D30 /* VocabApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AC23A079372B08085F8448D /* VocabApp.swift */; };
 		7C33628014DEDD51F7BFF829 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3208F3D855D300A027FF03C8 /* APIClient.swift */; };
+		8A310F457351BB7658D9A504 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE5DB36D080E289F4AFBD8A /* NotificationService.swift */; };
 		9AB9049FA87909102A5C506F /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFB6A7E6F213B7F638C3D2C8 /* AppState.swift */; };
 		BEF737F7775DFEB5824AB501 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC962FAC6009D31FCFE13B0 /* SettingsView.swift */; };
 		C0AF4A62D4A2B1ECCD737FAC /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA32DC753AA6AEA8502E3BE6 /* Config.swift */; };
@@ -32,13 +33,14 @@
 		479F54AD39DB2C3FC05AD82E /* SpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechService.swift; sourceTree = "<group>"; };
 		528CE37515870A27DF461AEB /* AudioService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioService.swift; sourceTree = "<group>"; };
 		6AC23A079372B08085F8448D /* VocabApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabApp.swift; sourceTree = "<group>"; };
+		7EE5DB36D080E289F4AFBD8A /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		7F93C6585AF5AFE9D77AEBC2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		98F16D9F4207E3D25D452F39 /* SessionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionViews.swift; sourceTree = "<group>"; };
 		AFB6A7E6F213B7F638C3D2C8 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		B2B68581C7F190A29D49092D /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		BE5C2C058B8161F7EFBA5F26 /* PlacementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacementView.swift; sourceTree = "<group>"; };
 		C55ADD069F1A3763B8BFEA82 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
-		C8D22EE326CAD50DC57B9CB5 /* VocabApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = VocabApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C8D22EE326CAD50DC57B9CB5 /* VocabApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = VocabApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		CDC962FAC6009D31FCFE13B0 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		DE8A39DD05E106049AC4C0F5 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
 		ED7AFBBDA25365BDF9262EA2 /* AuthViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthViews.swift; sourceTree = "<group>"; };
@@ -65,6 +67,7 @@
 				7F93C6585AF5AFE9D77AEBC2 /* Info.plist */,
 				04F52F05D0467A25F754C17E /* Keychain.swift */,
 				B2B68581C7F190A29D49092D /* Models.swift */,
+				7EE5DB36D080E289F4AFBD8A /* NotificationService.swift */,
 				479F54AD39DB2C3FC05AD82E /* SpeechService.swift */,
 				FEF8B4518D2CC8CCE963F645 /* StudyEngine.swift */,
 				6AC23A079372B08085F8448D /* VocabApp.swift */,
@@ -125,6 +128,7 @@
 				LastUpgradeCheck = 1430;
 				TargetAttributes = {
 					3DBDD1FFF61E584ECC697774 = {
+						DevelopmentTeam = X5ANMACUCD;
 						ProvisioningStyle = Automatic;
 					};
 				};
@@ -162,6 +166,7 @@
 				11E84D96424260DDE43030DD /* HomeView.swift in Sources */,
 				29C411883220B8969075864F /* Keychain.swift in Sources */,
 				4A46A09B0175FA26B133A5CC /* Models.swift in Sources */,
+				8A310F457351BB7658D9A504 /* NotificationService.swift in Sources */,
 				000151C7D3334E8C5ED5521A /* PlacementView.swift in Sources */,
 				EF776B0F8F2BDC7DEA9A3C3B /* SessionViews.swift in Sources */,
 				BEF737F7775DFEB5824AB501 /* SettingsView.swift in Sources */,
@@ -240,7 +245,7 @@
 				DEVELOPMENT_TEAM = X5ANMACUCD;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = VocabApp/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -261,7 +266,7 @@
 				DEVELOPMENT_TEAM = X5ANMACUCD;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				INFOPLIST_FILE = VocabApp/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 27.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

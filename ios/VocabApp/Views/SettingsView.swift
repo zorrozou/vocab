@@ -64,6 +64,47 @@ struct SettingsView: View {
                         .font(.system(size: 12)).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
+
+                Card {
+                    Text("复习提醒").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    HStack {
+                        Text("每日提醒").font(.system(size: 15)).foregroundStyle(Theme.text)
+                        Spacer()
+                        Toggle("", isOn: Binding(
+                            get: { app.S.settings.notifyEnabled },
+                            set: { v in
+                                app.S.settings.notifyEnabled = v
+                                app.save()
+                                Task { await NotificationService.apply(settings: app.S.settings) }
+                            }
+                        ))
+                        .labelsHidden()
+                    }
+                    if app.S.settings.notifyEnabled {
+                        Text("提醒时间").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        HStack(spacing: 8) {
+                            ForEach([20, 21, 22], id: \.self) { h in
+                                Button {
+                                    app.S.settings.notifyHour = h
+                                    app.save()
+                                    Task { await NotificationService.apply(settings: app.S.settings) }
+                                } label: {
+                                    Text("\(h):00")
+                                        .font(.system(size: 15, weight: app.S.settings.notifyHour == h ? .semibold : .regular))
+                                        .frame(maxWidth: .infinity).padding(.vertical, 9)
+                                        .foregroundStyle(app.S.settings.notifyHour == h ? Theme.accentLight : Theme.text)
+                                        .overlay(RoundedRectangle(cornerRadius: 8)
+                                            .stroke(app.S.settings.notifyHour == h ? Theme.accent : Theme.muted.opacity(0.4)))
+                                }
+                            }
+                        }
+                        Text("纯本地通知，不联网。如果当天已完成学习，忽略提醒即可。")
+                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
             }
         }
         .alert("重新定级？", isPresented: $showReplaceConfirm) {

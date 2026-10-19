@@ -362,6 +362,14 @@ final class AppState {
         save()
     }
 
+    /// 跟读结果入档：完整度 <60 记薄弱（进薄弱词管线，当晚就定制例句），≥60 记一次影子练习
+    /// 让跟读真正参与学习决策，而不是"白评了"
+    func recordShadow(word: String, result: ShadowResult) {
+        let rating = result.completeness < 60 ? 1 : 3
+        S.log.append(LogEntry(d: DayUtil.today(), word: word, rating: rating, kind: "shadow"))
+        save()
+    }
+
     // MARK: 每日队列（到期复习 + 提前巩固概率池 + 新词）
 
     func buildQueue() async {

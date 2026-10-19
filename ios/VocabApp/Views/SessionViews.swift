@@ -44,6 +44,7 @@ struct LearnCardView: View {
     @State private var sentences: [SentenceItem] = []
     @State private var weave: (text: String, zh: String?, weak: String)?
     @State private var shadowMsg = ""
+    @State private var shadowResult: ShadowResult?
     @State private var acted = false
     @State private var sideTasks: [Task<Void, Never>] = []   // 异步补句/织入任务，翻页即取消
 
@@ -73,23 +74,9 @@ struct LearnCardView: View {
         // 交互区：钉死在底部拇指区，不随内容长度浮动
         .safeAreaInset(edge: .bottom) {
             HStack(spacing: 10) {
-                // 微信式按住说话：按下开始收音，松手立即评分（15s 兜底超时仍在）
-                Text(app.speech.state == .listening ? "🎤 松开结束" : "🎤 按住跟读")
-                    .font(.system(size: 15, weight: .medium))
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 11)
-                    .foregroundStyle(app.speech.state == .listening ? .white : Theme.text)
-                    .background(app.speech.state == .listening ? Theme.warn : Color.clear)
-                    .clipShape(RoundedRectangle(cornerRadius: 10))
-                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.muted.opacity(0.5)))
-                    .contentShape(Rectangle())
-                    .onLongPressGesture(minimumDuration: 0.15, perform: {}) { pressing in
-                        if pressing {
-                            startShadow()
-                        } else if app.speech.state == .listening {
-                            app.speech.stopCapture(finalize: true)
-                        }
-                    }
+                ShadowHoldButton(target: personal?.text ?? sentences.first?.text ?? "",
+                                 onBusy: { shadowMsg = $0 },
+                                 onResult: handleShadow)
                 PrimaryButton(title: "不熟悉", color: Theme.warn) { act(rating: 1) }
                 PrimaryButton(title: "学会了 →", color: Theme.ok) { act(rating: 3) }
             }
@@ -152,6 +139,8 @@ struct LearnCardView: View {
             if app.speech.state == .listening {
                 Text(app.speech.liveText.isEmpty ? "请朗读例句，读完松开手…" : app.speech.liveText)
                     .font(.system(size: 13)).foregroundStyle(Theme.accentLight)
+            } else if let r = shadowResult {
+                ShadowResultDisplay(result: r)
             } else if !shadowMsg.isEmpty {
                 Text(shadowMsg).font(.system(size: 13)).foregroundStyle(Theme.muted)
             }
@@ -215,20 +204,12 @@ struct LearnCardView: View {
         }
     }
 
-    private func startShadow() {
-        let target = personal?.text ?? sentences.first?.text ?? ""
-        guard !target.isEmpty else { shadowMsg = "例句还在生成，稍等"; return }
-        app.audio.stop()
-        Task {
-            guard await SpeechService.requestPermissions() else {
-                shadowMsg = "需要麦克风和语音识别权限（设置 → 词航）"
-                return
-            }
-            app.speech.start(target: target) { res in
-                guard let res else { shadowMsg = "未听清，再试一次"; return }
-                shadowMsg = "识别：\(res.text)\n完整度 \(res.completeness)% · 置信度 \(res.confidence)%"
-            }
-        }
+    /// 跟读结果处理：展示逐词反馈 + 入档（<60% 记薄弱，当晚定制例句）
+    private func handleShadow(_ res: ShadowResult?) {
+        guard let res else { shadowMsg = "未听清，再试一次"; return }
+        shadowMsg = ""
+        shadowResult = res
+        app.recordShadow(word: item.word, result: res)
     }
 
     private func act(rating: Int) {
@@ -366,6 +347,8 @@ struct AnswerCardView: View {
     @State private var detail: NewWord?
     @State private var personal: PersonalizedSentence?
     @State private var sentences: [SentenceItem] = []
+    @State private var shadowMsg = ""
+    @State private var shadowResult: ShadowResult?
     @State private var rated = false
 
     var body: some View {
@@ -395,6 +378,14 @@ struct AnswerCardView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     Card { sentenceArea }
+                    if app.speech.state == .listening {
+                        Text(app.speech.liveText.isEmpty ? "请朗读例句，读完松开手…" : app.speech.liveText)
+                            .font(.system(size: 13)).foregroundStyle(Theme.accentLight)
+                    } else if let r = shadowResult {
+                        ShadowResultDisplay(result: r)
+                    } else if !shadowMsg.isEmpty {
+                        Text(shadowMsg).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    }
                 }
                 .padding(.vertical, 10)
             }
@@ -402,6 +393,10 @@ struct AnswerCardView: View {
         // 评分/继续：钉死底部拇指区
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
+                // 复习时也能跟读（与 learning 卡共享组件，读不好同样记薄弱）
+                ShadowHoldButton(target: personal?.text ?? sentences.first?.text ?? "",
+                                 onBusy: { shadowMsg = $0 },
+                                 onResult: handleShadow)
                 if quizOk {
                     HStack(spacing: 10) {
                         GhostButton(title: "困难") { rate(2) }
@@ -470,6 +465,14 @@ struct AnswerCardView: View {
         guard !Task.isCancelled else { return }
         let texts = [personal?.text].compactMap { $0 } + sentences.map { $0.text }
         app.audio.playSequence(word: word, sentences: texts, voice: app.S.settings.voice)
+    }
+
+    /// 跟读结果处理：展示逐词反馈 + 入档（<60% 记薄弱）
+    private func handleShadow(_ res: ShadowResult?) {
+        guard let res else { shadowMsg = "未听清，再试一次"; return }
+        shadowMsg = ""
+        shadowResult = res
+        app.recordShadow(word: word, result: res)
     }
 
     private func rate(_ r: Int) {
