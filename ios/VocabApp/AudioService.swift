@@ -100,13 +100,20 @@ final class AudioService {
     }
 
     private func makePlayer(_ text: String, voice: String?) async -> AVAudioPlayer? {
-        do {
-            let data = try await audioData(text, voice: voice)
-            return try AVAudioPlayer(data: data)
-        } catch {
-            print("[VocabApp] 音频获取失败: \(text.prefix(30))… \(error.localizedDescription)")
-            return nil
+        // 服务端可能正在生成音频（生成即产音频 + 双路兜底），失败时指数退避重试，不跳过
+        for attempt in 0..<3 {
+            do {
+                let data = try await audioData(text, voice: voice)
+                return try AVAudioPlayer(data: data)
+            } catch {
+                print("[VocabApp] 音频获取失败(第\(attempt + 1)次): \(text.prefix(30))… \(error.localizedDescription)")
+                if attempt < 2, !Task.isCancelled {
+                    try? await Task.sleep(nanoseconds: UInt64(0.8 * Double(attempt + 1) * 1e9))
+                }
+            }
         }
+        print("[VocabApp] 音频重试 3 次仍失败: \(text.prefix(30))…")
+        return nil
     }
 
     // MARK: 播放控制

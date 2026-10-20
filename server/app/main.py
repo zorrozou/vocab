@@ -251,6 +251,7 @@ def generate(device, date, weak_words, max_pos):
                                  (device, date, target, ",".join(recalls) if recalls else None,
                                   cand, time.time(), zh))
                     conn.commit()
+                ensure_tts(cand)   # 生成即产音频（本函数已在后台线程，无用户侧延迟）
                 return 1
             time.sleep(0.2)
         # 兜底：组合太难就只含目标词
@@ -266,6 +267,7 @@ def generate(device, date, weak_words, max_pos):
                     conn.execute("INSERT INTO sentences VALUES(?,?,?,?,?,?,?)",
                                  (device, date, target, None, cand, time.time(), zh.strip()))
                     conn.commit()
+                ensure_tts(cand)   # 生成即产音频
                 return 1
         except Exception:
             pass
@@ -542,6 +544,36 @@ def kokoro_synth(text, out_path):
     os.unlink(wav_path)
 
 
+def ensure_tts(text, voice=None):
+    """生成即产音频（用户要求：产生出来的例句必须能播，不是播不了就跳过）：
+    edge-tts 重试 2 次（指数退避）→ Kokoro 本地兜底。返回是否成功。"""
+    import asyncio as _aio, hashlib as _hl
+    import edge_tts
+    v = voice or TTS_VOICE
+    key = _hl.sha1(f"{v}|{text}".encode()).hexdigest()[:16]
+    f = TTS_DIR / f"{key}.mp3"
+    if f.exists():
+        return True
+    def _ok():
+        return f.exists() and f.stat().st_size > 500   # 防空文件/截断文件
+    for attempt in range(2):
+        try:
+            _aio.run(edge_tts.Communicate(text, v).save(str(f)))
+            if _ok():
+                return True
+        except Exception:
+            pass
+        time.sleep(1 + attempt)
+    try:
+        kokoro_synth(text, f)
+        if _ok():
+            return True
+    except Exception as e:
+        print(f"[tts] Kokoro 失败: {text[:40]}… {e}", flush=True)
+    print(f"[tts] 双路均失败: {text[:40]}…", flush=True)
+    return False
+
+
 @app.get("/api/v1/tts")
 def tts(text: str = Query(min_length=1, max_length=200), v: str = ""):
     import asyncio, hashlib
@@ -549,11 +581,11 @@ def tts(text: str = Query(min_length=1, max_length=200), v: str = ""):
     voice = v if v in ("en-US-AriaNeural", "en-US-GuyNeural", "en-US-JennyNeural", "en-GB-SoniaNeural") else TTS_VOICE
     key = hashlib.sha1(f"{voice}|{text}".encode()).hexdigest()[:16]
     f = TTS_DIR / f"{key}.mp3"
-    if not f.exists():
-        try:
-            asyncio.run(edge_tts.Communicate(text, voice).save(str(f)))
-        except Exception:
-            kokoro_synth(text, f)   # edge-tts 挂了 → Kokoro 本地兜底
+    if not (f.exists() and f.stat().st_size > 500):
+        ensure_tts(text, voice)   # edge-tts 重试 2 次 → Kokoro 兜底（保证成功率）
+        if not (f.exists() and f.stat().st_size > 500):
+            from fastapi import HTTPException
+            raise HTTPException(503, "音频生成暂不可用，请稍后重试")
     return FileResponse(f, media_type="audio/mpeg")
 
 
@@ -591,6 +623,7 @@ def sentence_ensure(word: str = Query(min_length=1, max_length=40)):
                             VALUES(?,?,?,?,?,?,?,?)""",
                          (cand, None, json.dumps([wid]), sid, wid, "[]", "llm-api-v1", "on_demand"))
             _lxw.commit()
+            threading.Thread(target=ensure_tts, args=(cand,), daemon=True).start()   # 生成即产音频（后台，不阻塞响应）
             return {"word": word, "text": cand, "cached": False}
     return {"word": word, "text": ""}
 
@@ -686,6 +719,7 @@ def sentence_weave(word: str = Query(min_length=1, max_length=40),
                          (device, today_str(), word, weak, cand_text, time.time(), zh.strip()))
             conn.commit()
             conn.close()
+            threading.Thread(target=ensure_tts, args=(cand_text,), daemon=True).start()   # 生成即产音频
             return {"text": cand_text, "zh": zh.strip(), "source": "generated"}
         time.sleep(0.2)
     return {"text": "", "source": "none"}
@@ -761,6 +795,7 @@ def sentence_trio(word: str = Query(min_length=1, max_length=40), weak: str = ""
                       json.dumps([WORD2ID.get(recall)] if recall and tier == 1 else []),
                       "llm-tier-v1", "on_demand", tier))
         have[tier] = (text, zh)
+        threading.Thread(target=ensure_tts, args=(text,), daemon=True).start()   # 生成即产音频（后台，不阻塞响应）
         return None
 
     labels = {1: "A", 2: "B", 3: "C"}

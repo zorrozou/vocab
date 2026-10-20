@@ -141,9 +141,21 @@ function stopAudio() {
   activeSrcs.forEach(s => { try { s.stop(); } catch (e) {} }); activeSrcs = [];
 }
 async function fetchBuf(text) {
-  const r = await fetch(`${API}/api/v1/tts?text=${encodeURIComponent(text)}&v=${encodeURIComponent(S.settings.voice || "")}`);
-  const ab = await r.arrayBuffer();
-  return await audioCtx().decodeAudioData(ab);
+  // 服务端可能正在生成音频（生成即产音频 + 双路兜底），失败时退避重试，不轻易放弃
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const r = await fetch(`${API}/api/v1/tts?text=${encodeURIComponent(text)}&v=${encodeURIComponent(S.settings.voice || "")}`);
+      if (!r.ok) throw new Error("tts " + r.status);
+      const ab = await r.arrayBuffer();
+      if (ab.byteLength < 500) throw new Error("audio too small");
+      return await audioCtx().decodeAudioData(ab);
+    } catch (e) {
+      lastErr = e;
+      if (attempt < 2) await new Promise(res => setTimeout(res, 800 * (attempt + 1)));
+    }
+  }
+  throw lastErr;
 }
 /* 自动播放链（Web Audio 定时调度，绕开浏览器自动播放限制）：
    单词 → 停顿（=下一句时长）→ 例句1 → 停顿 → 例句2 → … */
