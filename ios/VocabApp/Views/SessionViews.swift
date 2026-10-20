@@ -23,6 +23,9 @@ struct SessionView: View {
                 case .review(let word):
                     ReviewQuizView(word: word)
                         .id(word)
+                case .probe(let w):
+                    ProbeQuizView(item: w)
+                        .id("probe-" + w.word)
                 }
             } else if app.S.quizDay != DayUtil.today() && !learnedTodayWords.isEmpty {
                 AcceptanceQuizView(words: learnedTodayWords)
@@ -374,6 +377,70 @@ struct ReviewQuizView: View {
     }
 }
 
+/// v1.3 水平探测题：与复习测验同形态（4选1），用户无感知；
+/// 作答即全额证据（weight 1.0），答错的词进明日新词候选。出题失败直接跳过，不阻塞主流程
+struct ProbeQuizView: View {
+    @Environment(AppState.self) private var app
+    let item: NewWord
+
+    @State private var quiz: Quiz?
+    @State private var loading = true
+
+    var body: some View {
+        VStack(spacing: 0) {
+            SessionHeader(title: "复习 \(app.session.idx + 1)/\(app.session.queue.count)",
+                          progress: Double(app.session.idx) / Double(max(1, app.session.queue.count)))
+            if loading {
+                Spacer()
+                ProgressView()
+                Spacer()
+            } else {
+                VStack(spacing: 0) {
+                    Spacer()
+                    VStack(spacing: 12) {
+                        HStack(alignment: .center, spacing: 10) {
+                            BigWord(word: item.word)
+                            PlayButton(text: item.word)
+                        }
+                        Text("选出正确词义").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                    }
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity)
+                .onAppear { app.audio.play(item.word, voice: app.S.settings.voice) }
+            }
+        }
+        .safeAreaInset(edge: .bottom) {
+            Group {
+                if let quiz {
+                    QuizOptionsView(options: quiz.options) { ok in
+                        app.answerProbe(item, ok: ok)
+                        app.session.idx += 1
+                        app.save()
+                    }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .background(.regularMaterial)
+        }
+        .task { await loadQuiz() }
+    }
+
+    private func loadQuiz() async {
+        let pos = item.pos > 0 ? item.pos : app.S.pointer
+        if let q = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991,
+                                                    mode: "forward"),
+           q.options.count >= 4 {
+            quiz = q
+            loading = false
+        } else {
+            app.session.idx += 1   // 出题失败跳过本题
+            app.save()
+        }
+    }
+}
+
 /// 答案卡：答错已记「忘记」（可撤销）；答对再选 困难/记得/熟练
 struct AnswerCardView: View {
     @Environment(AppState.self) private var app
@@ -650,11 +717,19 @@ struct DoneView: View {
                             StatCell(number: "\(app.session.learnedToday)", label: "新词")
                             StatCell(number: "\(app.S.streak)", label: "连续天数")
                         }
-                        // v1.2 水平追踪透明化：告诉用户系统判断的水平和明天的发词位置
+                        // v1.3 水平追踪透明化：估值 + 滞回级别 + 不确定度 + 今日证据
                         if app.S.calibrated, app.S.posterior != nil {
                             let mean = Int(StudyEngine.postMean(app.S).rounded())
-                            Text("系统判断你的词汇量 ≈\(mean)（\(levelDisplayName(levelForPos(mean)))），明天从这里发词")
+                            let std = Int(StudyEngine.postStd(app.S).rounded())
+                            let shown = app.S.track?.shownLevel ?? levelForPos(max(1, mean))
+                            Text("系统判断你的词汇量 ≈\(mean)（\(levelDisplayName(shown)) · ±\(std)），明天从这里发词")
                                 .font(.system(size: 12)).foregroundStyle(Theme.accentLight)
+                            let todayLog = app.S.log.filter { $0.d == DayUtil.today() && ["learn", "review", "probe"].contains($0.kind) }
+                            let ups = todayLog.filter { $0.rating >= 2 }.count
+                            let downs = todayLog.filter { $0.rating == 1 }.count
+                            let probes = todayLog.filter { $0.kind == "probe" }.count
+                            Text("今日水平证据：↑\(ups) / ↓\(downs)（含 \(probes) 次水平探测）")
+                                .font(.system(size: 12)).foregroundStyle(Theme.muted)
                             if let note = app.S.track?.lastNote, !note.isEmpty {
                                 Text(note).font(.system(size: 12)).foregroundStyle(Theme.muted)
                             }

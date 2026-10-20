@@ -101,6 +101,22 @@ enum StudyEngine {
         return sqrt(zip(grid, p).map { ($0 - m) * ($0 - m) * $1 }.reduce(0, +))
     }
 
+    /// v1.3 置信度扩散（借鉴 Glicko RD 增长）：每天一次，后验与 σ=100 高斯核卷积。
+    /// 均值不变、std 缓慢回升（封顶 400）——水平会漂移，收敛后的后验保持"可被说服"
+    static func diffusePosterior(_ s: inout LearningState) {
+        guard let p = s.posterior, postStd(s) < 400 else { return }
+        let k = exp(-(250.0 * 250.0) / (2 * 100.0 * 100.0))   // 网格步长 250 的邻位权重 ≈0.0439
+        let n = p.count
+        var out = [Double](repeating: 0, count: n)
+        var sum = 0.0
+        for i in 0..<n {
+            let v = p[i] + k * ((i > 0 ? p[i - 1] : 0) + (i < n - 1 ? p[i + 1] : 0))
+            out[i] = v
+            sum += v
+        }
+        if sum > 0 { s.posterior = out.map { $0 / sum } }
+    }
+
     // MARK: 薄弱词（近 7 天评分 ≤2 的词，当天个性化/织入用）
 
     static func recentWeakWords(_ s: LearningState, today: String, excludeMastered: Bool = true) -> [String] {

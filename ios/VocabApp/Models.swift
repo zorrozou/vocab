@@ -86,12 +86,19 @@ struct PersonalizedSentence: Codable, Equatable {
     var zh: String?
 }
 
-/// 水平追踪状态（自适应水平追踪 v1.2）：后验本体沿用 S.posterior
+/// 水平追踪状态（自适应水平追踪 v1.2/v1.3）：后验本体沿用 S.posterior
 struct TrackState: Codable, Equatable {
     var evalDay: String?      // 今日位置重估是否已生效（每日最多一次）
     var lowSince: String?     // 游标持续超前于水平的起始日（连续 2 天触发减压）
     var throttle: Bool?       // 减压阀：true 时新词 5 个/天
     var lastNote: String?     // 最近一次追踪动作的人话说明（完成页展示）
+    // v1.3 新增（全可选，兼容旧存档）
+    var diffuseDay: String?   // 置信度扩散每日一次
+    var pendingBand: Int?     // 滞回：候选新级别（1~6）
+    var pendingDays: Int?     // 候选级别已连续天数（≥3 才正式调整）
+    var shownLevel: Int?      // 当前对外展示的级别（滞回后）
+    var dayW: Double?         // 今日被动证据累计权重（封顶 1.5）
+    var dayWDay: String?      // dayW 对应日期
 }
 
 struct Settings: Codable, Equatable {

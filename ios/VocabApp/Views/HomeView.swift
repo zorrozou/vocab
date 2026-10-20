@@ -98,7 +98,14 @@ struct HomeView: View {
             HStack(spacing: 0) {
                 StatCell(number: "\(dueCount)", label: "待复习")
                 StatCell(number: "\(app.S.settings.newPerDay)", label: "新词")
-                StatCell(number: "≈\(app.S.pointer) · \(levelDisplayName(levelForPos(app.S.pointer)))", label: "当前词汇量")
+                // v1.3：已校准就显示后验估值 + 滞回级别（不再显示发词游标）
+                if app.S.calibrated, app.S.posterior != nil {
+                    let m = Int(StudyEngine.postMean(app.S).rounded())
+                    let shown = app.S.track?.shownLevel ?? levelForPos(max(1, m))
+                    StatCell(number: "≈\(m) · \(levelDisplayName(shown))", label: "当前词汇量")
+                } else {
+                    StatCell(number: "未定级", label: "当前词汇量")
+                }
             }
             Text("先复习到期单词，再学新词").font(.system(size: 12)).foregroundStyle(Theme.muted)
         }

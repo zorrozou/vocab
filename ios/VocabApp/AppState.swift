@@ -6,6 +6,7 @@ struct Session {
     enum Item: Equatable {
         case review(word: String)
         case learn(word: NewWord)
+        case probe(word: NewWord)   // v1.3 水平探测题（4选1，无卡片负担）
     }
     var queue: [Item] = []
     var idx = 0
@@ -317,6 +318,7 @@ final class AppState {
 
     func review(word: String, rating: Int, trackWeight: Double? = nil) async {
         guard var c = S.cards[word] else { return }
+        let preStab = c.fsrs?.stability ?? Double(c.stage.flatMap { StudyEngine.ladderInterval[$0] } ?? 0)   // v1.3：成熟度用答前稳定度
         let today = DayUtil.today()
         // 答错前快照（撤销用）：防止手滑误记「忘记」无法挽回
         if rating == 1 {
@@ -344,23 +346,44 @@ final class AppState {
             c.easyStreak = 0
         }
         S.cards[word] = c
-        // 水平追踪观测（v1.2）：复习证据弱化（遗忘≠不认识）；验收测试由调用方传 1.0
-        if let pos = S.cards[word]?.pos {
-            let w = trackWeight ?? (rating == 1 ? 0.2 : 0.3)
-            observeLevel(pos: pos, known: rating != 1, weight: w)
+        // 水平追踪观测（v1.3 权重修正，治"只升不降"）：
+        //  - 忘记：曾通过的成熟卡（答前稳定度≥21天）是有力向下证据 w0.4；新卡遗忘 w0.2
+        //  - 记得/困难/熟练：只有词排位高于当前估值才算向上证据（低于估值的成功无信息量），w0.15
+        //  - 被动证据每日总权重封顶 1.5；验收测试（trackWeight 1.0）不受上限
+        if let pos = S.cards[word]?.pos, S.calibrated {
+            if let tw = trackWeight {
+                observeLevel(pos: pos, known: rating != 1, weight: tw)
+            } else {
+                var tr = S.track ?? TrackState()
+                if tr.dayWDay != today { tr.dayW = 0; tr.dayWDay = today }
+                var w = 0.0
+                var known = true
+                if rating == 1 { w = preStab >= 21 ? 0.4 : 0.2; known = false }
+                else if Double(pos) > StudyEngine.postMean(S) { w = 0.15 }
+                if w > 0 && (tr.dayW ?? 0) + w <= 1.5 {
+                    observeLevel(pos: pos, known: known, weight: w)
+                    tr.dayW = (tr.dayW ?? 0) + w
+                    S.track = tr
+                }
+            }
         }
     }
 
     /// 每天首次 buildQueue 时运行：T=后验均值。
     /// T 超前 pointer >500 且证据够硬(std<800) → pointer 跳到 T（中间词视为已会）；
     /// pointer 超前 T >500 且连续 2 天 → 减压（新词 5 个/天，不后退——已发词 FSRS 在管）。
+    /// v1.3：评估前先做置信度扩散（每日一次）；级别变更须连续 3 天跨边界（滞回防抖）
     func trackLevelDaily() {
         guard S.calibrated, S.posterior != nil else { return }
         let today = DayUtil.today()
         if S.track?.evalDay == today { return }   // 每日最多一次
+        var track = S.track ?? TrackState()
+        if track.diffuseDay != today {
+            StudyEngine.diffusePosterior(&S)
+            track.diffuseDay = today
+        }
         let T = Int(StudyEngine.postMean(S).rounded())
         let std = StudyEngine.postStd(S)
-        var track = S.track ?? TrackState()
         if Double(T - S.pointer) > 500 && std < 800 {
             track.lastNote = "连续表现超过当前级别，发词位置从 \(S.pointer) 追平到 ≈\(T)（\(levelDisplayName(levelForPos(T)))），中间词视为已会跳过"
             S.pointer = T
@@ -379,8 +402,67 @@ final class AppState {
             track.lowSince = nil
             track.throttle = false
         }
+        // v1.3 级别滞回：后验均值跨边界须连续 3 天，才正式调整展示级别（防单日抖动）
+        let band = levelForPos(max(1, T))
+        if track.shownLevel == nil { track.shownLevel = levelForPos(max(1, S.pointer)) }
+        if band != track.shownLevel {
+            if track.pendingBand == band { track.pendingDays = (track.pendingDays ?? 0) + 1 }
+            else { track.pendingBand = band; track.pendingDays = 1 }
+            if (track.pendingDays ?? 0) >= 3 {
+                track.shownLevel = band
+                track.lastNote = "词汇水平连续 3 天稳定在「\(levelDisplayName(band))」区间，当前级别已调整"
+                track.pendingBand = nil
+                track.pendingDays = 0
+            }
+        } else {
+            track.pendingBand = nil
+            track.pendingDays = 0
+        }
         track.evalDay = today
         S.track = track
+        save()
+    }
+
+    /// v1.3 主动探测选词：上方近端 / 上方远端 / 下方回归检查 各 1 个（与 web 同规则）
+    private func pickProbes(reviewWords: [String], news: [NewWord]) async -> [NewWord] {
+        guard S.calibrated, S.posterior != nil else { return [] }
+        let m = StudyEngine.postMean(S), sd = max(60, StudyEngine.postStd(S))
+        let today = DayUtil.today()
+        let recentProbe = Set(S.log.filter { $0.kind == "probe" && $0.d >= DayUtil.addDays(today, -14) }.map(\.word))
+        var busy = Set(reviewWords)
+        news.forEach { busy.insert($0.word) }
+        let zones: [(Double, Double)] = [
+            (m + 0.5 * sd, m + 1.0 * sd),   // 上方近端：是不是已经更强了
+            (m + 1.5 * sd, m + 2.0 * sd),   // 上方远端：大幅进步的信号
+            (m - 1.0 * sd, m - 0.5 * sd),   // 下方：高估回归检查
+        ]
+        var out: [NewWord] = []
+        for (lo, hi) in zones {
+            let a = max(1, Int(lo.rounded())), b = min(10991, Int(hi.rounded()))
+            guard a <= b else { continue }
+            for _ in 0..<6 {
+                let pos = Int.random(in: a...b)
+                guard let r = try? await api.lexiconAt(pos: pos, n: 1),
+                      let w = r.words.first,
+                      S.cards[w.word] == nil,
+                      !recentProbe.contains(w.word),
+                      !busy.contains(w.word),
+                      !out.contains(where: { $0.word == w.word }),
+                      !S.pendingNew.contains(where: { $0.word == w.word }) else { continue }
+                out.append(w)
+                break
+            }
+        }
+        return out
+    }
+
+    /// v1.3 探测作答：全额证据（weight 1.0，与定级同级）；答错 → 进明日新词候选
+    func answerProbe(_ w: NewWord, ok: Bool) {
+        StudyEngine.posteriorUpdate(&S, rank: w.pos, resp: ok ? 1 : 0, weight: 1.0)
+        S.log.append(LogEntry(d: DayUtil.today(), word: w.word, rating: ok ? 4 : 1, kind: "probe"))
+        if !ok, S.cards[w.word] == nil, !S.pendingNew.contains(where: { $0.word == w.word }) {
+            S.pendingNew.append(NewWord(word: w.word, pos: w.pos))
+        }
         save()
     }
 
@@ -484,8 +566,17 @@ final class AppState {
             }
         }
 
+        // v1.3 每日主动探测：3 个探测词（2 个后验上方区 / 1 个下方区）随机混入复习段，
+        // 4选1 形式与复习测验无差别——用户无感知，证据全额（与定级同级 weight 1.0）
+        let probes = await pickProbes(reviewWords: reviewsAll, news: news)
+        var revBlock: [Session.Item] = reviewsAll.map { .review(word: $0) }
+        for w in probes {
+            let at = Int.random(in: 0...revBlock.count)
+            revBlock.insert(.probe(word: w), at: at)
+        }
+
         session = Session()
-        session.queue = reviewsAll.map { .review(word: $0) } + news.map { .learn(word: $0) }
+        session.queue = revBlock + news.map { .learn(word: $0) }
         if let lastPos = news.last?.pos { S.pointer = lastPos + 1 }
         save()
         prefetchDay(news: news, reviewWords: reviewsAll)
