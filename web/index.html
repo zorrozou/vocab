@@ -156,15 +156,19 @@ async function autoPlaySequence(word, sentences) {
   try {
     const ctx = audioCtx();
     if (ctx.state === "suspended") await ctx.resume();
-    const bufs = await Promise.all(items.map(fetchBuf));
+    // 逐条容错：任何一条音频拉取失败只跳过该条（Promise.all 一处失败会作废整链——
+    // 这就是"不少即时生成例句不能自动播放"的根因）
+    const bufs = await Promise.all(items.map(t => fetchBuf(t).catch(() => null)));
     if (my !== seqToken) return;
+    const ok = items.map((t, i) => ({ t, buf: bufs[i] })).filter(x => x.buf);
+    if (!ok.length) { apHint(); return; }
     let t = ctx.currentTime + 0.05;
-    bufs.forEach((buf, i) => {
+    ok.forEach((x, i) => {
       const src = ctx.createBufferSource();
-      src.buffer = buf; src.connect(ctx.destination);
+      src.buffer = x.buf; src.connect(ctx.destination);
       src.start(t);
       activeSrcs.push(src);
-      t += buf.duration + (i < bufs.length - 1 ? Math.max(0.6, bufs[i + 1].duration) : 0);
+      t += x.buf.duration + (i < ok.length - 1 ? Math.max(0.6, (ok[i + 1].buf).duration) : 0);
     });
   } catch (e) {
     apHint();
@@ -425,24 +429,34 @@ function home() {
   if (gb) gb.onclick = () => welcome();
 }
 
-/* ---- 定级流程 ---- */
+/* ---- 定级流程（CAT 自适应：每题出在当前后验边界上，收敛即停） ----
+   起点 3000 位；每答一题后验更新，下一题位置 = 当前估值均值（信息量最大）。
+   答错即时拉低估值=下一题更简单（惩罚）；答对拉高（奖励）。
+   收敛（std<400 且 ≥12 题）提前结束；30 题兜底；连错 8 题安全网。 */
+let catPosVal = 3000;
+let catAsked = new Set();
 async function place() {
-  if (!quizSet.length) {
-    $("#app").innerHTML = `<div class="card center"><p class="muted">定级题库加载中…</p></div>`;
-    try { await loadQuizSet(); } catch (e) {
-      $("#app").innerHTML = `<div class="card center"><p class="muted">网络异常，请重试</p><div class="row"><button class="act" onclick="place()">重试</button></div></div>`;
-      return;
-    }
+  if (S.probeCount >= 12 && postStd() < 400) { finishPlace(Math.max(1, Math.round(postMean()))); return; }
+  if (S.probeCount >= 30) { finishPlace(Math.max(1, Math.round(postMean()))); return; }
+  let w = null;
+  for (let k = 0; k < 3; k++) {
+    try { w = await fetch(`${API}/api/v1/quiz?pos=${catPosVal}&seed=${Date.now() % 99991}`).then(r => r.json()); } catch (e) {}
+    if (w && w.options && w.options.length >= 4 && !catAsked.has(w.word)) break;
+    catPosVal = Math.min(catPosVal + 25, 10987);
+    w = null;
   }
-  if (S.probeCount >= quizSet.length) { finishPlace(Math.max(1, Math.round(postMean() || 1))); return; }
-  const w = quizSet[S.probeCount];
+  if (!w) {
+    $("#app").innerHTML = `<div class="card center"><p class="muted">网络异常，请重试</p><div class="row"><button class="act" onclick="place()">重试</button></div></div>`;
+    return;
+  }
+  catAsked.add(w.word);
   renderChips();
   $("#app").innerHTML = `<div class="card center">
-    <h2>定级测试 ${S.probeCount + 1}/${quizSet.length} · 选出正确词义</h2>
+    <h2>智能定级 · 第 ${S.probeCount + 1} 题 · 选出正确词义</h2>
     <div><span class="big">${w.word}</span><button class="playw" data-t="${w.word}">▶</button></div>
     <div style="text-align:left;margin-top:10px">${w.options.map((o, i) => `<button class="opt" data-i="${i}">${o.text}</button>`).join("")}</div>
-    <div class="progress"><i style="width:${S.probeCount / quizSet.length * 100}%"></i></div>
-    <p class="muted" style="margin-top:10px">${S.probeCount >= 4 ? "当前估计 ≈" + Math.round(postMean()) + " 词 · " : ""}答错的词会自动加入学习计划</p>
+    <div class="progress"><i style="width:${Math.min(100, S.probeCount / 24 * 100)}%"></i></div>
+    <p class="muted" style="margin-top:10px">${S.probeCount >= 4 ? "当前估计 ≈" + Math.round(postMean()) + " 词 · " : ""}答错的词会自动加入学习计划 · 收敛后自动结束</p>
   </div>`;
   bindPlays();
   playText(w.word);
@@ -458,7 +472,8 @@ async function place() {
     if (!ok && !S.pendingNew.find(x => x.word === w.word)) S.pendingNew.push(w);
     setTimeout(() => {
       if (S.wrongStreak >= 8) { finishPlace(1); return; }
-      if (S.probeCount >= quizSet.length) { finishPlace(Math.max(1, Math.round(postMean()))); return; }
+      // 下一题出在当前后验均值处（边界追踪）
+      catPosVal = Math.min(Math.max(Math.round(postMean()), 1), 10987);
       save(); place();
     }, 650);
   });
