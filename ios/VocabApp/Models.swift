@@ -191,6 +191,8 @@ struct Quiz: Codable {
     var word: String
     var pos: Int
     var options: [QuizOption]
+    var mode: String?      // "reverse"=反向回想（给中文选英文）；nil=正向再认
+    var prompt: String?    // 反向模式的题干（中文词义）
 }
 
 struct PlacementItem: Codable {

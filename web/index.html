@@ -658,18 +658,22 @@ const stageLabel = c => c.fsrs ? (isMastered(c) ? "已掌握" : `稳定≈${Math
 async function showReview(item) {
   const word = item.word;
   const c = S.cards[word];
+  // 成熟卡（稳定度≥14 天）走反向回想（给中文选英文）；其余正向再认（与 App 一致）
+  const mature = c.fsrs && c.fsrs.stability >= 14;
   let quiz = null;
-  try { quiz = await fetch(`${API}/api/v1/quiz?pos=${c.pos}&seed=${Date.now() % 99991}`).then(r => r.json()); } catch (e) {}
+  try { quiz = await fetch(`${API}/api/v1/quiz?pos=${c.pos}&seed=${Date.now() % 99991}&mode=${mature ? "reverse" : "forward"}`).then(r => r.json()); } catch (e) {}
   if (!quiz || !quiz.options || quiz.options.length < 4) return showReviewClassic(item);
+  const isRev = quiz.mode === "reverse" && quiz.prompt;
   $("#app").innerHTML = `<div class="card center">
     <h2>复习 ${session.idx + 1}/${session.queue.length} · ${stageLabel(c)}</h2>
-    <div><span class="big">${word}</span><button class="playw" data-t="${word}">▶</button></div>
-    <p class="muted" style="margin:10px 0 4px">选出正确词义：</p>
+    ${isRev
+      ? `<div><span class="big" style="font-size:30px">${quiz.prompt}</span></div><p class="muted" style="margin:10px 0 4px">回想它的英文单词：</p>`
+      : `<div><span class="big">${word}</span><button class="playw" data-t="${word}">▶</button></div><p class="muted" style="margin:10px 0 4px">选出正确词义：</p>`}
     <div style="text-align:left">${quiz.options.map((o, i) => `<button class="opt" data-i="${i}">${o.text}</button>`).join("")}</div>
     <div class="progress"><i style="width:${session.idx / session.queue.length * 100}%"></i></div>
   </div>`;
   bindPlays();
-  playText(word);
+  if (!isRev) playText(word);   // 反向回想不播单词（会泄题）
   document.querySelectorAll(".opt").forEach(b => b.onclick = () => {
     const ok = quiz.options[+b.dataset.i].ok;
     document.querySelectorAll(".opt").forEach(x => {

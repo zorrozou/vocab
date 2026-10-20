@@ -95,8 +95,8 @@ actor APIClient {
         try await get("/api/v1/placement/set", ["seed": seed])
     }
 
-    func quiz(pos: Int, seed: Int) async throws -> Quiz {
-        try await get("/api/v1/quiz", ["pos": "\(pos)", "seed": "\(seed)"])
+    func quiz(pos: Int, seed: Int, mode: String = "forward") async throws -> Quiz {
+        try await get("/api/v1/quiz", ["pos": "\(pos)", "seed": "\(seed)", "mode": mode])
     }
 
     func trio(word: String, weak: String, cap: Int) async throws -> TrioResponse {

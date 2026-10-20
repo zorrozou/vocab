@@ -466,8 +466,9 @@ def gloss_of(wid):
 
 
 @app.get("/api/v1/quiz")
-def quiz(pos: int = Query(ge=1), seed: int = 0):
-    """4 选 1：正确词义 + 3 个同词性、邻近词频（±200 位）的干扰项"""
+def quiz(pos: int = Query(ge=1), seed: int = 0, mode: str = Query(default="forward")):
+    """4 选 1：正确词义 + 3 个同词性、邻近词频（±200 位）的干扰项。
+    mode=reverse：反向回想——给中文词义选英文单词（更难，用于稳定度≥14 天的成熟卡）"""
     import random as _r
     if pos > len(seq):
         return {"options": []}
@@ -476,6 +477,26 @@ def quiz(pos: int = Query(ge=1), seed: int = 0):
     if not correct:
         return {"word": ID2WORD[wid], "pos": pos, "options": []}
     pcls = (p or "n")[:1]
+    rng = _r.Random(seed or time.time_ns())
+    if mode == "reverse":
+        # 回想模式：提示=中文词义，选项=邻近词频的英文单词
+        correct_word = ID2WORD[wid]
+        candw = []
+        for i in range(max(1, pos - 200), min(len(seq), pos + 200) + 1):
+            if i == pos:
+                continue
+            w2 = seq[i - 1]["id"]
+            if not PTAG.get(w2, "").startswith(pcls):
+                continue
+            wd = ID2WORD[w2]
+            if wd != correct_word and wd not in candw:
+                candw.append(wd)
+        rng.shuffle(candw)
+        opts = [correct_word] + candw[:3]
+        rng.shuffle(opts)
+        return {"word": correct_word, "pos": pos, "mode": "reverse",
+                "prompt": f"{pcls}. {correct}",
+                "options": [{"text": t, "ok": t == correct_word} for t in opts]}
     cand = []
     for i in range(max(1, pos - 200), min(len(seq), pos + 200) + 1):
         if i == pos:
@@ -486,7 +507,6 @@ def quiz(pos: int = Query(ge=1), seed: int = 0):
         _, g = gloss_of(w2)
         if g and g != correct and g not in cand:
             cand.append(g)
-    rng = _r.Random(seed or time.time_ns())
     rng.shuffle(cand)
     opts = [correct] + cand[:3]
     rng.shuffle(opts)

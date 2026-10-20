@@ -288,20 +288,34 @@ struct ReviewQuizView: View {
     }
 
     /// 测验卡：单词居中于上方空间，选项钉死在底部拇指区
+    /// 反向回想（稳定度≥14 天的成熟卡）：题干是中文词义，选项是英文单词，不放音（音会泄题）
     private var quizCard: some View {
         VStack(spacing: 0) {
             Spacer()
             VStack(spacing: 12) {
-                HStack(alignment: .center, spacing: 10) {
-                    BigWord(word: word)
-                    PlayButton(text: word)
+                if quiz?.mode == "reverse", let prompt = quiz?.prompt {
+                    Text(prompt)
+                        .font(.system(size: 30, weight: .bold))
+                        .foregroundStyle(Theme.text)
+                        .multilineTextAlignment(.center)
+                    Text("回想它的英文单词").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                } else {
+                    HStack(alignment: .center, spacing: 10) {
+                        BigWord(word: word)
+                        PlayButton(text: word)
+                    }
+                    Text("选出正确词义").font(.system(size: 14)).foregroundStyle(Theme.muted)
                 }
-                Text("选出正确词义").font(.system(size: 14)).foregroundStyle(Theme.muted)
             }
             Spacer()
         }
         .frame(maxWidth: .infinity)
-        .onAppear { app.audio.play(word, voice: app.S.settings.voice) }
+        .onAppear {
+            // 反向回想不播单词（会泄题）；正向照旧自动朗读
+            if quiz?.mode != "reverse" {
+                app.audio.play(word, voice: app.S.settings.voice)
+            }
+        }
         .safeAreaInset(edge: .bottom) {
             Group {
                 if let quiz {
@@ -318,7 +332,10 @@ struct ReviewQuizView: View {
 
     private func loadQuiz() async {
         let pos = card?.pos ?? app.S.pointer
-        if let q = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991),
+        // 成熟卡（稳定度≥14 天）走反向回想；其余正向再认
+        let mature = (card?.fsrs?.stability ?? 0) >= 14
+        if let q = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991,
+                                                    mode: mature ? "reverse" : "forward"),
            q.options.count >= 4 {
             quiz = q
             phase = .quizzing
