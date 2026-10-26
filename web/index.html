@@ -572,54 +572,86 @@ function home() {
   if (gb) gb.onclick = () => welcome();
 }
 
-/* ---- 定级流程（CAT 自适应：每题出在当前后验边界上，收敛即停） ----
-   起点 3000 位；每答一题后验更新，下一题位置 = 当前估值均值（信息量最大）。
-   答错即时拉低估值=下一题更简单（惩罚）；答对拉高（奖励）。
-   收敛（≥18 题且 std<275）提前结束；30 题兜底；最终取最近 5 题中位数。
-   连错不再突兀归零，继续用后续证据修正。 */
-let catPosVal = 3000;
-let catAsked = new Set();
-let catMeans = [];
+/* ---- 定级流程（固定分层 30 题：6 个词汇量区间各随机 5 题） ----
+   每个区间独立评估，找到第一个不扎实的区间；答完全部 30 题再定边界，
+   不再让前几题答对就直接跳到高级别。 */
+const PLACEMENT_BANDS = [
+  { lo: 1, hi: 2000 }, { lo: 2001, hi: 4000 }, { lo: 4001, hi: 6000 },
+  { lo: 6001, hi: 8000 }, { lo: 8001, hi: 10000 }, { lo: 10001, hi: 10987 }
+];
+let placePositions = [];
+let placeAnswers = [];
+
+function makePlacementPositions() {
+  const out = [];
+  for (const b of PLACEMENT_BANDS) {
+    const used = new Set();
+    while (used.size < 2) used.add(b.lo + Math.floor(Math.random() * (b.hi - b.lo + 1)));
+    used.forEach(p => out.push(p));
+  }
+  return out;
+}
+
 function catFinalMean() {
   const a = catMeans.slice(-5).sort((x, y) => x - y);
   return a.length ? Math.round(a[Math.floor(a.length / 2)]) : Math.max(1, Math.round(postMean()));
 }
+let catMeans = [];
+
+function placementEstimate() {
+  let estimate = PLACEMENT_BANDS[0].lo;
+  for (let i = 0; i < PLACEMENT_BANDS.length; i++) {
+    const b = PLACEMENT_BANDS[i];
+    const score = placeAnswers.slice(i * 5, i * 5 + 5).filter(Boolean).length;
+    if (score < 3) break;   // 低于60%：该区间不扎实，停在最后通过区间的估值
+    estimate = Math.min(b.hi, b.lo + Math.round((b.hi - b.lo) * (score - 1) / 5));
+  }
+  return estimate;
+}
+
+function posteriorAround(mean, sd = 500) {
+  const raw = GRID.map(g => Math.exp(-((g - mean) ** 2) / (2 * sd * sd)));
+  const sum = raw.reduce((a, b) => a + b, 0);
+  return raw.map(v => v / sum);
+}
+
+function placementScoreText() {
+  return PLACEMENT_BANDS.map((b, i) => {
+    const score = placeAnswers.slice(i * 2, i * 2 + 2).filter(Boolean).length;
+    return `${b.lo}~${b.hi}：${score}/2`;
+  }).join("　");
+}
+
 async function place() {
-  // 首次/重新定级必须重置 CAT 会话：清空上次已考集合与探测位置
-  if (S.probeCount === 0 && !S.posterior) { catPosVal = 3000; catAsked = new Set(); catMeans = []; }
-  if (S.probeCount >= 18 && postStd() < 275) { finishPlace(catFinalMean()); return; }
+  if (S.probeCount === 0 && !S.posterior) {
+    placePositions = makePlacementPositions();
+    placeAnswers = [];
+    catMeans = [];
+  }
   if (S.probeCount >= 30) { finishPlace(catFinalMean()); return; }
-  const basePos = catPosVal;
-  let w = null, gotAny = false;
-  // 高估值可能顶到词库末尾：同一已考词反复出现不是网络异常。
-  // 目标位置在估值附近随机扰动 ±150，避免每次重测得到完全相同的题序。
-  for (let k = 0; k < 12; k++) {
-    const pos = Math.min(Math.max(basePos + Math.floor(Math.random() * 301) - 150, 1), 10987);
-    try {
-      w = await fetch(`${API}/api/v1/quiz?pos=${pos}&seed=${Date.now() % 99991}`).then(r => r.json());
-      if (w && w.options) gotAny = true;
-    } catch (e) {}
-    if (w && w.options && w.options.length >= 4 && !catAsked.has(w.word)) break;
-    catPosVal = catPosVal >= 10987 ? Math.max(1, catPosVal - 1000) : Math.min(catPosVal + 25, 10987);
+  // 前 12 题每档 2 题覆盖全部级别；后 18 题在当前估计边界附近集中探测
+  const pos = S.probeCount < placePositions.length
+    ? placePositions[S.probeCount]
+    : Math.min(Math.max(Math.round(postMean()) + Math.floor(Math.random() * 301) - 150, 1), 10987);
+  let w = null;
+  for (let k = 0; k < 3; k++) {
+    try { w = await fetch(`${API}/api/v1/quiz?pos=${pos}&seed=${Date.now() % 99991}`).then(r => r.json()); } catch (e) {}
+    if (w && w.options && w.options.length >= 4) break;
     w = null;
   }
   if (!w) {
-    if (!gotAny) {
-      $("#app").innerHTML = `<div class="card center"><p class="muted">网络异常，请重试</p><div class="row"><button class="act" onclick="place()">重试</button></div></div>`;
-    } else {
-      finishPlace(Math.max(1, Math.round(postMean())));   // 末端没有更多新题，正常收尾而非报网络错误
-    }
+    $("#app").innerHTML = `<div class="card center"><p class="muted">网络异常，请重试</p><div class="row"><button class="act" onclick="place()">重试</button></div></div>`;
     return;
   }
-  catAsked.add(w.word);
   renderChips();
+  const band = Math.floor(S.probeCount / 5) + 1;
   $("#app").innerHTML = `<div class="card center">
-    <h2>智能定级 · 第 ${S.probeCount + 1} 题 · 选出正确词义</h2>
+    <h2>智能定级 · 第 ${S.probeCount + 1}/30 题 · 第 ${band} 区间</h2>
     <div><span class="big">${w.word}</span><button class="playw" data-t="${w.word}">▶</button></div>
     <div style="text-align:left;margin-top:10px">${w.options.map((o, i) => `<button class="opt" data-i="${i}">${o.text}</button>`).join("")}</div>
     <div class="row" style="margin-top:10px"><button class="act ghost" id="bUnknown">不认识</button></div>
-    <div class="progress"><i style="width:${Math.min(100, S.probeCount / 24 * 100)}%"></i></div>
-    <p class="muted" style="margin-top:10px">${S.probeCount >= 4 ? "当前估计 ≈" + Math.round(postMean()) + " 词 · " : ""}不确定请点「不认识」，不要猜</p>
+    <div class="progress"><i style="width:${S.probeCount / 30 * 100}%"></i></div>
+    <p class="muted" style="margin-top:10px">不确定请点「不认识」，不要猜</p>
   </div>`;
   bindPlays();
   playText(w.word);
@@ -630,26 +662,28 @@ async function place() {
     });
     $("#bUnknown").disabled = true;
     if (!ok && guessed && btn) btn.classList.add("wrong");
+    placeAnswers[S.probeCount] = ok;
     posteriorUpdate(w.pos, ok ? 1 : 0, 1.0, guessed ? 0.25 : 0);
-    S.log.push({ d: today(), word: w.word, rating: ok ? 4 : 1, kind: "placement" });
     catMeans.push(Math.round(postMean()));
-    S.wrongStreak = ok ? 0 : (S.wrongStreak || 0) + 1;
+    S.log.push({ d: today(), word: w.word, rating: ok ? 4 : 1, kind: "placement" });
+    S.probeCount++;
     if (!ok && !S.pendingNew.find(x => x.word === w.word)) S.pendingNew.push(w);
-    setTimeout(() => {
-      // 连错 8 题不再突兀归零；继续用后续证据修正，最终取近 5 题中位数
-      catPosVal = Math.min(Math.max(Math.round(postMean()), 1), 10987);
-      save(); place();
-    }, 650);
+    setTimeout(() => { save(); place(); }, 450);
   };
   document.querySelectorAll(".opt").forEach(b => b.onclick = () => answer(w.options[+b.dataset.i].ok, true, b));
   $("#bUnknown").onclick = () => answer(false, false, null);
 }
+
 function finishPlace(r) {
-  S.calibrated = true; S.frontier = Math.max(1, r); S.pointer = S.frontier; save();
+  S.calibrated = true;
+  S.frontier = Math.max(1, r);
+  S.pointer = S.frontier;
+  // 保留 30 题形成的后验供每日追踪，不用单点估值重置它
+  save();
   $("#app").innerHTML = `<div class="card center">
     <h2>定级完成</h2>
     <div class="score">${S.frontier}</div>
-    <p class="muted">你的词汇边界 ≈ ${S.frontier}（共探测 ${S.probeCount} 词）<br>新词将从这个位置开始，${S.pendingNew.length} 个探测生词会优先补学</p>
+    <p class="muted">你的词汇边界 ≈ ${S.frontier}（${LVL_NAME[lvlOfPos(S.frontier)]}）<br>${placementScoreText()}<br>新词将从这个位置开始，${S.pendingNew.length} 个答错词会优先补学</p>
     <div class="row"><button class="act" id="bGo">开始学习</button></div>
   </div>`;
   renderChips();

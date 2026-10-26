@@ -1,26 +1,24 @@
 import SwiftUI
 
-/// 定级测试（CAT 自适应版）：每题出在当前后验边界上，收敛即停
-/// - 起点 3000 位；每答一题后验更新，下一题位置 = 当前估值均值（信息量最大）
-/// - 答错即时反馈为难度下降（惩罚）；答对上升（奖励）——双向自适应
-/// - 收敛（≥18 题且 std<275）提前结束；30 题兜底；最终取最近 5 题均值的中位数
-/// - 答错即时反馈为难度下降（惩罚）；答对上升（奖励）——双向自适应
-/// - 答错词自动进 pendingNew 优先补学；连错不再突兀归零，继续用后续证据修正
+/// 定级测试（固定分层 30 题）：6 个词汇量区间各随机 5 题。
+/// 每个区间独立评估，答完全部题再定边界；前几题答对不会直接跳到高级别。
+/// 低于 60% 的区间判为不扎实，落到前一区间；60% 为边界，80% 以上为通过。
 struct PlacementView: View {
     @Environment(AppState.self) private var app
     @State private var quiz: Quiz?
     @State private var loading = true
     @State private var loadFailed = false
-    @State private var askedWords = Set<String>()
-    @State private var catPos = 3000            // CAT 起始探测位（词库中段）
-    @State private var recentMeans: [Double] = []   // 最终取最近 5 题中位数，降低单题波动
+    @State private var positions: [Int] = []
+    @State private var answers: [Bool] = []
+    @State private var recentMeans: [Double] = []
     @State private var finished: Int? = nil
 
+    private let bands = [(1, 2000), (2001, 4000), (4001, 6000),
+                         (6001, 8000), (8001, 10000), (10001, 10987)]
     private var probeCount: Int { app.S.probeCount }
-    private var probeMean: Int { Int(StudyEngine.postMean(app.S).rounded()) }
     private var finalMean: Int {
         let a = recentMeans.suffix(5).sorted()
-        return a.isEmpty ? max(1, probeMean) : Int(a[a.count / 2].rounded())
+        return a.isEmpty ? max(1, Int(StudyEngine.postMean(app.S).rounded())) : Int(a[a.count / 2].rounded())
     }
 
     var body: some View {
@@ -30,15 +28,14 @@ struct PlacementView: View {
             } else {
                 VStack(spacing: 0) {
                     HStack {
-                        Text("智能定级 · 第 \(probeCount + 1) 题")
+                        Text("智能定级 · 第 \(probeCount + 1)/30 题 · 第 \(probeCount / 5 + 1) 区间")
                             .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
                         Spacer()
                         Button("退出") { app.route = .home }.foregroundStyle(Theme.muted)
                     }
                     .padding(.horizontal, 16).padding(.vertical, 10)
-                    ProgressBar(value: min(1, Double(probeCount) / 24.0))   // 通常 18~30 题收敛
+                    ProgressBar(value: min(1, Double(probeCount) / 30.0))
                         .padding(.horizontal, 16)
-                    // 题干居中于上方剩余空间
                     Spacer()
                     VStack(spacing: 12) {
                         if loading {
@@ -57,16 +54,13 @@ struct PlacementView: View {
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
-                // 选项钉死底部拇指区
                 .safeAreaInset(edge: .bottom) {
                     VStack(spacing: 8) {
                         if let quiz, !loading {
                             QuizOptionsView(options: quiz.options) { ok in answer(quiz, ok: ok) }
                             GhostButton(title: "不认识") { answer(quiz, ok: false, guessed: false) }
                         }
-                        Text(probeCount >= 4
-                             ? "当前估计 ≈\(probeMean) 词 · 不确定请点「不认识」，不要猜"
-                             : "不确定请点「不认识」，不要猜")
+                        Text("不确定请点「不认识」，不要猜")
                             .font(.system(size: 12)).foregroundStyle(Theme.muted)
                     }
                     .padding(.horizontal, 14)
@@ -79,61 +73,79 @@ struct PlacementView: View {
         .onDisappear { app.audio.stop() }
     }
 
-    /// CAT 主循环的一步：在当前边界取一题
-    private func loadNext() async {
-        // 收敛判定：证据够窄就提前结束
-        if probeCount >= 18, StudyEngine.postStd(app.S) < 275 {
-            finish(boundary: finalMean)
-            return
+    private func makePositions() -> [Int] {
+        var out: [Int] = []
+        for (lo, hi) in bands {
+            var used = Set<Int>()
+            while used.count < 2 { used.insert(Int.random(in: lo...hi)) }
+            out.append(contentsOf: used)
         }
-        if probeCount >= 30 {   // 兜底上限
+        return out
+    }
+
+    private func estimate() -> Int {
+        var result = bands[0].0
+        for (i, (lo, hi)) in bands.enumerated() {
+            let start = i * 5
+            let end = min(start + 5, answers.count)
+            let score = answers[start..<end].filter { $0 }.count
+            if score < 3 { break }   // 低于60%：该区间不扎实，停在最后通过区间的估值
+            result = min(hi, lo + (hi - lo) * (score - 1) / 5)
+        }
+        return result
+    }
+
+    private func posteriorAround(_ mean: Int, sd: Double = 500) -> [Double] {
+        let raw = StudyEngine.grid.map { exp(-pow(($0 - Double(mean)) / sd, 2) / 2) }
+        let sum = raw.reduce(0, +)
+        return raw.map { $0 / sum }
+    }
+
+    private var scoreText: String {
+        bands.enumerated().map { i, b in
+            let start = i * 2
+            let end = min(start + 2, answers.count)
+            let score = answers[start..<end].filter { $0 }.count
+            return "\(b.0)~\(b.1)：\(score)/2"
+        }.joined(separator: "　")
+    }
+
+    private func loadNext() async {
+        if positions.isEmpty { positions = makePositions() }
+        if probeCount >= 30 {
             finish(boundary: finalMean)
             return
         }
         loading = true
         loadFailed = false
-        var q: Quiz? = nil
-        var gotAny = false
-        let basePos = catPos
-        // 目标位置在估值附近随机扰动 ±150，避免每次重测得到完全相同的题序
-        for _ in 0..<12 {
-            let pos = min(max(basePos + Int.random(in: -150...150), 1), 10987)
+        // 前 12 题每档 2 题覆盖全部级别；后 18 题在当前估计边界附近集中探测
+        let pos = probeCount < positions.count
+            ? positions[probeCount]
+            : min(max(Int(StudyEngine.postMean(app.S).rounded()) + Int.random(in: -150...150), 1), 10987)
+        for _ in 0..<3 {
             if let cand = try? await APIClient.shared.quiz(
-                pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991) {
-                gotAny = true
-                if cand.options.count >= 4, !askedWords.contains(cand.word) {
-                    q = cand
-                    break
-                }
-            }
-            catPos = catPos >= 10987 ? max(1, catPos - 1000) : min(catPos + 25, 10987)
-        }
-        guard let q else {
-            if gotAny {
-                finish(boundary: max(1, probeMean))   // 末端没有更多新题，正常收尾
-            } else {
-                loadFailed = true   // 只有真正请求失败才显示网络异常
+                pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991),
+               cand.options.count >= 4 {
+                quiz = cand
                 loading = false
+                app.audio.play(cand.word, voice: app.S.settings.voice)
+                return
             }
-            return
         }
-        askedWords.insert(q.word)
-        quiz = q
+        loadFailed = true
         loading = false
-        app.audio.play(q.word, voice: app.S.settings.voice)
     }
 
     private func answer(_ q: Quiz, ok: Bool, guessed: Bool = true) {
+        answers.append(ok)
         StudyEngine.posteriorUpdate(&app.S, rank: q.pos, resp: ok ? 1 : 0, guess: guessed ? 0.25 : 0)
-        app.S.log.append(LogEntry(d: DayUtil.today(), word: q.word, rating: ok ? 4 : 1, kind: "placement"))
         recentMeans.append(StudyEngine.postMean(app.S))
-        app.S.wrongStreak = ok ? 0 : app.S.wrongStreak + 1
+        app.S.log.append(LogEntry(d: DayUtil.today(), word: q.word, rating: ok ? 4 : 1, kind: "placement"))
+        app.S.probeCount += 1
         if !ok && !app.S.pendingNew.contains(where: { $0.word == q.word }) {
             app.S.pendingNew.append(NewWord(word: q.word, pos: q.pos))
         }
         app.save()
-        // 连错 8 题不再突兀归零；继续用后续证据修正，最终取近 5 题中位数
-        catPos = min(max(Int(StudyEngine.postMean(app.S).rounded()), 1), 10987)
         Task { await loadNext() }
     }
 
@@ -141,6 +153,7 @@ struct PlacementView: View {
         app.S.calibrated = true
         app.S.frontier = max(1, boundary)
         app.S.pointer = app.S.frontier
+        // 保留 30 题形成的后验供每日追踪，不用单点估值重置它
         app.save()
         finished = app.S.frontier
     }
@@ -152,7 +165,7 @@ struct PlacementView: View {
                 Text("定级完成").font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
                 Text("\(boundary)")
                     .font(.system(size: 56, weight: .bold)).foregroundStyle(Theme.accentLight)
-                Text("你的词汇边界 ≈ \(boundary)（自适应探测 \(probeCount) 题）\n新词将从这个位置开始，\(app.S.pendingNew.count) 个探测生词会优先补学")
+                Text("你的词汇边界 ≈ \(boundary)（\(levelDisplayName(levelForPos(boundary)))）\n\(scoreText)\n新词将从这个位置开始，\(app.S.pendingNew.count) 个答错词会优先补学")
                     .font(.system(size: 14)).foregroundStyle(Theme.muted)
                     .multilineTextAlignment(.center)
                 PrimaryButton(title: "开始学习") { app.route = .home }
