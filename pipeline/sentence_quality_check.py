@@ -6,7 +6,8 @@ from collections import Counter
 BASE = os.environ.get("LLM_BASE_URL", "").rstrip("/")
 KEY = os.environ.get("LLM_API_KEY", "")
 MODEL = os.environ.get("LLM_MODEL", "glm-4.6")
-N = 210
+N = int(os.environ.get("N", "210"))
+LEVEL = os.environ.get("LEVEL")   # 可选：只抽某个词库级别，便于分级复验
 random.seed(7)
 
 
@@ -26,7 +27,8 @@ rows = conn.execute(
     """SELECT s.text, s.genMethod, e.word FROM sentence s JOIN lexicon_entry e ON e.id=s.targetWordId
        WHERE (s.genMethod='tatoeba' OR s.genMethod LIKE 'llm-%')
          AND COALESCE(s.flag,'') != 'reported'
-       ORDER BY RANDOM() LIMIT ?""", (N,)).fetchall()
+         AND (? IS NULL OR e.level=?)
+       ORDER BY RANDOM() LIMIT ?""", (LEVEL, LEVEL, N)).fetchall()
 conn.close()
 
 pconn = sqlite3.connect("/home/ubuntu/vocab-api/data/personal.db", timeout=30)
