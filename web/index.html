@@ -1359,6 +1359,20 @@ const IS_GUEST = () => !AUTH;
 
 function authHeaders() { return AUTH ? { Authorization: `Bearer ${AUTH.token}` } : {}; }
 
+function handleSyncError(e) {
+  const m = String(e && e.message || e);
+  if (/401|未登录|过期/.test(m)) {
+    clearTimeout(save._t);
+    AUTH = null;
+    localStorage.removeItem("vocab_auth");
+    renderUserTag();
+    authForm("login");   // 凭证失效时引导重新登录，而不是反复同步失败
+  } else {
+    syncFailed = true;
+    renderUserTag();
+  }
+}
+
 async function pushState(expectedOwner = AUTH && AUTH.userId, snapshot = S) {
   if (!AUTH || AUTH.userId !== expectedOwner) return;   // 切换账号后，旧推送作废
   try {
@@ -1366,7 +1380,7 @@ async function pushState(expectedOwner = AUTH && AUTH.userId, snapshot = S) {
       if (!r.ok) throw new Error("HTTP " + r.status);   // 413 等非 200 也算失败
     });
     syncFailed = false; renderUserTag();
-  } catch (e) { syncFailed = true; renderUserTag(); }   // 推送失败对用户可见（不再静默）
+  } catch (e) { handleSyncError(e); }
 }
 async function pullState(expectedOwner = AUTH && AUTH.userId) {
   if (!AUTH || AUTH.userId !== expectedOwner) return undefined;

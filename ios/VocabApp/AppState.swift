@@ -112,6 +112,20 @@ final class AppState {
         return s
     }
 
+    private func isAuthError(_ error: Error) -> Bool {
+        let m = String(describing: error)
+        return m.contains("401") || m.contains("未登录") || m.contains("过期")
+    }
+
+    private func handleSyncError(_ error: Error) async {
+        if isAuthError(error) {
+            switchAccount()          // 清除失效 token，引导重新登录
+            route = .auth(login: true)
+        } else {
+            syncFailed = true
+        }
+    }
+
     /// 保存 = 本地立即 + 登录后防抖 2s 推服务器（与 web 一致）
     func save() {
         // 状态瘦身：日志只留最近 1200 条（薄弱词窗口 7 天/顽固词统计不受影响；
@@ -129,7 +143,7 @@ final class AppState {
                 try await self.api.pushState(snapshot)
                 self.syncFailed = false
             } catch {
-                self.syncFailed = true   // 推送失败对用户可见（不再静默）
+                await self.handleSyncError(error)
             }
         }
     }
@@ -142,8 +156,7 @@ final class AppState {
             syncMsg = "✓ 已同步"
             syncFailed = false
         } catch {
-            syncMsg = "同步失败，稍后再试"
-            syncFailed = true
+            await handleSyncError(error)
         }
     }
 
