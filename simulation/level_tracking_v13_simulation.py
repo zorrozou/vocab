@@ -28,10 +28,10 @@ def mean_std(post):
     return m, s
 
 
-def update(post, rank, resp, weight):
+def update(post, rank, resp, weight, guess=0.0):
     out, s = [], 0.0
     for i, p in enumerate(post):
-        pk = logistic((GRID[i] - rank) / 400)
+        pk = guess + (1 - guess) * logistic((GRID[i] - rank) / 400)
         like = (resp * pk + (1 - resp) * (1 - pk)) ** weight
         v = p * like
         out.append(v)
@@ -50,8 +50,9 @@ def diffuse(post):
     return [v / z for v in out]
 
 
-def knows(true_level, rank, rng):
-    return 1.0 if rng.random() < logistic((true_level - rank) / 400) else 0.0
+def knows(true_level, rank, rng, guess=0.0):
+    p = guess + (1 - guess) * logistic((true_level - rank) / 400)
+    return 1.0 if rng.random() < p else 0.0
 
 
 def simulate(days, true0, start_mean, growth, version, seed=7):
@@ -68,10 +69,10 @@ def simulate(days, true0, start_mean, growth, version, seed=7):
         if version == "v1.3":
             post = diffuse(post)
             m, sd = mean_std(post)
-            # 主动探测：2 上 1 下，全额证据
-            for lo, hi in [(m + 0.5 * sd, m + sd), (m + 1.5 * sd, m + 2 * sd), (m - sd, m - 0.5 * sd)]:
+            # 主动探测：上方近端反向回想（guess=0），其余正向 4选1（guess=0.25）
+            for lo, hi, guess in [(m + 0.5 * sd, m + sd, 0.0), (m + 1.5 * sd, m + 2 * sd, 0.25), (m - sd, m - 0.5 * sd, 0.25)]:
                 rank = max(1, min(10991, rng.uniform(lo, hi)))
-                post = update(post, rank, knows(true_level, rank, rng), 1.0)
+                post = update(post, rank, knows(true_level, rank, rng, guess), 1.0, guess)
         # 新词 10 个（在 pointer 处）：不熟悉 w1.0↓ / 学会了 w0.5↑
         for i in range(10):
             rank = pointer + i
@@ -82,16 +83,16 @@ def simulate(days, true0, start_mean, growth, version, seed=7):
         day_w = 0.0
         for _ in range(30):
             rank = max(1, pointer - rng.uniform(50, 1500))
-            resp = knows(true_level, rank, rng)
+            resp = knows(true_level, rank, rng, 0.25)   # 复习为 4 选 1，含猜测
             if version == "v1.3":
                 if resp == 0:
                     w = 0.4 if rng.random() < 0.3 else 0.2   # 部分成熟卡
                     if day_w + w <= 1.5:
-                        post = update(post, rank, 0, w); day_w += w
+                        post = update(post, rank, 0, w, 0.25); day_w += w
                 else:
                     m_now, _ = mean_std(post)
                     if rank > m_now and day_w + 0.15 <= 1.5:
-                        post = update(post, rank, 1, 0.15); day_w += 0.15
+                        post = update(post, rank, 1, 0.15, 0.25); day_w += 0.15
             else:
                 post = update(post, rank, resp, 0.2 if resp == 0 else 0.3)
         # 跳位规则（双版本一致）

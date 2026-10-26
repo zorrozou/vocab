@@ -180,6 +180,7 @@ async function autoPlaySequence(word, sentences) {
     if (!ok.length) { apHint(); return; }
     let t = ctx.currentTime + 0.05;
     ok.forEach((x, i) => {
+      logSentenceExposures(x.t, "audio", true);   // 实际进入播放链才记 played=true
       const src = ctx.createBufferSource();
       src.buffer = x.buf; src.connect(ctx.destination);
       src.start(t);
@@ -271,7 +272,7 @@ async function review(word, rating, trackWeight) {
   const p = S.cards[word] && S.cards[word].pos;
   if (S.calibrated && p) {
     if (trackWeight !== undefined) {
-      posteriorUpdate(p, rating === 1 ? 0 : 1, trackWeight);
+      posteriorUpdate(p, rating === 1 ? 0 : 1, trackWeight, preStab >= 14 ? 0 : 0.25);
     } else {
       const tr = S.track || {};
       if (tr.dayWDay !== today()) { tr.dayW = 0; tr.dayWDay = today(); }
@@ -279,7 +280,7 @@ async function review(word, rating, trackWeight) {
       if (rating === 1) { w = preStab >= 21 ? 0.4 : 0.2; resp = 0; }
       else if (p > postMean()) { w = 0.15; }
       if (w > 0 && (tr.dayW || 0) + w <= 1.5) {
-        posteriorUpdate(p, resp, w);
+        posteriorUpdate(p, resp, w, preStab >= 14 ? 0 : 0.25);
         tr.dayW = (tr.dayW || 0) + w;
         S.track = tr;
       }
@@ -293,19 +294,30 @@ const isMastered = c => c.stage === 6 || (c.fsrs && c.fsrs.stability >= 180);
 const GRID = []; for (let r = 0; r <= 12000; r += 250) GRID.push(r);
 const logistic = x => 1 / (1 + Math.exp(-x));
 /* v1.2：带权后验更新——weight<1 的弱证据按 like^w 缩放（tempering） */
-function posteriorUpdate(rank, resp, weight = 1.0) {
-  if (!S.posterior) S.posterior = GRID.map(() => 1 / GRID.length);
+/* v1.4：带猜测率的 3PL 似然。forward 4选1 猜测率 0.25；反向回想/自评为 0。
+   防止"不会但猜对"被全部当成真实掌握而推高估值 */
+function posteriorCalc(post, rank, resp, weight = 1.0, guess = 0) {
+  const base = post || GRID.map(() => 1 / GRID.length);
   let sum = 0;
-  S.posterior = S.posterior.map((p, i) => {
-    const pk = logistic((GRID[i] - rank) / 400);
+  const out = base.map((p, i) => {
+    const pk = guess + (1 - guess) * logistic((GRID[i] - rank) / 400);
     const like = Math.pow(resp * pk + (1 - resp) * (1 - pk), weight);
     const v = p * like; sum += v; return v;
   });
-  S.posterior = S.posterior.map(v => v / sum);
+  return out.map(v => v / sum);
+}
+function posteriorUpdate(rank, resp, weight = 1.0, guess = 0) {
+  S.posterior = posteriorCalc(S.posterior, rank, resp, weight, guess);
   S.probeCount++;
 }
-const postMean = () => S.posterior ? S.posterior.reduce((a, p, i) => a + GRID[i] * p, 0) : 0;
-const postStd = () => { const m = postMean(); return Math.sqrt(S.posterior.reduce((a, p, i) => a + (GRID[i] - m) ** 2 * p, 0)); };
+const posteriorMean = post => post ? post.reduce((a, p, i) => a + GRID[i] * p, 0) : 0;
+const posteriorStd = post => {
+  if (!post) return 0;
+  const m = posteriorMean(post);
+  return Math.sqrt(post.reduce((a, p, i) => a + (GRID[i] - m) ** 2 * p, 0));
+};
+const postMean = () => posteriorMean(S.posterior);
+const postStd = () => posteriorStd(S.posterior);
 const converged = () => (postStd() < 500 && S.probeCount >= 12) || S.probeCount >= 40;
 
 /* ---------------- v1.3 置信度扩散：水平会漂移，系统保持"可被说服" ---------------- */
@@ -387,12 +399,12 @@ async function pickProbes(reviewsAll, news) {
   const recentProbe = new Set(S.log.filter(l => l.kind === "probe" && l.d >= addDays(today(), -14)).map(l => l.word));
   const busy = new Set([...reviewsAll, ...news.map(w => w.word)]);
   const zones = [
-    [m + 0.5 * sd, m + 1.0 * sd],   // 上方近端：是不是已经更强了
-    [m + 1.5 * sd, m + 2.0 * sd],   // 上方远端：大幅进步的信号
-    [m - 1.0 * sd, m - 0.5 * sd],   // 下方：高估回归检查
+    [m + 0.5 * sd, m + 1.0 * sd, true],   // 上方近端：反向回想，检验是否真会而非眼熟
+    [m + 1.5 * sd, m + 2.0 * sd, false],  // 上方远端：正向再认，探大幅进步
+    [m - 1.0 * sd, m - 0.5 * sd, false],  // 下方：正向再认，高估回归检查
   ];
   const out = [];
-  for (const [lo, hi] of zones) {
+  for (const [lo, hi, reverse] of zones) {
     if (out.length >= need) break;
     const a = Math.max(1, Math.round(lo)), b = Math.min(10991, Math.round(hi));
     if (a > b) continue;
@@ -403,7 +415,7 @@ async function pickProbes(reviewsAll, news) {
         const w = r.words && r.words[0];
         if (w && !S.cards[w.word] && !recentProbe.has(w.word) && !busy.has(w.word)
             && !out.find(x => x.word === w.word) && !S.pendingNew.find(x => x.word === w.word)) {
-          out.push(w); break;
+          out.push({ ...w, reverse }); break;
         }
       } catch (e) {}
     }
@@ -581,7 +593,7 @@ async function place() {
       if (w.options[+x.dataset.i].ok) x.classList.add("right");
     });
     if (!ok) b.classList.add("wrong");
-    posteriorUpdate(w.pos, ok ? 1 : 0);
+    posteriorUpdate(w.pos, ok ? 1 : 0, 1.0, 0.25);
     S.wrongStreak = ok ? 0 : (S.wrongStreak || 0) + 1;
     if (!ok && !S.pendingNew.find(x => x.word === w.word)) S.pendingNew.push(w);
     setTimeout(() => {
@@ -618,19 +630,21 @@ function step() {
 async function showProbe(item) {
   const w = item.detail, pos = w.pos || S.pointer;
   let quiz = null;
-  try { quiz = await fetch(`${API}/api/v1/quiz?pos=${pos}&seed=${Date.now() % 99991}&mode=forward`).then(r => r.json()); } catch (e) {}
+  try { quiz = await fetch(`${API}/api/v1/quiz?pos=${pos}&seed=${Date.now() % 99991}&mode=${w.reverse ? "reverse" : "forward"}`).then(r => r.json()); } catch (e) {}
   if (!quiz || !quiz.options || quiz.options.length < 4) {   // 出题失败直接跳过，不影响主流程
     session.idx++; save(); return step();
   }
+  const isRev = w.reverse && quiz.mode === "reverse" && quiz.prompt;
   $("#app").innerHTML = `<div class="card center">
     <h2>复习 ${session.idx + 1}/${session.queue.length}</h2>
-    <div><span class="big">${w.word}</span><button class="playw" data-t="${w.word}">▶</button></div>
-    <p class="muted" style="margin:10px 0 4px">选出正确词义：</p>
+    ${isRev
+      ? `<div><span class="big" style="font-size:30px">${quiz.prompt}</span></div><p class="muted" style="margin:10px 0 4px">回想它的英文单词：</p>`
+      : `<div><span class="big">${w.word}</span><button class="playw" data-t="${w.word}">▶</button></div><p class="muted" style="margin:10px 0 4px">选出正确词义：</p>`}
     <div style="text-align:left">${quiz.options.map((o, i) => `<button class="opt" data-i="${i}">${o.text}</button>`).join("")}</div>
     <div class="progress"><i style="width:${session.idx / session.queue.length * 100}%"></i></div>
   </div>`;
   bindPlays();
-  playText(w.word);
+  if (!isRev) playText(w.word);   // 反向回想不放音，避免泄题
   document.querySelectorAll(".opt").forEach(b => b.onclick = () => {
     const ok = quiz.options[+b.dataset.i].ok;
     document.querySelectorAll(".opt").forEach(x => {
@@ -643,10 +657,10 @@ async function showProbe(item) {
   });
 }
 
-/* v1.3 探测作答：全额证据（weight 1.0，与定级同级）；答错 → 进明日新词候选 */
+/* v1.4 探测作答：全额证据；正向猜测率 0.25，反向回想为 0；答错 → 进明日新词候选 */
 function answerProbe(w, ok) {
-  posteriorUpdate(w.pos || S.pointer, ok ? 1 : 0, 1.0);
-  S.log.push({ d: today(), word: w.word, rating: ok ? 4 : 1, kind: "probe" });
+  posteriorUpdate(w.pos || S.pointer, ok ? 1 : 0, 1.0, w.reverse ? 0 : 0.25);
+  S.log.push({ d: today(), word: w.word, rating: ok ? 4 : 1, kind: "probe", reverse: !!w.reverse });
   if (!ok && !S.cards[w.word] && !S.pendingNew.find(x => x.word === w.word)) {
     S.pendingNew.push({ word: w.word, pos: w.pos });
   }
@@ -692,6 +706,27 @@ async function wordDetail(word, pos) {
   return r.words.find(x => x.word === word) || r.words[0];
 }
 
+/* 例句曝光埋点：用于后续评估"薄弱词复现 → 3/7/30 天记忆效果" */
+function sentenceHash(text) {
+  let h = 2166136261;
+  for (const b of new TextEncoder().encode(text)) h = Math.imul(h ^ b, 16777619) >>> 0;
+  return h.toString(16);
+}
+function logExposure(word, source, text, played = false, score = null) {
+  if (!word) return;
+  S.log.push({ d: today(), ts: new Date().toISOString(), word, rating: 3, kind: "exposure",
+               source, sentenceId: sentenceHash(text), played, ...(score === null ? {} : { score }) });
+}
+function logSentenceExposures(text, source, played = false) {
+  if (!text) return;
+  const weak = [...new Set(S.log.filter(l => l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))];
+  const lower = text.toLowerCase();
+  for (const w of weak) {
+    const esc = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`\\b${esc}\\b`, "i").test(lower)) logExposure(w, source, text, played);
+  }
+}
+
 function sentenceBlock(word, personal, sents) {
   const TIER = { 1: "基础", 2: "进阶", 3: "挑战" };
   const list = Array.isArray(sents) ? sents : (sents ? [{ tier: 1, text: sents }] : []);
@@ -701,6 +736,8 @@ function sentenceBlock(word, personal, sents) {
     html += `<div class="sent"><span class="tag s">${TIER[s.tier] || "例句"}</span>${s.text}<button class="plays" data-t="${s.text}">▶</button><button class="plays bad" data-t="${s.text}" data-w="${word}" data-kind="static" title="换一句">↻</button>${s.zh ? `<div class="zh">${s.zh}</div>` : ""}</div>`;
   });
   if (!html) html = `<div class="sent" id="pendingSent"><span class="tag s">例句</span><span class="muted">生成中…</span></div>`;
+  if (personal) logSentenceExposures(personal.text, "personal", false);
+  list.forEach(s => logSentenceExposures(s.text, "trio", false));
   return { html, has: !!(personal || list.length), first: personal ? personal.text : (list[0] ? list[0].text : ""),
            texts: [...(personal ? [personal.text] : []), ...list.map(s => s.text)] };
 }
@@ -736,6 +773,7 @@ async function showLearn(item) {
       const exp = tokens(target), got = new Set(tokens(res.text));
       const hit = exp.filter(t => got.has(t)).length;
       const pct = Math.round(hit / exp.length * 100);
+      logExposure(w.word, "shadow", target, true, pct);
       const conf = Math.round((res.confidence || 0.7) * 100);
       $("#shadowOut").innerHTML = `识别：${res.text}<br>完整度 <span class="${pct >= 80 ? "hl" : "rec"}" style="font-size:18px;font-weight:700">${pct}%</span> · 置信度 <span class="${conf >= 75 ? "hl" : "rec"}" style="font-size:18px;font-weight:700">${conf}%</span>`;
     });
@@ -766,6 +804,7 @@ async function showLearn(item) {
     fetch(`${API}/api/v1/sentence/weave?word=${encodeURIComponent(w.word)}&weak=${encodeURIComponent(weakW)}&cap=${S.pointer + 10}&device=${deviceId()}`)
       .then(r => r.json()).then(r => {
         if (!r.text) return;
+        logExposure(weakW, "weave", r.text, false);
         const anchor = document.querySelector("#app .sense");
         if (!anchor) return;
         anchor.insertAdjacentHTML("afterend",
@@ -1045,6 +1084,69 @@ function showStats() {
   $("#bBack").onclick = home;
 }
 
+/* ---------------- 独立留出水平校验（不影响后验、卡片与学习计划） ---------------- */
+let validation = null;
+async function startValidation() {
+  const r = await fetch(`${API}/api/v1/placement/set?seed=${encodeURIComponent("validation-" + deviceId() + "-" + Date.now())}`).then(r => r.json());
+  const words = r.words.slice(0, 24).map((w, i) => ({ ...w, reverse: i % 2 === 1 }));
+  validation = { words, idx: 0, posterior: null, correct: 0 };
+  showValidation();
+}
+
+async function showValidation() {
+  if (!validation) return;
+  if (validation.idx >= validation.words.length) return finishValidation();
+  const w = validation.words[validation.idx];
+  let q = null;
+  try { q = await fetch(`${API}/api/v1/quiz?pos=${w.pos}&seed=${Date.now() % 99991}&mode=${w.reverse ? "reverse" : "forward"}`).then(r => r.json()); } catch (e) {}
+  if (!q || !q.options || q.options.length < 4) { validation.idx++; return showValidation(); }
+  const isRev = w.reverse && q.mode === "reverse" && q.prompt;
+  $("#app").innerHTML = `<div class="card center">
+    <h2>独立水平校验 ${validation.idx + 1}/${validation.words.length}</h2>
+    <p class="muted">只用于检验估值偏差，不影响学习计划</p>
+    ${isRev
+      ? `<div><span class="big" style="font-size:30px">${q.prompt}</span></div><p class="muted">回想它的英文单词：</p>`
+      : `<div><span class="big">${w.word}</span><button class="playw" data-t="${w.word}">▶</button></div><p class="muted">选出正确词义：</p>`}
+    <div style="text-align:left">${q.options.map((o, i) => `<button class="opt" data-i="${i}">${o.text}</button>`).join("")}</div>
+    <div class="progress"><i style="width:${validation.idx / validation.words.length * 100}%"></i></div>
+  </div>`;
+  bindPlays();
+  if (!isRev) playText(w.word);
+  document.querySelectorAll(".opt").forEach(b => b.onclick = () => {
+    const ok = q.options[+b.dataset.i].ok;
+    document.querySelectorAll(".opt").forEach(x => {
+      x.disabled = true;
+      if (q.options[+x.dataset.i].ok) x.classList.add("right");
+    });
+    if (!ok) b.classList.add("wrong");
+    validation.posterior = posteriorCalc(validation.posterior, w.pos, ok ? 1 : 0, 1.0, w.reverse ? 0 : 0.25);
+    if (ok) validation.correct++;
+    validation.idx++;
+    setTimeout(showValidation, 450);
+  });
+}
+
+function finishValidation() {
+  const mean = Math.round(posteriorMean(validation.posterior));
+  const std = Math.round(posteriorStd(validation.posterior));
+  const appMean = Math.round(postMean());
+  const delta = appMean - mean;
+  S.evalReport = { date: today(), mean, std, appMean, delta, correct: validation.correct, count: validation.words.length };
+  save();
+  const direction = Math.abs(delta) <= 500 ? "与当前估值基本一致" : (delta > 0 ? "当前估值可能偏高" : "当前估值可能偏低");
+  $("#app").innerHTML = `<div class="card center">
+    <h2>独立校验结果</h2>
+    <div class="score">${mean}</div>
+    <p class="muted">独立估值（±${std}） · 答对 ${validation.correct}/${validation.words.length}</p>
+    <p style="font-size:16px">当前学习系统估值：<b>${appMean}</b><br>差值（当前 − 独立）：<b>${delta > 0 ? "+" : ""}${delta}</b></p>
+    <p class="muted">${direction}<br>这次校验没有修改你的后验、卡片或后续发词位置。</p>
+    <div class="row"><button class="act" id="bValBack">返回设置</button><button class="ghost" id="bValAgain">重新校验</button></div>
+  </div>`;
+  validation = null;
+  $("#bValBack").onclick = showSettings;
+  $("#bValAgain").onclick = startValidation;
+}
+
 function showSettings() {
   const st = S.settings;
   $("#app").innerHTML = `<div class="card">
@@ -1058,6 +1160,9 @@ function showSettings() {
     <p class="muted" style="margin-top:12px">定级</p>
     <div class="row"><button class="ghost" style="flex:1;padding:9px" id="bReplace">重新定级（30 题重测词汇边界）</button></div>
     <p class="muted" style="font-size:12px">随时可测。已学单词、复习进度、连续天数全部保留，只更新词汇边界和后续新词起点。</p>
+    <p class="muted" style="margin-top:12px">估值校验</p>
+    <div class="row"><button class="ghost" style="flex:1;padding:9px" id="bValidation">独立水平校验（24 题，不影响学习计划）</button></div>
+    ${S.evalReport ? `<p class="muted" style="font-size:12px">上次 ${S.evalReport.date}：独立 ≈${S.evalReport.mean}，当前 ≈${S.evalReport.appMean}，差值 ${S.evalReport.delta > 0 ? "+" : ""}${S.evalReport.delta}</p>` : ""}
     <div class="row"><button class="act" id="bSave">保存</button></div>
   </div>`;
   document.querySelectorAll("[data-new]").forEach(b => b.onclick = () => { st.newPerDay = +b.dataset.new; showSettings(); });
@@ -1070,8 +1175,10 @@ function showSettings() {
   $("#bReplace").onclick = () => {
     if (!confirm("重新回答 30 道词义选择题（全新随机卷），更新词汇边界和新词起点。\n已学单词与进度全部保留。确定开始？")) return;
     S.posterior = null; S.probeCount = 0; S.wrongStreak = 0; S.track = null; quizSet = [];
+    S.placementResetAt = Date.now() / 1000;   // 告诉服务端：这是显式重测，不要合并回旧后验
     save(); place();
   };
+  $("#bValidation").onclick = startValidation;
   $("#bSave").onclick = () => { save(); home(); };
 }
 

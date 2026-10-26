@@ -6,7 +6,7 @@ struct Session {
     enum Item: Equatable {
         case review(word: String)
         case learn(word: NewWord)
-        case probe(word: NewWord)   // v1.3 水平探测题（4选1，无卡片负担）
+        case probe(word: NewWord, reverse: Bool)   // v1.4 水平探测题；reverse=true 检验回想而非再认
     }
     var queue: [Item] = []
     var idx = 0
@@ -14,6 +14,13 @@ struct Session {
     var reviewedToday = 0
     /// 当日验收测试进度（学完新词后的 4 选 1）
     var acceptanceIdx: Int?
+}
+
+struct ValidationSession {
+    var words: [PlacementItem]
+    var idx = 0
+    var posterior: [Double]?
+    var correct = 0
 }
 
 struct Auth: Equatable {
@@ -28,6 +35,7 @@ enum Route: Equatable {
     case auth(login: Bool)
     case home
     case placement
+    case validation
     case session
     case stats
     case settings
@@ -41,6 +49,7 @@ final class AppState {
     var auth: Auth?
     var route: Route = .welcome
     var session = Session()
+    var validation: ValidationSession?
     var placementSet: PlacementSet?
     var booted = false
     var syncMsg = ""
@@ -264,9 +273,44 @@ final class AppState {
         S.probeCount = 0
         S.wrongStreak = 0
         S.track = nil          // 追踪状态一并刷新（先验更换）
+        S.placementResetAt = Date().timeIntervalSince1970   // 显式重测，服务端不得合并回旧后验
         placementSet = nil
         save()
         route = .placement
+    }
+
+    /// 独立留出水平校验：单独维护一份后验，不写 S.posterior/log/cards/pendingNew，不影响学习计划
+    func startValidation() async {
+        guard let r = try? await api.placementSet(seed: "validation-\(deviceId())-\(Int(Date().timeIntervalSince1970))") else { return }
+        validation = ValidationSession(words: Array(r.words.prefix(24)))
+        route = .validation
+    }
+
+    func answerValidation(ok: Bool, countEvidence: Bool = true) {
+        guard var v = validation, v.idx < v.words.count else { return }
+        let w = v.words[v.idx]
+        let reverse = v.idx % 2 == 1
+        if countEvidence {
+            v.posterior = StudyEngine.posteriorCalc(v.posterior, rank: w.pos, resp: ok ? 1 : 0,
+                                                    weight: 1.0, guess: reverse ? 0 : 0.25)
+            if ok { v.correct += 1 }
+        }
+        v.idx += 1
+        validation = v
+        if v.idx >= v.words.count {
+            let mean = Int(StudyEngine.posteriorMean(v.posterior).rounded())
+            let std = Int(StudyEngine.posteriorStd(v.posterior).rounded())
+            let appMean = Int(StudyEngine.postMean(S).rounded())
+            S.evalReport = EvalReport(date: DayUtil.today(), mean: mean, std: std,
+                                      appMean: appMean, delta: appMean - mean,
+                                      correct: v.correct, count: v.words.count)
+            save()
+        }
+    }
+
+    func closeValidation() {
+        validation = nil
+        route = .settings
     }
 
     func switchAccount() {
@@ -317,9 +361,9 @@ final class AppState {
     }
 
     /// 水平观测（v1.2）：每次反馈都是对词汇量后验的一次带权观测
-    func observeLevel(pos: Int, known: Bool, weight: Double) {
+    func observeLevel(pos: Int, known: Bool, weight: Double, guess: Double = 0) {
         guard S.calibrated else { return }
-        StudyEngine.posteriorUpdate(&S, rank: pos, resp: known ? 1 : 0, weight: weight)
+        StudyEngine.posteriorUpdate(&S, rank: pos, resp: known ? 1 : 0, weight: weight, guess: guess)
     }
 
     func review(word: String, rating: Int, trackWeight: Double? = nil) async {
@@ -359,7 +403,7 @@ final class AppState {
         //  - 被动证据每日总权重封顶 1.5；验收测试（trackWeight 1.0）不受上限
         if let pos = S.cards[word]?.pos, S.calibrated {
             if let tw = trackWeight {
-                observeLevel(pos: pos, known: rating != 1, weight: tw)
+                observeLevel(pos: pos, known: rating != 1, weight: tw, guess: preStab >= 14 ? 0 : 0.25)
             } else {
                 var tr = S.track ?? TrackState()
                 if tr.dayWDay != today { tr.dayW = 0; tr.dayWDay = today }
@@ -368,7 +412,7 @@ final class AppState {
                 if rating == 1 { w = preStab >= 21 ? 0.4 : 0.2; known = false }
                 else if Double(pos) > StudyEngine.postMean(S) { w = 0.15 }
                 if w > 0 && (tr.dayW ?? 0) + w <= 1.5 {
-                    observeLevel(pos: pos, known: known, weight: w)
+                    observeLevel(pos: pos, known: known, weight: w, guess: preStab >= 14 ? 0 : 0.25)
                     tr.dayW = (tr.dayW ?? 0) + w
                     S.track = tr
                 }
@@ -430,8 +474,8 @@ final class AppState {
         save()
     }
 
-    /// v1.3 主动探测选词：上方近端 / 上方远端 / 下方回归检查 各 1 个（与 web 同规则）
-    private func pickProbes(reviewWords: [String], news: [NewWord]) async -> [NewWord] {
+    /// v1.4 主动探测选词：上方近端反向回想 / 上方远端正向再认 / 下方正向回归检查
+    private func pickProbes(reviewWords: [String], news: [NewWord]) async -> [(word: NewWord, reverse: Bool)] {
         guard S.calibrated, S.posterior != nil else { return [] }
         let today = DayUtil.today()
         // 每日总计 3 题：当天重建队列（继续复习/二次进入）不重复追加探测
@@ -442,13 +486,13 @@ final class AppState {
         let recentProbe = Set(S.log.filter { $0.kind == "probe" && $0.d >= DayUtil.addDays(today, -14) }.map(\.word))
         var busy = Set(reviewWords)
         news.forEach { busy.insert($0.word) }
-        let zones: [(Double, Double)] = [
-            (m + 0.5 * sd, m + 1.0 * sd),   // 上方近端：是不是已经更强了
-            (m + 1.5 * sd, m + 2.0 * sd),   // 上方远端：大幅进步的信号
-            (m - 1.0 * sd, m - 0.5 * sd),   // 下方：高估回归检查
+        let zones: [(Double, Double, Bool)] = [
+            (m + 0.5 * sd, m + 1.0 * sd, true),   // 上方近端：反向回想，检验是否真会而非眼熟
+            (m + 1.5 * sd, m + 2.0 * sd, false),  // 上方远端：正向再认，探大幅进步
+            (m - 1.0 * sd, m - 0.5 * sd, false),  // 下方：正向再认，高估回归检查
         ]
-        var out: [NewWord] = []
-        for (lo, hi) in zones {
+        var out: [(word: NewWord, reverse: Bool)] = []
+        for (lo, hi, reverse) in zones {
             if out.count >= need { break }
             let a = max(1, Int(lo.rounded())), b = min(10991, Int(hi.rounded()))
             guard a <= b else { continue }
@@ -459,23 +503,47 @@ final class AppState {
                       S.cards[w.word] == nil,
                       !recentProbe.contains(w.word),
                       !busy.contains(w.word),
-                      !out.contains(where: { $0.word == w.word }),
+                      !out.contains(where: { $0.word.word == w.word }),
                       !S.pendingNew.contains(where: { $0.word == w.word }) else { continue }
-                out.append(w)
+                out.append((word: w, reverse: reverse))
                 break
             }
         }
         return out
     }
 
-    /// v1.3 探测作答：全额证据（weight 1.0，与定级同级）；答错 → 进明日新词候选
-    func answerProbe(_ w: NewWord, ok: Bool) {
-        StudyEngine.posteriorUpdate(&S, rank: w.pos, resp: ok ? 1 : 0, weight: 1.0)
-        S.log.append(LogEntry(d: DayUtil.today(), word: w.word, rating: ok ? 4 : 1, kind: "probe"))
+    /// v1.4 探测作答：全额证据；正向猜测率 0.25，反向回想为 0；答错 → 进明日新词候选
+    func answerProbe(_ w: NewWord, ok: Bool, reverse: Bool) {
+        StudyEngine.posteriorUpdate(&S, rank: w.pos, resp: ok ? 1 : 0, weight: 1.0, guess: reverse ? 0 : 0.25)
+        S.log.append(LogEntry(d: DayUtil.today(), word: w.word, rating: ok ? 4 : 1, kind: "probe", reverse: reverse))
         if !ok, S.cards[w.word] == nil, !S.pendingNew.contains(where: { $0.word == w.word }) {
             S.pendingNew.append(NewWord(word: w.word, pos: w.pos))
         }
         save()
+    }
+
+    /// 例句曝光埋点：用于后续评估"薄弱词复现 → 3/7/30 天记忆效果"
+    private func sentenceHash(_ text: String) -> String {
+        var h: UInt32 = 2166136261
+        for b in text.utf8 { h = (h ^ UInt32(b)) &* 16777619 }
+        return String(h, radix: 16)
+    }
+
+    func logExposure(word: String, source: String, text: String, played: Bool, score: Int? = nil) {
+        S.log.append(LogEntry(d: DayUtil.today(), word: word, rating: 3, kind: "exposure",
+                              ts: DayUtil.isoString(Date()), source: source,
+                              sentenceId: sentenceHash(text), played: played, score: score))
+        save()
+    }
+
+    func logSentenceExposures(_ text: String, source: String, played: Bool) {
+        let lower = text.lowercased()
+        for w in StudyEngine.recentWeakWords(S, today: DayUtil.today()) {
+            let pattern = "\\b\(NSRegularExpression.escapedPattern(for: w.lowercased()))\\b"
+            if lower.range(of: pattern, options: .regularExpression) != nil {
+                logExposure(word: w, source: source, text: text, played: played)
+            }
+        }
     }
 
     /// 跟读结果入档：完整度 <60 记薄弱（进薄弱词管线，当晚就定制例句），≥60 记一次影子练习
@@ -483,6 +551,7 @@ final class AppState {
     func recordShadow(word: String, result: ShadowResult) {
         let rating = result.completeness < 60 ? 1 : 3
         S.log.append(LogEntry(d: DayUtil.today(), word: word, rating: rating, kind: "shadow"))
+        logExposure(word: word, source: "shadow", text: word, played: true, score: result.completeness)
         save()
     }
 
@@ -582,9 +651,9 @@ final class AppState {
         // 4选1 形式与复习测验无差别——用户无感知，证据全额（与定级同级 weight 1.0）
         let probes = await pickProbes(reviewWords: reviewsAll, news: news)
         var revBlock: [Session.Item] = reviewsAll.map { .review(word: $0) }
-        for w in probes {
+        for p in probes {
             let at = Int.random(in: 0...revBlock.count)
-            revBlock.insert(.probe(word: w), at: at)
+            revBlock.insert(.probe(word: p.word, reverse: p.reverse), at: at)
         }
 
         session = Session()

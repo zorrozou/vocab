@@ -91,6 +91,26 @@ def main():
     assert merged["personalized"]["apple"]["text"] == "new"
     assert merged["personalized"]["banana"]["text"] == "b"
 
+    # 显式重新定级：旧 probeCount 再大，也不能撤销新后验
+    reset_old = base()
+    reset_old["probeCount"] = 1000
+    reset_old["posterior"] = [1.0, 0.0]
+    reset_old["placementResetAt"] = 100.0
+    reset_new = base()
+    reset_new["probeCount"] = 12
+    reset_new["posterior"] = [0.0, 1.0]
+    reset_new["placementResetAt"] = 200.0
+    merged = merge_learning_states(reset_old, reset_new)
+    assert merged["probeCount"] == 12 and merged["posterior"] == [0.0, 1.0]
+    assert merged["placementResetAt"] == 200.0
+    # 老客户端没有 marker，但明确清空了后验，也识别为重置
+    reset_new2 = base()
+    reset_new2["probeCount"] = 0
+    reset_new2["posterior"] = None
+    merged = merge_learning_states(reset_old, reset_new2)
+    assert merged["probeCount"] == 0 and merged["posterior"] is None
+    assert merged["placementResetAt"] > 100.0
+
     print("PASS 多设备状态合并：日志并集/计数保真/卡片新旧/游标/后验/重新定级/个性化 全部通过")
 
 

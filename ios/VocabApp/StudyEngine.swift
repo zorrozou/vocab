@@ -75,34 +75,40 @@ enum StudyEngine {
 
     static func logistic(_ x: Double) -> Double { 1 / (1 + exp(-x)) }
 
-    /// 带权后验更新（v1.2 自适应水平追踪）：weight<1 的弱证据按 like^w 缩放（tempering）
-    static func posteriorUpdate(_ s: inout LearningState, rank: Int, resp: Double, weight: Double = 1.0) {
-        if s.posterior == nil {
-            s.posterior = [Double](repeating: 1.0 / Double(grid.count), count: grid.count)
-        }
+    /// 纯函数版 3PL 后验计算：独立校验可复用，不写 LearningState
+    static func posteriorCalc(_ post: [Double]?, rank: Int, resp: Double, weight: Double = 1.0, guess: Double = 0) -> [Double] {
+        let base = post ?? [Double](repeating: 1.0 / Double(grid.count), count: grid.count)
         var sum = 0.0
-        s.posterior = s.posterior!.enumerated().map { i, p in
-            let pk = logistic((grid[i] - Double(rank)) / 400)
+        let out = base.enumerated().map { i, p -> Double in
+            let pk = guess + (1 - guess) * logistic((grid[i] - Double(rank)) / 400)
             let raw = resp * pk + (1 - resp) * (1 - pk)
             let like = pow(raw, weight)
             let v = p * like
             sum += v
             return v
         }
-        if sum > 0 { s.posterior = s.posterior!.map { $0 / sum } }
+        return sum > 0 ? out.map { $0 / sum } : out
+    }
+
+    static func posteriorUpdate(_ s: inout LearningState, rank: Int, resp: Double, weight: Double = 1.0, guess: Double = 0) {
+        s.posterior = posteriorCalc(s.posterior, rank: rank, resp: resp, weight: weight, guess: guess)
         s.probeCount += 1
     }
 
-    static func postMean(_ s: LearningState) -> Double {
-        guard let p = s.posterior else { return 0 }
+    static func posteriorMean(_ p: [Double]?) -> Double {
+        guard let p else { return 0 }
         return zip(grid, p).map(*).reduce(0, +)
     }
 
-    static func postStd(_ s: LearningState) -> Double {
-        guard let p = s.posterior else { return 0 }
-        let m = postMean(s)
+    static func posteriorStd(_ p: [Double]?) -> Double {
+        guard let p else { return 0 }
+        let m = posteriorMean(p)
         return sqrt(zip(grid, p).map { ($0 - m) * ($0 - m) * $1 }.reduce(0, +))
     }
+
+    static func postMean(_ s: LearningState) -> Double { posteriorMean(s.posterior) }
+
+    static func postStd(_ s: LearningState) -> Double { posteriorStd(s.posterior) }
 
     /// v1.3 置信度扩散（借鉴 Glicko RD 增长）：每天一次，后验与 σ=100 高斯核卷积。
     /// 均值不变、std 缓慢回升（封顶 400）——水平会漂移，收敛后的后验保持"可被说服"

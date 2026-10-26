@@ -30,6 +30,8 @@ struct RootView: View {
                 HomeView()
             case .placement:
                 PlacementView()
+            case .validation:
+                ValidationView()
             case .session:
                 SessionView()
             case .stats:

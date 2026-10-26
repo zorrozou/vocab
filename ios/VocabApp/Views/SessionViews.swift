@@ -23,8 +23,8 @@ struct SessionView: View {
                 case .review(let word):
                     ReviewQuizView(word: word)
                         .id(word)
-                case .probe(let w):
-                    ProbeQuizView(item: w)
+                case .probe(let w, let reverse):
+                    ProbeQuizView(item: w, reverse: reverse)
                         .id("probe-" + w.word)
                 }
             } else if app.S.quizDay != DayUtil.today() && !learnedTodayWords.isEmpty {
@@ -172,8 +172,10 @@ struct LearnCardView: View {
         } else if let st = item.static, !st.isEmpty {
             sentences = [SentenceItem(tier: 1, text: st, zh: nil)]
         }
-        // 自动连播：单词 → 全部例句
+        // 自动连播：单词 → 全部例句；同时记录薄弱词的真实展示/播放曝光
         let texts = [personal?.text].compactMap { $0 } + sentences.map { $0.text }
+        if let p = personal { app.logSentenceExposures(p.text, source: "personal", played: true) }
+        sentences.forEach { app.logSentenceExposures($0.text, source: "trio", played: true) }
         app.audio.playSequence(word: item.word, sentences: texts, voice: app.S.settings.voice)
         // 例句不足三条且非个性化：按需补三句套装
         if personal == nil && sentences.count < 3 {
@@ -188,6 +190,7 @@ struct LearnCardView: View {
                             if personal == nil {
                                 let had = sentences.isEmpty
                                 sentences = r.sentences
+                                r.sentences.forEach { app.logSentenceExposures($0.text, source: "trio", played: true) }
                                 if had {
                                     app.audio.playSequence(word: item.word,
                                                            sentences: r.sentences.map { $0.text },
@@ -211,6 +214,7 @@ struct LearnCardView: View {
                     await MainActor.run {
                         guard !Task.isCancelled else { return }
                         weave = w
+                        app.logExposure(word: w.weak, source: "weave", text: w.text, played: false)
                     }
                 }
             }
@@ -377,11 +381,12 @@ struct ReviewQuizView: View {
     }
 }
 
-/// v1.3 水平探测题：与复习测验同形态（4选1），用户无感知；
-/// 作答即全额证据（weight 1.0），答错的词进明日新词候选。出题失败直接跳过，不阻塞主流程
+/// v1.4 水平探测题：与复习测验同形态；每日一题反向回想，检验是否真会而非眼熟。
+/// 正向猜测率 0.25，反向为 0；答错的词进明日新词候选。出题失败直接跳过，不阻塞主流程
 struct ProbeQuizView: View {
     @Environment(AppState.self) private var app
     let item: NewWord
+    let reverse: Bool
 
     @State private var quiz: Quiz?
     @State private var loading = true
@@ -398,23 +403,33 @@ struct ProbeQuizView: View {
                 VStack(spacing: 0) {
                     Spacer()
                     VStack(spacing: 12) {
-                        HStack(alignment: .center, spacing: 10) {
-                            BigWord(word: item.word)
-                            PlayButton(text: item.word)
+                        if reverse, let prompt = quiz?.prompt {
+                            Text(prompt)
+                                .font(.system(size: 30, weight: .bold))
+                                .foregroundStyle(Theme.text)
+                                .multilineTextAlignment(.center)
+                            Text("回想它的英文单词").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                        } else {
+                            HStack(alignment: .center, spacing: 10) {
+                                BigWord(word: item.word)
+                                PlayButton(text: item.word)
+                            }
+                            Text("选出正确词义").font(.system(size: 14)).foregroundStyle(Theme.muted)
                         }
-                        Text("选出正确词义").font(.system(size: 14)).foregroundStyle(Theme.muted)
                     }
                     Spacer()
                 }
                 .frame(maxWidth: .infinity)
-                .onAppear { app.audio.play(item.word, voice: app.S.settings.voice) }
+                .onAppear {
+                    if !reverse { app.audio.play(item.word, voice: app.S.settings.voice) }
+                }
             }
         }
         .safeAreaInset(edge: .bottom) {
             Group {
                 if let quiz {
                     QuizOptionsView(options: quiz.options) { ok in
-                        app.answerProbe(item, ok: ok)
+                        app.answerProbe(item, ok: ok, reverse: reverse)
                         app.session.idx += 1
                         app.save()
                     }
@@ -430,7 +445,7 @@ struct ProbeQuizView: View {
     private func loadQuiz() async {
         let pos = item.pos > 0 ? item.pos : app.S.pointer
         if let q = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991,
-                                                    mode: "forward"),
+                                                    mode: reverse ? "reverse" : "forward"),
            q.options.count >= 4 {
             quiz = q
             loading = false
@@ -584,6 +599,8 @@ struct AnswerCardView: View {
         // 此时绝不能再开播，否则旧卡声音会盖到新卡上
         guard !Task.isCancelled else { return }
         let texts = [personal?.text].compactMap { $0 } + sentences.map { $0.text }
+        if let p = personal { app.logSentenceExposures(p.text, source: "personal", played: true) }
+        sentences.forEach { app.logSentenceExposures($0.text, source: "trio", played: true) }
         app.audio.playSequence(word: word, sentences: texts, voice: app.S.settings.voice)
     }
 

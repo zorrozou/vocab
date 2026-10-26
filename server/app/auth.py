@@ -135,13 +135,26 @@ def merge_learning_states(old, new):
                 cards[w] = nc
     out["cards"] = cards
 
-    # 后验不能取平均：保留证据更多的一侧
-    if int(old.get("probeCount", 0)) > int(new.get("probeCount", 0)):
+    # 后验不能取平均：保留证据更多的一侧。
+    # 但重新定级是显式重置：placementResetAt 更新（或新客户端清空 posterior/probeCount）时，
+    # 必须接受新后验，绝不能用"旧探测次数更多"把重测撤销。
+    old_reset = float(old.get("placementResetAt") or 0)
+    new_reset = float(new.get("placementResetAt") or 0)
+    explicit_reset = (new_reset > old_reset or
+                      (new.get("posterior") is None and int(new.get("probeCount", 0)) == 0 and old.get("posterior") is not None))
+    if explicit_reset:
+        out["posterior"] = new.get("posterior")
+        out["probeCount"] = int(new.get("probeCount", 0))
+        out["track"] = new.get("track")
+        if new_reset <= old_reset:
+            out["placementResetAt"] = time.time()
+    elif int(old.get("probeCount", 0)) > int(new.get("probeCount", 0)):
         out["posterior"] = old.get("posterior")
         out["probeCount"] = old.get("probeCount", 0)
     else:
         out["posterior"] = new.get("posterior")
         out["probeCount"] = new.get("probeCount", 0)
+    out["placementResetAt"] = max(old_reset, float(out.get("placementResetAt") or 0))
 
     if old.get("frontier") == new.get("frontier"):
         out["pointer"] = max(int(old.get("pointer", 1)), int(new.get("pointer", 1)))
@@ -166,7 +179,7 @@ def merge_learning_states(old, new):
             for linked in ("weaveCount", "personalizedWeak"):
                 if field == "weaveDay" and linked == "weaveCount" or field == "personalizedDay" and linked == "personalizedWeak":
                     out[linked] = old.get(linked)
-    if str((old.get("track") or {}).get("evalDay") or "") > str((new.get("track") or {}).get("evalDay") or ""):
+    if not explicit_reset and str((old.get("track") or {}).get("evalDay") or "") > str((new.get("track") or {}).get("evalDay") or ""):
         out["track"] = old.get("track")
     out["streak"] = max(int(old.get("streak", 0)), int(new.get("streak", 0)))
     out["v"] = max(int(old.get("v", 1)), int(new.get("v", 1)))

@@ -23,10 +23,16 @@ struct CardState: Codable, Equatable {
 }
 
 struct LogEntry: Codable, Equatable {
-    var d: String             // UTC 日期 yyyy-MM-dd（与 web 的 toISOString().slice(0,10) 一致）
+    var d: String             // 本地日期 yyyy-MM-dd
     var word: String
-    var rating: Int           // 1 Again / 2 Hard / 3 Good / 4 Easy
-    var kind: String          // "learn" / "review"
+    var rating: Int           // 1 Again / 2 Hard / 3 Good / 4 Easy；曝光事件固定 3，不计薄弱
+    var kind: String          // "learn" / "review" / "probe" / "shadow" / "exposure"
+    var ts: String? = nil       // 精确时间（曝光效果分析用；老日志只有日期）
+    var reverse: Bool? = nil  // probe 是否反向回想
+    var source: String? = nil // exposure 来源：personal / trio / weave / shadow
+    var sentenceId: String? = nil
+    var played: Bool? = nil   // 是否实际播放/朗读
+    var score: Int? = nil     // 跟读完整度等百分制得分
 }
 
 struct Sense: Codable, Equatable {
@@ -102,6 +108,16 @@ struct TrackState: Codable, Equatable {
     var dayWDay: String?      // dayW 对应日期
 }
 
+struct EvalReport: Codable, Equatable {
+    var date: String
+    var mean: Int
+    var std: Int
+    var appMean: Int
+    var delta: Int
+    var correct: Int
+    var count: Int
+}
+
 struct Settings: Codable, Equatable {
     var newPerDay: Int = 10
     var dailyCap: Int = 100
@@ -142,6 +158,8 @@ struct LearningState: Codable, Equatable {
     var personalizedDay: String?
     var personalizedWeak: String?
     var track: TrackState?          // 自适应水平追踪状态（v1.2 新增，可选兼容旧存档）
+    var evalReport: EvalReport?     // 独立留出校验报告（v1.4；不参与学习调度）
+    var placementResetAt: Double?   // 显式重新定级时间戳，防止同步合并撤销重测
 
     init() {}
 
@@ -169,6 +187,8 @@ struct LearningState: Codable, Equatable {
         personalizedDay = try c.decodeIfPresent(String.self, forKey: .personalizedDay)
         personalizedWeak = try c.decodeIfPresent(String.self, forKey: .personalizedWeak)
         track = try c.decodeIfPresent(TrackState.self, forKey: .track)
+        evalReport = try c.decodeIfPresent(EvalReport.self, forKey: .evalReport)
+        placementResetAt = try c.decodeIfPresent(Double.self, forKey: .placementResetAt)
     }
 }
 

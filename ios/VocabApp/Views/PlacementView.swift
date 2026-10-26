@@ -107,7 +107,7 @@ struct PlacementView: View {
     }
 
     private func answer(_ q: Quiz, ok: Bool) {
-        StudyEngine.posteriorUpdate(&app.S, rank: q.pos, resp: ok ? 1 : 0)
+        StudyEngine.posteriorUpdate(&app.S, rank: q.pos, resp: ok ? 1 : 0, guess: 0.25)
         app.S.wrongStreak = ok ? 0 : app.S.wrongStreak + 1
         if !ok && !app.S.pendingNew.contains(where: { $0.word == q.word }) {
             app.S.pendingNew.append(NewWord(word: q.word, pos: q.pos))
