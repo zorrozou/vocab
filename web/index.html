@@ -626,7 +626,6 @@ async function place() {
     posteriorUpdate(w.pos, ok ? 1 : 0, 1.0, guessed ? 0.25 : 0);
     catMeans.push(Math.round(postMean()));
     S.log.push({ d: today(), word: w.word, rating: ok ? 4 : 1, kind: "placement" });
-    S.probeCount++;
     ladderCount++;
     if (ok) ladderScore++;
     if (!ok && !S.pendingNew.find(x => x.word === w.word)) S.pendingNew.push(w);

@@ -102,7 +102,6 @@ struct PlacementView: View {
         StudyEngine.posteriorUpdate(&app.S, rank: q.pos, resp: ok ? 1 : 0, guess: guessed ? 0.25 : 0)
         recentMeans.append(StudyEngine.postMean(app.S))
         app.S.log.append(LogEntry(d: DayUtil.today(), word: q.word, rating: ok ? 4 : 1, kind: "placement"))
-        app.S.probeCount += 1
         ladderCount += 1
         if ok { ladderScore += 1 }
         if !ok && !app.S.pendingNew.contains(where: { $0.word == q.word }) {
