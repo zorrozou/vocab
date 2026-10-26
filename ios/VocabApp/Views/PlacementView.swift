@@ -62,10 +62,11 @@ struct PlacementView: View {
                     VStack(spacing: 8) {
                         if let quiz, !loading {
                             QuizOptionsView(options: quiz.options) { ok in answer(quiz, ok: ok) }
+                            GhostButton(title: "不认识") { answer(quiz, ok: false, guessed: false) }
                         }
                         Text(probeCount >= 4
-                             ? "当前估计 ≈\(probeMean) 词 · 答错的词会自动加入学习计划"
-                             : "答错的词会自动加入学习计划 · 收敛后自动结束")
+                             ? "当前估计 ≈\(probeMean) 词 · 不确定请点「不认识」，不要猜"
+                             : "不确定请点「不认识」，不要猜")
                             .font(.system(size: 12)).foregroundStyle(Theme.muted)
                     }
                     .padding(.horizontal, 14)
@@ -122,8 +123,9 @@ struct PlacementView: View {
         app.audio.play(q.word, voice: app.S.settings.voice)
     }
 
-    private func answer(_ q: Quiz, ok: Bool) {
-        StudyEngine.posteriorUpdate(&app.S, rank: q.pos, resp: ok ? 1 : 0, guess: 0.25)
+    private func answer(_ q: Quiz, ok: Bool, guessed: Bool = true) {
+        StudyEngine.posteriorUpdate(&app.S, rank: q.pos, resp: ok ? 1 : 0, guess: guessed ? 0.25 : 0)
+        app.S.log.append(LogEntry(d: DayUtil.today(), word: q.word, rating: ok ? 4 : 1, kind: "placement"))
         recentMeans.append(StudyEngine.postMean(app.S))
         app.S.wrongStreak = ok ? 0 : app.S.wrongStreak + 1
         if !ok && !app.S.pendingNew.contains(where: { $0.word == q.word }) {

@@ -16,10 +16,10 @@ def logistic(x):
     return 1 / (1 + math.exp(-x))
 
 
-def update(post, rank, resp):
+def update(post, rank, resp, guess=0.25):
     out, s = [], 0.0
     for i, p in enumerate(post):
-        pk = 0.25 + 0.75 * logistic((GRID[i] - rank) / 400)
+        pk = guess + (1 - guess) * logistic((GRID[i] - rank) / 400)
         v = p * (resp * pk + (1 - resp) * (1 - pk))
         out.append(v)
         s += v
@@ -45,23 +45,30 @@ def one(true_level, rule, seed):
             return statistics.median(means[-5:]), q
         if rule == "mid" and q >= 18 and sd < 275:
             return statistics.median(means[-5:]), q
+        if rule in ("g35", "g40", "g50") and q >= 18 and sd < 275:
+            return statistics.median(means[-5:]), q
+        if rule == "mix" and q >= 18 and sd < 275:
+            return statistics.median(means[-5:]), q
         if rule == "old" and wrong_streak >= 8:
             return 1.0, q
         base = min(max(round(m), 1), 10987)
         rank = min(max(base + rng.randint(-150, 150), 1), 10987)
-        p = 0.25 + 0.75 * logistic((true_level - rank) / 400)
+        guess = 0.0 if (rule == "mix" and q % 3 == 0) else ({"g35": 0.35, "g40": 0.40, "g50": 0.50}.get(rule, 0.25))
+        p = guess + (1 - guess) * logistic((true_level - rank) / 400)
+        if rule == "mix" and q % 3 == 0:
+            p *= 0.75   # 反向回想比再认更难，模拟真实记忆差异
         resp = 1.0 if rng.random() < p else 0.0
-        post = update(post, rank, resp)
+        post = update(post, rank, resp, guess)
         means.append(mean_std(post)[0])
         wrong_streak = 0 if resp else wrong_streak + 1
     m, _ = mean_std(post)
-    return (statistics.median(means[-5:]) if rule in ("mid", "new") else m), 30
+    return (statistics.median(means[-5:]) if rule in ("mid", "new", "mix", "g35", "g40", "g50") else m), 30
 
 
 def main():
     for level in (1000, 3000, 6000):
         print(f"\n真实水平 {level}")
-        for rule in ("old", "mid", "new"):
+        for rule in ("old", "mid", "new", "mix", "g35", "g40", "g50"):
             results = [one(level, rule, 10000 + i) for i in range(200)]
             estimates = [x[0] for x in results]
             qs = [x[1] for x in results]

@@ -617,19 +617,21 @@ async function place() {
     <h2>智能定级 · 第 ${S.probeCount + 1} 题 · 选出正确词义</h2>
     <div><span class="big">${w.word}</span><button class="playw" data-t="${w.word}">▶</button></div>
     <div style="text-align:left;margin-top:10px">${w.options.map((o, i) => `<button class="opt" data-i="${i}">${o.text}</button>`).join("")}</div>
+    <div class="row" style="margin-top:10px"><button class="act ghost" id="bUnknown">不认识</button></div>
     <div class="progress"><i style="width:${Math.min(100, S.probeCount / 24 * 100)}%"></i></div>
-    <p class="muted" style="margin-top:10px">${S.probeCount >= 4 ? "当前估计 ≈" + Math.round(postMean()) + " 词 · " : ""}答错的词会自动加入学习计划 · 收敛后自动结束</p>
+    <p class="muted" style="margin-top:10px">${S.probeCount >= 4 ? "当前估计 ≈" + Math.round(postMean()) + " 词 · " : ""}不确定请点「不认识」，不要猜</p>
   </div>`;
   bindPlays();
   playText(w.word);
-  document.querySelectorAll(".opt").forEach(b => b.onclick = () => {
-    const ok = w.options[+b.dataset.i].ok;
+  const answer = (ok, guessed, btn) => {
     document.querySelectorAll(".opt").forEach(x => {
       x.disabled = true;
       if (w.options[+x.dataset.i].ok) x.classList.add("right");
     });
-    if (!ok) b.classList.add("wrong");
-    posteriorUpdate(w.pos, ok ? 1 : 0, 1.0, 0.25);
+    $("#bUnknown").disabled = true;
+    if (!ok && guessed && btn) btn.classList.add("wrong");
+    posteriorUpdate(w.pos, ok ? 1 : 0, 1.0, guessed ? 0.25 : 0);
+    S.log.push({ d: today(), word: w.word, rating: ok ? 4 : 1, kind: "placement" });
     catMeans.push(Math.round(postMean()));
     S.wrongStreak = ok ? 0 : (S.wrongStreak || 0) + 1;
     if (!ok && !S.pendingNew.find(x => x.word === w.word)) S.pendingNew.push(w);
@@ -638,7 +640,9 @@ async function place() {
       catPosVal = Math.min(Math.max(Math.round(postMean()), 1), 10987);
       save(); place();
     }, 650);
-  });
+  };
+  document.querySelectorAll(".opt").forEach(b => b.onclick = () => answer(w.options[+b.dataset.i].ok, true, b));
+  $("#bUnknown").onclick = () => answer(false, false, null);
 }
 function finishPlace(r) {
   S.calibrated = true; S.frontier = Math.max(1, r); S.pointer = S.frontier; save();
