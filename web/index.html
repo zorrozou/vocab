@@ -216,15 +216,23 @@ function ladderFallback(c, rating) {  // 端点不可用时的本地兜底
   c.due = addDays(today(), Math.max(1, Math.round(INTERVAL[c.stage] * mult)));
 }
 
+/* 该词上一次学习/复习日期（从日志推导，含历史老卡）：FSRS 必须知道真实经过天数，
+   否则稳定度不增长（2026-10-26 实测发现的 P0） */
+function lastReviewDate(word) {
+  const l = [...S.log].reverse().find(x => x.word === word && (x.kind === "learn" || x.kind === "review"));
+  return l ? l.d : null;
+}
+
 async function learn(word, pos, rating = 3) {
   let c = S.cards[word];
   const isNewCard = !c;
+  const lastReview = lastReviewDate(word);
   if (!c) c = S.cards[word] = { stage: 1, due: tomorrow(), lt: 0, pos };
   const body = c.fsrs
-    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating }
+    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: lastReview ? lastReview + "T08:00:00Z" : null }
     : isNewCard
       ? { is_new: true, rating }
-      : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating };
+      : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating, last_review: lastReview ? lastReview + "T08:00:00Z" : null };
   const r = await fsrsCall(body);
   if (r) { c.fsrs = r; c.due = r.due || new Date(addDays(today(), 1) + "T08:00:00").toISOString(); delete c.stage; }
   else ladderFallback(c, rating);
@@ -236,10 +244,11 @@ async function learn(word, pos, rating = 3) {
 async function review(word, rating, trackWeight) {
   const c = S.cards[word]; if (!c) return;
   const preStab = c.fsrs ? c.fsrs.stability : (LEGACY_STAB[c.stage] || 0);   // v1.3：成熟度用答前稳定度判断
+  const lastReview = lastReviewDate(word);   // 在写今日日志前取上一次记录
   S.log.push({ d: today(), word, rating, kind: "review" });
   const body = c.fsrs
-    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating }
-    : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating };
+    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: lastReview ? lastReview + "T08:00:00Z" : null }
+    : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating, last_review: lastReview ? lastReview + "T08:00:00Z" : null };
   const r = await fsrsCall(body);
   if (r) { c.fsrs = r; c.due = r.due || new Date(addDays(today(), 1) + "T08:00:00").toISOString(); if (rating === 1) c.lt = 0; delete c.stage; }
   else ladderFallback(c, rating);
@@ -366,6 +375,10 @@ async function ensureSentence(word) {
 /* v1.3 主动探测选词：上方近端 / 上方远端 / 下方回归检查 各 1 个 */
 async function pickProbes(reviewsAll, news) {
   if (!S.calibrated || !S.posterior) return [];
+  // 每日总计 3 题：当天重建队列（继续复习/二次进入）不重复追加探测
+  const already = S.log.filter(l => l.kind === "probe" && l.d === today()).length;
+  const need = 3 - already;
+  if (need <= 0) return [];
   const m = postMean(), sd = Math.max(60, postStd());
   const recentProbe = new Set(S.log.filter(l => l.kind === "probe" && l.d >= addDays(today(), -14)).map(l => l.word));
   const busy = new Set([...reviewsAll, ...news.map(w => w.word)]);
@@ -376,6 +389,7 @@ async function pickProbes(reviewsAll, news) {
   ];
   const out = [];
   for (const [lo, hi] of zones) {
+    if (out.length >= need) break;
     const a = Math.max(1, Math.round(lo)), b = Math.min(10991, Math.round(hi));
     if (a > b) continue;
     for (let tries = 0; tries < 6; tries++) {

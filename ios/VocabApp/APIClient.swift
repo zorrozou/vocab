@@ -148,6 +148,7 @@ actor APIClient {
         var difficulty: Double = 0
         var due: String?
         var rating: Int = 3
+        var step: Int?
         var last_review: String?
     }
 

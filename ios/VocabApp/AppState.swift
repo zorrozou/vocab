@@ -293,12 +293,18 @@ final class AppState {
 
     // MARK: 学习/复习评分写卡（FSRS 服务端 + 阶梯兜底）
 
+    /// 该词上一次学习/复习日期（从日志推导，含历史老卡），用于 FSRS 计算真实经过天数
+    private func lastReviewDate(_ word: String) -> String? {
+        S.log.last { $0.word == word && ($0.kind == "learn" || $0.kind == "review") }?.d
+    }
+
     func learn(word: String, pos: Int, rating: Int) async {
         let today = DayUtil.today()
+        let lastReview = lastReviewDate(word)
         var c = S.cards[word] ?? CardState(stage: 1, due: DayUtil.addDays(today, 1) + "T12:00:00Z",
                                            lt: 0, pos: pos, fsrs: nil)
         let isNewCard = S.cards[word] == nil
-        let body = StudyEngine.fsrsBody(for: S.cards[word], rating: rating, isNewCard: isNewCard)
+        let body = StudyEngine.fsrsBody(for: S.cards[word], rating: rating, isNewCard: isNewCard, lastReview: lastReview)
         if let r = try? await api.fsrsReview(body) {
             StudyEngine.applyFsrs(r, to: &c, today: today)
         } else {
@@ -319,6 +325,7 @@ final class AppState {
     func review(word: String, rating: Int, trackWeight: Double? = nil) async {
         guard var c = S.cards[word] else { return }
         let preStab = c.fsrs?.stability ?? Double(c.stage.flatMap { StudyEngine.ladderInterval[$0] } ?? 0)   // v1.3：成熟度用答前稳定度
+        let lastReview = lastReviewDate(word)   // 在写今日日志前取上一次记录
         let today = DayUtil.today()
         // 答错前快照（撤销用）：防止手滑误记「忘记」无法挽回
         if rating == 1 {
@@ -327,7 +334,7 @@ final class AppState {
             undoSnapshot = nil
         }
         S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "review"))
-        let body = StudyEngine.fsrsBody(for: c, rating: rating, isNewCard: false)
+        let body = StudyEngine.fsrsBody(for: c, rating: rating, isNewCard: false, lastReview: lastReview)
         if let r = try? await api.fsrsReview(body) {
             StudyEngine.applyFsrs(r, to: &c, today: today)
             if rating == 1 { c.lt = 0 }
@@ -426,8 +433,12 @@ final class AppState {
     /// v1.3 主动探测选词：上方近端 / 上方远端 / 下方回归检查 各 1 个（与 web 同规则）
     private func pickProbes(reviewWords: [String], news: [NewWord]) async -> [NewWord] {
         guard S.calibrated, S.posterior != nil else { return [] }
-        let m = StudyEngine.postMean(S), sd = max(60, StudyEngine.postStd(S))
         let today = DayUtil.today()
+        // 每日总计 3 题：当天重建队列（继续复习/二次进入）不重复追加探测
+        let already = S.log.filter { $0.kind == "probe" && $0.d == today }.count
+        let need = 3 - already
+        guard need > 0 else { return [] }
+        let m = StudyEngine.postMean(S), sd = max(60, StudyEngine.postStd(S))
         let recentProbe = Set(S.log.filter { $0.kind == "probe" && $0.d >= DayUtil.addDays(today, -14) }.map(\.word))
         var busy = Set(reviewWords)
         news.forEach { busy.insert($0.word) }
@@ -438,6 +449,7 @@ final class AppState {
         ]
         var out: [NewWord] = []
         for (lo, hi) in zones {
+            if out.count >= need { break }
             let a = max(1, Int(lo.rounded())), b = min(10991, Int(hi.rounded()))
             guard a <= b else { continue }
             for _ in 0..<6 {

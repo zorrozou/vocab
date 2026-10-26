@@ -857,8 +857,9 @@ class FsrsIn(BaseModel):
     difficulty: float = 0
     due: str | None = None
     rating: int = 3         # 1 Again / 2 Hard / 3 Good / 4 Easy
+    step: int | None = None         # Learning/Relearning 的当前步数；必须随卡状态往返，否则永远停在第 0 步
     now: str | None = None          # 模拟时钟（测试用；缺省用真实时间）
-    last_review: str | None = None  # 上次复习时间（模拟时钟配套）
+    last_review: str | None = None  # 上次复习时间（模拟时钟配套；生产也必须传）
 
 
 @app.post("/api/v1/fsrs/review")
@@ -873,12 +874,17 @@ def fsrs_review(body: FsrsIn):
         c.state = _FsrsState(body.state)
         c.stability = body.stability
         c.difficulty = body.difficulty
+        # Learning/Relearning 必须恢复 step；老客户端缺省按第 0 步兼容
+        c.step = body.step if body.step is not None else (0 if body.state in (1, 3) else None)
         if body.due:
             d = datetime.fromisoformat(body.due.replace("Z", "+00:00"))
             c.due = d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d
         if body.last_review:
             lr = datetime.fromisoformat(body.last_review.replace("Z", "+00:00"))
             c.last_review = lr.replace(tzinfo=timezone.utc) if lr.tzinfo is None else lr
+            # 客户端日志只有日期精度，同日多次复习/时区差可能出现未来时间：钳到 now，防负经过天数
+            if now and c.last_review > now:
+                c.last_review = now
         else:
             c.last_review = now or datetime.now(timezone.utc)
     c, log = FSRS.review_card(c, _FsrsRating(body.rating), review_datetime=now)
@@ -886,4 +892,5 @@ def fsrs_review(body: FsrsIn):
             "stability": round(c.stability, 3),
             "difficulty": round(c.difficulty, 3),
             "due": c.due.isoformat(),
+            "step": c.step,
             "scheduled_days": getattr(log, "scheduled_days", None)}

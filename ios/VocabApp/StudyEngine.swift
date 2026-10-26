@@ -16,11 +16,14 @@ enum StudyEngine {
 
     // MARK: FSRS 请求构造（新卡 / FSRS 卡 / 旧阶梯卡迁移）
 
-    static func fsrsBody(for c: CardState?, rating: Int, isNewCard: Bool) -> APIClient.FsrsIn {
+    /// lastReview：该词上一次学习/复习日期（YYYY-MM-DD，从日志推导），必须传给服务端；
+    /// 缺了它 FSRS 会把距上次复习算成 0 天，稳定度不增长（2026-10-26 实测发现的 P0）
+    static func fsrsBody(for c: CardState?, rating: Int, isNewCard: Bool, lastReview: String? = nil) -> APIClient.FsrsIn {
+        let lr = lastReview.map { $0 + "T08:00:00Z" }
         if let fsrs = c?.fsrs {
             return APIClient.FsrsIn(is_new: false, state: fsrs.state,
                                     stability: fsrs.stability, difficulty: fsrs.difficulty,
-                                    due: fsrs.due, rating: rating)
+                                    due: fsrs.due, rating: rating, step: fsrs.step, last_review: lr)
         }
         if isNewCard {
             return APIClient.FsrsIn(is_new: true, rating: rating)
@@ -31,14 +34,14 @@ enum StudyEngine {
         if let d = c?.due, d.count == 10 { due = d + "T12:00:00Z" }
         return APIClient.FsrsIn(is_new: false, state: 2,
                                 stability: legacyStab[stage] ?? 1, difficulty: 5,
-                                due: due, rating: rating)
+                                due: due, rating: rating, last_review: lr)
     }
 
     /// 应用服务端 FSRS 结果到卡片
     static func applyFsrs(_ r: FsrsResponse, to c: inout CardState, today: String) {
         c.fsrs = FsrsState(state: r.state, stability: r.stability,
                            difficulty: r.difficulty, due: r.due,
-                           scheduled_days: r.scheduled_days)
+                           scheduled_days: r.scheduled_days, step: r.step)
         c.due = r.due ?? DayUtil.isoString(
             Calendar.current.date(byAdding: .day, value: 1,
                                   to: DayUtil.parseISO(today + "T08:00:00Z") ?? Date()) ?? Date())

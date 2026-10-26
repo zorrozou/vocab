@@ -133,6 +133,17 @@ def mount_auth(app: FastAPI):
             raise HTTPException(401, "未登录或登录已过期")
         import json as _j
         conn = sqlite3.connect(USERS_DB)
+        # 多设备整包覆盖同步的最小防回退：同一次定级体系下，发词游标只允许前进。
+        # 旧设备/旧页面后写入时，不能把已跳位的 pointer 拉回过去（2026-10-26 线上数据发现）。
+        row = conn.execute("SELECT state_json FROM user_state WHERE user_id=?", (uid,)).fetchone()
+        if row:
+            try:
+                old = _j.loads(row[0])
+                if old.get("calibrated") and body.get("calibrated") and old.get("frontier") == body.get("frontier"):
+                    if int(body.get("pointer", 1)) < int(old.get("pointer", 1)):
+                        body["pointer"] = old["pointer"]
+            except Exception:
+                pass   # 存档异常不阻塞保存
         conn.execute("""INSERT INTO user_state(user_id, state_json, updated_at) VALUES(?,?,?)
                         ON CONFLICT(user_id) DO UPDATE SET state_json=excluded.state_json,
                         updated_at=excluded.updated_at""",
