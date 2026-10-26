@@ -51,6 +51,7 @@ final class AppState {
     var session = Session()
     var validation: ValidationSession?
     var placementSet: PlacementSet?
+    var placementSession = UUID()   // 每次重新定级更换，强制清空已考集合与 CAT 位置
     var booted = false
     var syncMsg = ""
 
@@ -281,6 +282,7 @@ final class AppState {
         S.track = nil          // 追踪状态一并刷新（先验更换）
         S.placementResetAt = Date().timeIntervalSince1970   // 显式重测，服务端不得合并回旧后验
         placementSet = nil
+        placementSession = UUID()
         save()
         route = .placement
     }

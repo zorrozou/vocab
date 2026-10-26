@@ -29,7 +29,7 @@ struct RootView: View {
             case .home:
                 HomeView()
             case .placement:
-                PlacementView()
+                PlacementView().id(app.placementSession)
             case .validation:
                 ValidationView()
             case .session:

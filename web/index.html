@@ -579,14 +579,18 @@ function home() {
 let catPosVal = 3000;
 let catAsked = new Set();
 async function place() {
+  // 首次/重新定级必须重置 CAT 会话：清空上次已考集合与探测位置
+  if (S.probeCount === 0 && !S.posterior) { catPosVal = 3000; catAsked = new Set(); }
   if (S.probeCount >= 12 && postStd() < 400) { finishPlace(Math.max(1, Math.round(postMean()))); return; }
   if (S.probeCount >= 30) { finishPlace(Math.max(1, Math.round(postMean()))); return; }
+  const basePos = catPosVal;
   let w = null, gotAny = false;
   // 高估值可能顶到词库末尾：同一已考词反复出现不是网络异常。
-  // 扩到 12 次尝试，并在末端回退 1000 位继续找未考词；仍无新词则按当前估值完成定级。
+  // 目标位置在估值附近随机扰动 ±150，避免每次重测得到完全相同的题序。
   for (let k = 0; k < 12; k++) {
+    const pos = Math.min(Math.max(basePos + Math.floor(Math.random() * 301) - 150, 1), 10987);
     try {
-      w = await fetch(`${API}/api/v1/quiz?pos=${catPosVal}&seed=${Date.now() % 99991}`).then(r => r.json());
+      w = await fetch(`${API}/api/v1/quiz?pos=${pos}&seed=${Date.now() % 99991}`).then(r => r.json());
       if (w && w.options) gotAny = true;
     } catch (e) {}
     if (w && w.options && w.options.length >= 4 && !catAsked.has(w.word)) break;

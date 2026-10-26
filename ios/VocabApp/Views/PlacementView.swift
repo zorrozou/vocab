@@ -87,11 +87,12 @@ struct PlacementView: View {
         loadFailed = false
         var q: Quiz? = nil
         var gotAny = false
-        // 高估值可能顶到词库末尾：同一已考词反复出现不是网络异常。
-        // 扩到 12 次尝试，末端回退 1000 位继续找未考词；仍无新词则按当前估值完成定级。
+        let basePos = catPos
+        // 目标位置在估值附近随机扰动 ±150，避免每次重测得到完全相同的题序
         for _ in 0..<12 {
+            let pos = min(max(basePos + Int.random(in: -150...150), 1), 10987)
             if let cand = try? await APIClient.shared.quiz(
-                pos: catPos, seed: Int(Date().timeIntervalSince1970) % 99991) {
+                pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991) {
                 gotAny = true
                 if cand.options.count >= 4, !askedWords.contains(cand.word) {
                     q = cand
