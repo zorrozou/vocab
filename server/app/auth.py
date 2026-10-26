@@ -67,6 +67,112 @@ class LoginIn(BaseModel):
     password: str
 
 
+def _log_key(entry):
+    import json as _j
+    return _j.dumps(entry, ensure_ascii=False, sort_keys=True)
+
+
+def merge_learning_states(old, new):
+    """多设备学习状态字段级合并，避免旧设备整包覆盖新进度。
+
+    规则：
+    - log：精确事件计数取最大值（同一事件不重复，真实重复学习不丢失）
+    - cards：按该词最近学习日期选较新的卡；同日取活动较多的一侧，平局取新写入
+    - posterior/probeCount：取累计探测证据更多的一份
+    - pointer：同一 frontier 只前进；frontier 变化视为重新定级，接受新游标
+    - pendingNew/personalized：按词合并；settings 取新写入的用户意图
+    """
+    if not old:
+        return new
+    if not new:
+        return old
+    import json as _j
+    from collections import Counter
+
+    out = dict(new)
+    old_logs = old.get("log") or []
+    new_logs = new.get("log") or []
+    ca, cb = Counter(_log_key(x) for x in old_logs), Counter(_log_key(x) for x in new_logs)
+    merged_logs = []
+    for key in ca.keys() | cb.keys():
+        entry = _j.loads(key)
+        merged_logs.extend([entry] * max(ca[key], cb[key]))
+    merged_logs.sort(key=lambda x: (x.get("d", ""), x.get("word", ""), x.get("kind", ""), x.get("rating", 0)))
+    out["log"] = merged_logs
+
+    # 每个词在两边的最近学习日/活动次数，用于选卡
+    def activity(logs):
+        result = {}
+        for x in logs:
+            if x.get("kind") not in ("learn", "review"):
+                continue
+            w = x.get("word")
+            if not w:
+                continue
+            day = x.get("d", "")
+            prev = result.get(w)
+            if prev is None or day > prev[0]:
+                result[w] = (day, 1)
+            elif day == prev[0]:
+                result[w] = (day, prev[1] + 1)
+        return result
+
+    ao, an = activity(old_logs), activity(new_logs)
+    old_cards = old.get("cards") or {}
+    new_cards = new.get("cards") or {}
+    cards = {}
+    for w in old_cards.keys() | new_cards.keys():
+        oc, nc = old_cards.get(w), new_cards.get(w)
+        if oc is None:
+            cards[w] = nc
+        elif nc is None:
+            cards[w] = oc
+        else:
+            oa, na = ao.get(w, ("", 0)), an.get(w, ("", 0))
+            if oa[0] > na[0] or (oa[0] == na[0] and oa[1] > na[1]):
+                cards[w] = oc
+            else:
+                cards[w] = nc
+    out["cards"] = cards
+
+    # 后验不能取平均：保留证据更多的一侧
+    if int(old.get("probeCount", 0)) > int(new.get("probeCount", 0)):
+        out["posterior"] = old.get("posterior")
+        out["probeCount"] = old.get("probeCount", 0)
+    else:
+        out["posterior"] = new.get("posterior")
+        out["probeCount"] = new.get("probeCount", 0)
+
+    if old.get("frontier") == new.get("frontier"):
+        out["pointer"] = max(int(old.get("pointer", 1)), int(new.get("pointer", 1)))
+    else:
+        out["frontier"] = new.get("frontier")
+        out["pointer"] = new.get("pointer", 1)
+    out["calibrated"] = bool(old.get("calibrated") or new.get("calibrated"))
+
+    pending = list(old.get("pendingNew") or [])
+    seen = {x.get("word") for x in pending}
+    pending.extend(x for x in (new.get("pendingNew") or []) if x.get("word") not in seen)
+    out["pendingNew"] = pending
+
+    personal = dict(old.get("personalized") or {})
+    personal.update(new.get("personalized") or {})
+    out["personalized"] = personal
+
+    # 日期型字段取较新；对应计数/说明跟随同一天的一侧
+    for field in ("lastDay", "quizDay", "weaveDay", "personalizedDay"):
+        if str(old.get(field) or "") > str(new.get(field) or ""):
+            out[field] = old.get(field)
+            for linked in ("weaveCount", "personalizedWeak"):
+                if field == "weaveDay" and linked == "weaveCount" or field == "personalizedDay" and linked == "personalizedWeak":
+                    out[linked] = old.get(linked)
+    if str((old.get("track") or {}).get("evalDay") or "") > str((new.get("track") or {}).get("evalDay") or ""):
+        out["track"] = old.get("track")
+    out["streak"] = max(int(old.get("streak", 0)), int(new.get("streak", 0)))
+    out["v"] = max(int(old.get("v", 1)), int(new.get("v", 1)))
+    return out
+
+
 def mount_auth(app: FastAPI):
     init_users()
 
@@ -133,15 +239,11 @@ def mount_auth(app: FastAPI):
             raise HTTPException(401, "未登录或登录已过期")
         import json as _j
         conn = sqlite3.connect(USERS_DB)
-        # 多设备整包覆盖同步的最小防回退：同一次定级体系下，发词游标只允许前进。
-        # 旧设备/旧页面后写入时，不能把已跳位的 pointer 拉回过去（2026-10-26 线上数据发现）。
+        # 多设备字段级合并：不再让旧设备用整包覆盖另一台设备已经产生的学习记录
         row = conn.execute("SELECT state_json FROM user_state WHERE user_id=?", (uid,)).fetchone()
         if row:
             try:
-                old = _j.loads(row[0])
-                if old.get("calibrated") and body.get("calibrated") and old.get("frontier") == body.get("frontier"):
-                    if int(body.get("pointer", 1)) < int(old.get("pointer", 1)):
-                        body["pointer"] = old["pointer"]
+                body = merge_learning_states(_j.loads(row[0]), body)
             except Exception:
                 pass   # 存档异常不阻塞保存
         conn.execute("""INSERT INTO user_state(user_id, state_json, updated_at) VALUES(?,?,?)
