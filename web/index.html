@@ -579,22 +579,60 @@ const PLACEMENT_BANDS = [
   { lo: 1, hi: 2000 }, { lo: 2001, hi: 4000 }, { lo: 4001, hi: 6000 },
   { lo: 6001, hi: 8000 }, { lo: 8001, hi: 10000 }, { lo: 10001, hi: 10987 }
 ];
-let ladderIdx = 2;
-let ladderScore = 0;
-let ladderCount = 0;
-let catMeans = [];
+let placePositions = [];
+let placeAnswers = [];
+
+function makePlacementPositions() {
+  const out = [];
+  for (const b of PLACEMENT_BANDS) {
+    const used = new Set();
+    while (used.size < 2) used.add(b.lo + Math.floor(Math.random() * (b.hi - b.lo + 1)));
+    used.forEach(p => out.push(p));
+  }
+  return out;
+}
+
 function catFinalMean() {
   const a = catMeans.slice(-5).sort((x, y) => x - y);
   return a.length ? Math.round(a[Math.floor(a.length / 2)]) : Math.max(1, Math.round(postMean()));
 }
+let catMeans = [];
+
+function placementEstimate() {
+  let estimate = PLACEMENT_BANDS[0].lo;
+  for (let i = 0; i < PLACEMENT_BANDS.length; i++) {
+    const b = PLACEMENT_BANDS[i];
+    const score = placeAnswers.slice(i * 5, i * 5 + 5).filter(Boolean).length;
+    if (score < 3) break;   // 低于60%：该区间不扎实，停在最后通过区间的估值
+    estimate = Math.min(b.hi, b.lo + Math.round((b.hi - b.lo) * (score - 1) / 5));
+  }
+  return estimate;
+}
+
+function posteriorAround(mean, sd = 500) {
+  const raw = GRID.map(g => Math.exp(-((g - mean) ** 2) / (2 * sd * sd)));
+  const sum = raw.reduce((a, b) => a + b, 0);
+  return raw.map(v => v / sum);
+}
+
+function placementScoreText() {
+  return PLACEMENT_BANDS.map((b, i) => {
+    const score = placeAnswers.slice(i * 2, i * 2 + 2).filter(Boolean).length;
+    return `${b.lo}~${b.hi}：${score}/2`;
+  }).join("　");
+}
 
 async function place() {
   if (S.probeCount === 0 && !S.posterior) {
-    ladderIdx = 2; ladderScore = 0; ladderCount = 0; catMeans = [];
+    placePositions = makePlacementPositions();
+    placeAnswers = [];
+    catMeans = [];
   }
   if (S.probeCount >= 30) { finishPlace(catFinalMean()); return; }
-  const b = PLACEMENT_BANDS[ladderIdx];
-  const pos = b.lo + Math.floor(Math.random() * (b.hi - b.lo + 1));
+  // 前 12 题每档 2 题覆盖全部级别；后 18 题在当前估计边界附近集中探测
+  const pos = S.probeCount < placePositions.length
+    ? placePositions[S.probeCount]
+    : Math.min(Math.max(Math.round(postMean()) + Math.floor(Math.random() * 301) - 150, 1), 10987);
   let w = null;
   for (let k = 0; k < 3; k++) {
     try { w = await fetch(`${API}/api/v1/quiz?pos=${pos}&seed=${Date.now() % 99991}`).then(r => r.json()); } catch (e) {}
@@ -606,8 +644,9 @@ async function place() {
     return;
   }
   renderChips();
+  const band = Math.floor(S.probeCount / 5) + 1;
   $("#app").innerHTML = `<div class="card center">
-    <h2>智能定级 · 第 ${S.probeCount + 1}/30 题 · 第 ${ladderIdx + 1} 区间</h2>
+    <h2>智能定级 · 第 ${S.probeCount + 1}/30 题 · 第 ${band} 区间</h2>
     <div><span class="big">${w.word}</span><button class="playw" data-t="${w.word}">▶</button></div>
     <div style="text-align:left;margin-top:10px">${w.options.map((o, i) => `<button class="opt" data-i="${i}">${o.text}</button>`).join("")}</div>
     <div class="row" style="margin-top:10px"><button class="act ghost" id="bUnknown">不认识</button></div>
@@ -623,35 +662,12 @@ async function place() {
     });
     $("#bUnknown").disabled = true;
     if (!ok && guessed && btn) btn.classList.add("wrong");
+    placeAnswers[S.probeCount] = ok;
     posteriorUpdate(w.pos, ok ? 1 : 0, 1.0, guessed ? 0.25 : 0);
     catMeans.push(Math.round(postMean()));
     S.log.push({ d: today(), word: w.word, rating: ok ? 4 : 1, kind: "placement" });
-    ladderCount++;
-    if (ok) ladderScore++;
     if (!ok && !S.pendingNew.find(x => x.word === w.word)) S.pendingNew.push(w);
-    setTimeout(() => {
-      if (ladderCount < 3) { save(); place(); return; }
-      if (ladderCount === 3) {
-        if (ladderScore === 3) {   // 3 连对升级
-          if (ladderIdx === PLACEMENT_BANDS.length - 1) { finishPlace(PLACEMENT_BANDS[ladderIdx].hi); return; }
-          ladderIdx++; ladderScore = 0; ladderCount = 0; save(); place(); return;
-        }
-        if (ladderScore <= 1) {   // ≤1 对降级
-          if (ladderIdx === 0) { finishPlace(1); return; }
-          ladderIdx--; ladderScore = 0; ladderCount = 0; save(); place(); return;
-        }
-      }
-      if (ladderCount < 5) { save(); place(); return; }   // 2 对补测 2 题
-      if (ladderScore >= 4) {   // 补测后 ≥4 对升级
-        if (ladderIdx === PLACEMENT_BANDS.length - 1) { finishPlace(PLACEMENT_BANDS[ladderIdx].hi); return; }
-        ladderIdx++; ladderScore = 0; ladderCount = 0; save(); place(); return;
-      }
-      if (ladderScore <= 2) {   // 补测后 ≤2 对降级
-        if (ladderIdx === 0) { finishPlace(1); return; }
-        ladderIdx--; ladderScore = 0; ladderCount = 0; save(); place(); return;
-      }
-      finishPlace(catFinalMean());   // 3/5 即当前边界
-    }, 450);
+    setTimeout(() => { save(); place(); }, 450);
   };
   document.querySelectorAll(".opt").forEach(b => b.onclick = () => answer(w.options[+b.dataset.i].ok, true, b));
   $("#bUnknown").onclick = () => answer(false, false, null);
@@ -661,11 +677,12 @@ function finishPlace(r) {
   S.calibrated = true;
   S.frontier = Math.max(1, r);
   S.pointer = S.frontier;
+  // 保留 30 题形成的后验供每日追踪，不用单点估值重置它
   save();
   $("#app").innerHTML = `<div class="card center">
     <h2>定级完成</h2>
     <div class="score">${S.frontier}</div>
-    <p class="muted">你的词汇边界 ≈ ${S.frontier}（${LVL_NAME[lvlOfPos(S.frontier)]}）<br>从 4001~6000 起逐级升降，共 ${S.probeCount} 题<br>新词将从这个位置开始，${S.pendingNew.length} 个答错词会优先补学</p>
+    <p class="muted">你的词汇边界 ≈ ${S.frontier}（${LVL_NAME[lvlOfPos(S.frontier)]}）<br>${placementScoreText()}<br>新词将从这个位置开始，${S.pendingNew.length} 个答错词会优先补学</p>
     <div class="row"><button class="act" id="bGo">开始学习</button></div>
   </div>`;
   renderChips();
