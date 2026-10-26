@@ -49,6 +49,32 @@ PTAG = {r["wordId"]: (r["pos"] or "") for r in _lx.execute("SELECT wordId, pos F
 VMAP = {r["variant"]: r["lemma"] for r in _lx.execute("SELECT variant, lemma FROM variant_map")}
 
 
+def lex_lemma(t):
+    """词形归一：优先 variant_map，其次常见英文变形兜底。
+    避免 asserted/making/running/studies 等合法变形被误判为"词库外"。"""
+    if t in VMAP:
+        return VMAP[t]
+    if t in WORD2ID:
+        return t
+    cands = []
+    if t.endswith("ies") and len(t) > 4:
+        cands.append(t[:-3] + "y")
+    if t.endswith("ed") and len(t) > 4:
+        cands.extend((t[:-2], t[:-1]))
+    if t.endswith("ing") and len(t) > 5:
+        cands.extend((t[:-3], t[:-3] + "e"))
+        if len(t) > 6 and t[-4] == t[-5]:
+            cands.append(t[:-4])   # running → run
+    if t.endswith("es") and len(t) > 3:
+        cands.extend((t[:-2], t[:-1]))
+    elif t.endswith("s") and len(t) > 3:
+        cands.append(t[:-1])
+    for c in cands:
+        if c in WORD2ID:
+            return c
+    return t
+
+
 def static_sentences(wid):
     """每档一条：Tatoeba 自然语料优先，LLM 生成补缺；template 占位句不对外"""
     rows = _lx.execute(
@@ -109,7 +135,7 @@ def validate(cand, target, recall, max_pos, max_len=MAX_LEN):
         return f"句长{len(ts)}超界"
     hit_t = hit_r = False
     for t in ts:
-        lemma = VMAP.get(t, t)
+        lemma = lex_lemma(t)
         wid = WORD2ID.get(lemma)
         if wid is None:
             return f"词库外词汇:{t}"
@@ -184,7 +210,7 @@ def validate_multi(cand, target, recalls, max_pos, max_len=16):
     oov = 0
     over = 0
     for t in ts:
-        lemma = VMAP.get(t, t)
+        lemma = lex_lemma(t)
         wid = WORD2ID.get(lemma)
         if wid is None:
             oov += 1
@@ -740,7 +766,9 @@ def sentence_trio(word: str = Query(min_length=1, max_length=40), weak: str = ""
     if not wid:
         return {"word": word, "sentences": []}
     rows = _lx.execute(
-        "SELECT text, tier, translation FROM sentence WHERE targetWordId=? AND genMethod LIKE 'llm-%'", (wid,)).fetchall()
+        """SELECT text, tier, translation FROM sentence
+           WHERE targetWordId=? AND genMethod LIKE 'llm-%'
+             AND COALESCE(flag,'') != 'reported'""", (wid,)).fetchall()
     have = {}
     for r in rows:
         have.setdefault(r["tier"], (r["text"], r["translation"] or ""))
@@ -751,8 +779,9 @@ def sentence_trio(word: str = Query(min_length=1, max_length=40), weak: str = ""
     sense = (SENSE.get(wid) or "")[:50]
     weaks = [x for x in weak.split(",") if x]
     recall = None
-    if weaks:
-        # 按目标词轮换薄弱词，保证全部薄弱词都被覆盖而不是总重复前几个
+    # 薄弱词按概率织入，而不是每个新词的基础句都强行带：
+    # 词级确定性抽样约 40%（同一词结果稳定），命中时按目标词轮换薄弱词，兼顾覆盖率
+    if weaks and (sum(ord(c) for c in word) + pos) % 100 < 40:
         recall = weaks[(sum(ord(c) for c in word) + pos) % len(weaks)]
     need = [t for t in (1, 2, 3) if t not in have]
     spec = []
@@ -777,17 +806,22 @@ def sentence_trio(word: str = Query(min_length=1, max_length=40), weak: str = ""
         cap_t = cap if tier == 1 else cap + 500   # 进阶/挑战档放宽近前方词
         hit_t = hit_r = (recall is None)
         for t in ts:
-            tw = WORD2ID.get(VMAP.get(t, t))
+            tw = WORD2ID.get(lex_lemma(t))
             if tw is None:
                 return f"词库外:{t}"
-            if POS_OF[tw] > cap_t and VMAP.get(t, t) not in (word, recall):
+            if POS_OF[tw] > cap_t and lex_lemma(t) not in (word, recall):
                 return f"超范围:{t}"
-            hit_t |= (VMAP.get(t, t) == word or t == word)
-            hit_r |= recall is not None and VMAP.get(t, t) == recall
+            hit_t |= (lex_lemma(t) == word or t == word)
+            hit_r |= recall is not None and lex_lemma(t) == recall
         if not hit_t:
             return "缺目标词"
         if tier == 1 and not hit_r:
             return "缺召回词"
+        # 与个性化例句同一质量门：语法/搭配/语义/场景四项最低分 <4 则不落库，
+        # 让上层用更自然的场景重试，避免"结构合法但不像人话"的句子进入缓存
+        score = quality_check(text, word, recall if tier == 1 else None)
+        if score < 4:
+            return f"自然度评分{score}<4"
         sid = _lx.execute("SELECT id FROM sense WHERE wordId=? AND role='core'", (wid,)).fetchone()[0]
         _lxw.execute("""INSERT INTO sentence(text, translation, wordIds, senseId, targetWordId, recallIds, genMethod, flag, tier)
                         VALUES(?,?,?,?,?,?,?,?,?)""",

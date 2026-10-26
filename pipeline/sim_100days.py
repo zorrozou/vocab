@@ -105,6 +105,7 @@ for day in range(1, DAYS + 1):
         rating = 1 if not recalled else rng.choices([4, 3, 2], weights=[0.25, 0.65, 0.10])[0]
         r = api("/api/v1/fsrs/review", {"state": fs["state"], "stability": fs["stability"],
                                         "difficulty": fs["difficulty"], "due": fs["due"], "rating": rating,
+                                        "step": fs.get("step"),
                                         "now": ds + "T12:00:00+00:00",
                                         "last_review": c.get("last_rev")})
         review_records.append((day, w, rating, fs.get("stability", 0), r.get("stability", 0), fs["due"], r["due"]))

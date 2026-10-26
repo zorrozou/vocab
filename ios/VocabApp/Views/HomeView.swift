@@ -72,7 +72,7 @@ struct HomeView: View {
     private var placementIntro: some View {
         Card {
             Text("首次使用 · 智能定级").font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
-            Text("30 道词义选择（4 选 1），\n系统根据你的真实答题成绩估计词汇量，\n把新词起点放到适合你的位置。")
+            Text("最多 30 道词义选择（4 选 1），难度随作答实时调整，\n系统根据你的真实答题成绩估计词汇量，\n把新词起点放到适合你的位置；收敛后会提前结束。")
                 .font(.system(size: 15)).foregroundStyle(Theme.text)
                 .multilineTextAlignment(.center)
             if app.S.probeCount > 0 {

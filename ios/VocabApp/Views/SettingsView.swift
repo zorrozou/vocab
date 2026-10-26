@@ -111,7 +111,7 @@ struct SettingsView: View {
             Button("开始重测") { app.startReplacement() }
             Button("取消", role: .cancel) {}
         } message: {
-            Text("重新回答 30 道词义选择题（全新随机卷），更新词汇边界和新词起点。已学单词与进度全部保留。")
+            Text("重新回答最多 30 道词义选择题（自适应难度、全新随机卷），更新词汇边界和新词起点。已学单词与进度全部保留。")
         }
     }
 

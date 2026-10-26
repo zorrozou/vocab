@@ -24,7 +24,9 @@ def call_llm(prompt):
 conn = sqlite3.connect("/home/ubuntu/vocab-api/data/lexicon_v0.1.sqlite", timeout=30)
 rows = conn.execute(
     """SELECT s.text, s.genMethod, e.word FROM sentence s JOIN lexicon_entry e ON e.id=s.targetWordId
-       WHERE s.genMethod='tatoeba' OR s.genMethod LIKE 'llm-%' ORDER BY RANDOM() LIMIT ?""", (N,)).fetchall()
+       WHERE (s.genMethod='tatoeba' OR s.genMethod LIKE 'llm-%')
+         AND COALESCE(s.flag,'') != 'reported'
+       ORDER BY RANDOM() LIMIT ?""", (N,)).fetchall()
 conn.close()
 
 pconn = sqlite3.connect("/home/ubuntu/vocab-api/data/personal.db", timeout=30)
