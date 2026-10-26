@@ -86,18 +86,27 @@ struct PlacementView: View {
         loading = true
         loadFailed = false
         var q: Quiz? = nil
-        for _ in 0..<3 {   // 位置无效/词重复时前移再试
+        var gotAny = false
+        // 高估值可能顶到词库末尾：同一已考词反复出现不是网络异常。
+        // 扩到 12 次尝试，末端回退 1000 位继续找未考词；仍无新词则按当前估值完成定级。
+        for _ in 0..<12 {
             if let cand = try? await APIClient.shared.quiz(
-                pos: catPos, seed: Int(Date().timeIntervalSince1970) % 99991),
-               cand.options.count >= 4, !askedWords.contains(cand.word) {
-                q = cand
-                break
+                pos: catPos, seed: Int(Date().timeIntervalSince1970) % 99991) {
+                gotAny = true
+                if cand.options.count >= 4, !askedWords.contains(cand.word) {
+                    q = cand
+                    break
+                }
             }
-            catPos = min(catPos + 25, 10987)
+            catPos = catPos >= 10987 ? max(1, catPos - 1000) : min(catPos + 25, 10987)
         }
         guard let q else {
-            loadFailed = true
-            loading = false
+            if gotAny {
+                finish(boundary: max(1, probeMean))   // 末端没有更多新题，正常收尾
+            } else {
+                loadFailed = true   // 只有真正请求失败才显示网络异常
+                loading = false
+            }
             return
         }
         askedWords.insert(q.word)
