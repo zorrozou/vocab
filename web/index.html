@@ -121,7 +121,11 @@ const save = () => {
   if (S.log.length > 1200) S.log = S.log.slice(-1200);
   localStorage.setItem("vocab_v1", JSON.stringify(S));
   localStorage.setItem("vocab_write_ts", String(Date.now() / 1000));   // 本机最新写入时刻（启动/登录比谁新用）
-  if (AUTH) { clearTimeout(save._t); save._t = setTimeout(pushState, 2000); }   // 登录后防抖推送服务器
+  if (AUTH) {
+    clearTimeout(save._t);
+    const owner = AUTH.userId, snapshot = JSON.parse(JSON.stringify(S));
+    save._t = setTimeout(() => pushState(owner, snapshot), 2000);
+  }   // 登录后防抖推送服务器；切号后旧任务不得写入新账号
 };
 let session = { queue: [], idx: 0, learnedToday: 0, reviewedToday: 0 };
 
@@ -246,10 +250,23 @@ async function learn(word, pos, rating = 3) {
   if (S.calibrated) posteriorUpdate(pos, rating === 1 ? 0 : 1, rating === 1 ? 1.0 : 0.5);
 }
 
+let undoSnapshot = null;
+function undoReview() {
+  if (!undoSnapshot) return;
+  S.cards[undoSnapshot.word] = undoSnapshot.card;
+  if (S.log.length > undoSnapshot.logCount) S.log.length = undoSnapshot.logCount;
+  undoSnapshot = null;
+  if (session.reviewedToday > 0) session.reviewedToday--;
+  save();
+}
+
 async function review(word, rating, trackWeight) {
   const c = S.cards[word]; if (!c) return;
   const preStab = c.fsrs ? c.fsrs.stability : (LEGACY_STAB[c.stage] || 0);   // v1.3：成熟度用答前稳定度判断
   const lastReview = lastReviewDate(word);   // 在写今日日志前取上一次记录
+  // 手滑误点「忘记」可撤销：评分前快照卡片与日志长度
+  if (rating === 1) undoSnapshot = { word, card: JSON.parse(JSON.stringify(c)), logCount: S.log.length };
+  else undoSnapshot = null;
   S.log.push({ d: today(), word, rating, kind: "review" });
   const body = c.fsrs
     ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: lastReview ? lastReview + "T08:00:00Z" : null }
@@ -914,8 +931,8 @@ async function answerCard(item, quizOk) {
           <button class="act ghost" id="r3">记得</button>
           <button class="act ok" id="r4">熟练</button>
         </div>`
-      : `<div class="row" style="margin-top:14px"><button class="act" id="rNext">继续 →</button></div>
-         <p class="muted center" style="margin-top:8px">已记为「忘记」，降级并明天再见</p>`}
+      : `<div class="row" style="margin-top:14px"><button class="ghost" id="rUndo">撤销忘记</button><button class="act" id="rNext">继续 →</button></div>
+         <p class="muted center" style="margin-top:8px">已记为「忘记」，降级并明天再见；误点可撤销重答</p>`}
   </div>`;
   bindPlays();
   autoPlaySequence(word, sb.texts);
@@ -923,6 +940,7 @@ async function answerCard(item, quizOk) {
   if (quizOk) {
     $("#r2").onclick = () => go(2); $("#r3").onclick = () => go(3); $("#r4").onclick = () => go(4);
   } else {
+    $("#rUndo").onclick = () => { undoReview(); showReview(item); };
     $("#rNext").onclick = () => { session.idx++; save(); step(); };
   }
 }
@@ -1204,18 +1222,22 @@ const IS_GUEST = () => !AUTH;
 
 function authHeaders() { return AUTH ? { Authorization: `Bearer ${AUTH.token}` } : {}; }
 
-async function pushState() {
+async function pushState(expectedOwner = AUTH && AUTH.userId, snapshot = S) {
+  if (!AUTH || AUTH.userId !== expectedOwner) return;   // 切换账号后，旧推送作废
   try {
-    await fetch(API + "/api/v1/me/state", { method: "PUT", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify(S) }).then(r => {
+    await fetch(API + "/api/v1/me/state", { method: "PUT", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify(snapshot) }).then(r => {
       if (!r.ok) throw new Error("HTTP " + r.status);   // 413 等非 200 也算失败
     });
     syncFailed = false; renderUserTag();
   } catch (e) { syncFailed = true; renderUserTag(); }   // 推送失败对用户可见（不再静默）
 }
-async function pullState() {
+async function pullState(expectedOwner = AUTH && AUTH.userId) {
+  if (!AUTH || AUTH.userId !== expectedOwner) return undefined;
   const r = await fetch(API + "/api/v1/me/state", { headers: authHeaders() });
   if (!r.ok) return undefined;
-  return await r.json();   // {state, updated_at}——updated_at 用于"谁新听谁的"
+  const out = await r.json();   // {state, updated_at}——updated_at 用于"谁新听谁的"
+  if (!AUTH || AUTH.userId !== expectedOwner) return undefined;   // 等待期间切号，旧响应作废
+  return out;
 }
 
 function renderUserTag() {
@@ -1278,6 +1300,7 @@ function authForm(mode) {
 }
 
 async function onAuthed(d, isRegister) {
+  clearTimeout(save._t);   // 取消旧账号延迟推送，防止旧状态写到新账号
   archiveCurrent();   // 先归档当前（游客或上一个账号）的进度
   quizSet = [];       // 换账号必须重抽定级题（否则新用户会做到上一个用户的卷子）
   AUTH = { userId: d.user.id, username: d.user.username, nickname: d.user.nickname, token: d.token };
@@ -1326,9 +1349,10 @@ async function userMenu() {
   </div>`;
   $("#mBack").onclick = home;
   $("#mSync").onclick = async () => { await pushState(); $("#mMsg").textContent = "✓ 已同步"; };
-  $("#mSwitch").onclick = () => { archiveCurrent(); quizSet = []; AUTH = null; localStorage.removeItem("vocab_auth"); renderUserTag(); welcome(); };
+  $("#mSwitch").onclick = () => { clearTimeout(save._t); archiveCurrent(); quizSet = []; AUTH = null; localStorage.removeItem("vocab_auth"); renderUserTag(); welcome(); };
   $("#mLogout").onclick = async () => {
     await pushState();
+    clearTimeout(save._t);
     try { await fetch(API + "/api/v1/auth/logout", { method: "POST", headers: authHeaders() }); } catch (e) {}
     archiveCurrent();
     AUTH = null;

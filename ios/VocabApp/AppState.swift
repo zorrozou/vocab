@@ -117,13 +117,15 @@ final class AppState {
         // 不瘦身的话状态会超过 nginx 64KB 限制导致推送静默 413——本次同步分歧的真凶）
         if S.log.count > 1200 { S.log.removeFirst(S.log.count - 1200) }
         saveLocal()
-        guard auth != nil else { return }
+        guard let owner = auth?.userId else { return }
+        let snapshot = S   // 值类型快照：防止切换账号后旧任务把新状态写错账号
         pushTask?.cancel()
         pushTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             guard let self, !Task.isCancelled else { return }
+            guard self.auth?.userId == owner else { return }   // 账号已切换，旧推送作废
             do {
-                try await self.api.pushState(self.S)
+                try await self.api.pushState(snapshot)
                 self.syncFailed = false
             } catch {
                 self.syncFailed = true   // 推送失败对用户可见（不再静默）
@@ -229,6 +231,8 @@ final class AppState {
     /// - 注册新账号：绝不并入当前内存进度（新账号 = 全新开始 + 定级）
     /// - 登录老账号且两端都空 → 才把当前（游客）进度并入
     func authed(_ r: AuthResponse, isRegistration: Bool = false) async {
+        pushTask?.cancel()   // 先取消旧账号延迟推送，防止旧状态写到新账号
+        pushTask = nil
         // 归档当前进度——但空状态不归档（切换/登出后 S 已被重置，
         // 此时归档会把游客等旧槽位覆盖成空白，造成进度丢失）
         if !S.cards.isEmpty || S.probeCount > 0 || !S.log.isEmpty {
@@ -238,6 +242,7 @@ final class AppState {
         let a = Auth(userId: r.user.id, username: r.user.username,
                      nickname: r.user.nickname, token: r.token)
         auth = a
+        let owner = a.userId
         await api.setToken(a.token)
         Keychain.save(a.token, for: "token")
         if let d = try? JSONEncoder().encode(r.user) {
@@ -246,6 +251,7 @@ final class AppState {
         UserDefaults.standard.set(false, forKey: "vocab_guest")
         // 服务器为准 → 但本机槽位比服务器新（有未推送的学习）则以本机为准并补推
         if let remote = try? await api.pullState(), let rs = remote.state {
+            guard auth?.userId == owner else { return }   // 等待期间又切号，旧账号响应不得落地
             let local = loadLocal(slot: slotKey, forUsername: r.user.username)
             let localTs = UserDefaults.standard.double(forKey: "vocab_write_\(slotKey)")
             if let local, localTs > (remote.updated_at ?? 0) + 2 {
@@ -314,6 +320,8 @@ final class AppState {
     }
 
     func switchAccount() {
+        pushTask?.cancel()
+        pushTask = nil
         saveLocal()
         auth = nil
         Task { await api.setToken(nil) }

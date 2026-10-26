@@ -286,7 +286,8 @@ struct ReviewQuizView: View {
             case .answering(let ok):
                 AnswerCardView(word: word, quizOk: ok, onNext: next, onUndo: {
                     app.undoReview()
-                    phase = .loading   // 撤销后回到本题重新作答
+                    // 撤销后直接回到本题选项；不能改成 loading——.task 不会再次执行，会永久卡住
+                    phase = quiz == nil ? .loading : .quizzing
                 })
             }
         }
