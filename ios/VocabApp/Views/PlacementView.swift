@@ -3,8 +3,9 @@ import SwiftUI
 /// 定级测试（CAT 自适应版）：每题出在当前后验边界上，收敛即停
 /// - 起点 3000 位；每答一题后验更新，下一题位置 = 当前估值均值（信息量最大）
 /// - 答错即时反馈为难度下降（惩罚）；答对上升（奖励）——双向自适应
-/// - 收敛（std<400 且 ≥12 题）提前结束；30 题兜底；连错 8 题安全网（按均值下限收）
-/// - 答错词自动进 pendingNew 优先补学（与旧版一致）
+/// - 收敛（≥18 题且 std<275）提前结束；30 题兜底；最终取最近 5 题均值的中位数
+/// - 答错即时反馈为难度下降（惩罚）；答对上升（奖励）——双向自适应
+/// - 答错词自动进 pendingNew 优先补学；连错不再突兀归零，继续用后续证据修正
 struct PlacementView: View {
     @Environment(AppState.self) private var app
     @State private var quiz: Quiz?
@@ -12,10 +13,15 @@ struct PlacementView: View {
     @State private var loadFailed = false
     @State private var askedWords = Set<String>()
     @State private var catPos = 3000            // CAT 起始探测位（词库中段）
+    @State private var recentMeans: [Double] = []   // 最终取最近 5 题中位数，降低单题波动
     @State private var finished: Int? = nil
 
     private var probeCount: Int { app.S.probeCount }
     private var probeMean: Int { Int(StudyEngine.postMean(app.S).rounded()) }
+    private var finalMean: Int {
+        let a = recentMeans.suffix(5).sorted()
+        return a.isEmpty ? max(1, probeMean) : Int(a[a.count / 2].rounded())
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -30,7 +36,7 @@ struct PlacementView: View {
                         Button("退出") { app.route = .home }.foregroundStyle(Theme.muted)
                     }
                     .padding(.horizontal, 16).padding(.vertical, 10)
-                    ProgressBar(value: min(1, Double(probeCount) / 24.0))   // 预期 12~24 题收敛
+                    ProgressBar(value: min(1, Double(probeCount) / 24.0))   // 通常 18~30 题收敛
                         .padding(.horizontal, 16)
                     // 题干居中于上方剩余空间
                     Spacer()
@@ -75,12 +81,12 @@ struct PlacementView: View {
     /// CAT 主循环的一步：在当前边界取一题
     private func loadNext() async {
         // 收敛判定：证据够窄就提前结束
-        if probeCount >= 12, StudyEngine.postStd(app.S) < 400 {
-            finish(boundary: max(1, probeMean))
+        if probeCount >= 18, StudyEngine.postStd(app.S) < 275 {
+            finish(boundary: finalMean)
             return
         }
         if probeCount >= 30 {   // 兜底上限
-            finish(boundary: max(1, probeMean))
+            finish(boundary: finalMean)
             return
         }
         loading = true
@@ -118,16 +124,13 @@ struct PlacementView: View {
 
     private func answer(_ q: Quiz, ok: Bool) {
         StudyEngine.posteriorUpdate(&app.S, rank: q.pos, resp: ok ? 1 : 0, guess: 0.25)
+        recentMeans.append(StudyEngine.postMean(app.S))
         app.S.wrongStreak = ok ? 0 : app.S.wrongStreak + 1
         if !ok && !app.S.pendingNew.contains(where: { $0.word == q.word }) {
             app.S.pendingNew.append(NewWord(word: q.word, pos: q.pos))
         }
         app.save()
-        if app.S.wrongStreak >= 8 {   // 安全网：纯新手直接收在低位
-            finish(boundary: 1)
-            return
-        }
-        // 下一题出在当前后验均值处（边界追踪）
+        // 连错 8 题不再突兀归零；继续用后续证据修正，最终取近 5 题中位数
         catPos = min(max(Int(StudyEngine.postMean(app.S).rounded()), 1), 10987)
         Task { await loadNext() }
     }

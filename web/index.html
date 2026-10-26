@@ -575,14 +575,20 @@ function home() {
 /* ---- 定级流程（CAT 自适应：每题出在当前后验边界上，收敛即停） ----
    起点 3000 位；每答一题后验更新，下一题位置 = 当前估值均值（信息量最大）。
    答错即时拉低估值=下一题更简单（惩罚）；答对拉高（奖励）。
-   收敛（std<400 且 ≥12 题）提前结束；30 题兜底；连错 8 题安全网。 */
+   收敛（≥18 题且 std<275）提前结束；30 题兜底；最终取最近 5 题中位数。
+   连错不再突兀归零，继续用后续证据修正。 */
 let catPosVal = 3000;
 let catAsked = new Set();
+let catMeans = [];
+function catFinalMean() {
+  const a = catMeans.slice(-5).sort((x, y) => x - y);
+  return a.length ? Math.round(a[Math.floor(a.length / 2)]) : Math.max(1, Math.round(postMean()));
+}
 async function place() {
   // 首次/重新定级必须重置 CAT 会话：清空上次已考集合与探测位置
-  if (S.probeCount === 0 && !S.posterior) { catPosVal = 3000; catAsked = new Set(); }
-  if (S.probeCount >= 12 && postStd() < 400) { finishPlace(Math.max(1, Math.round(postMean()))); return; }
-  if (S.probeCount >= 30) { finishPlace(Math.max(1, Math.round(postMean()))); return; }
+  if (S.probeCount === 0 && !S.posterior) { catPosVal = 3000; catAsked = new Set(); catMeans = []; }
+  if (S.probeCount >= 18 && postStd() < 275) { finishPlace(catFinalMean()); return; }
+  if (S.probeCount >= 30) { finishPlace(catFinalMean()); return; }
   const basePos = catPosVal;
   let w = null, gotAny = false;
   // 高估值可能顶到词库末尾：同一已考词反复出现不是网络异常。
@@ -624,11 +630,11 @@ async function place() {
     });
     if (!ok) b.classList.add("wrong");
     posteriorUpdate(w.pos, ok ? 1 : 0, 1.0, 0.25);
+    catMeans.push(Math.round(postMean()));
     S.wrongStreak = ok ? 0 : (S.wrongStreak || 0) + 1;
     if (!ok && !S.pendingNew.find(x => x.word === w.word)) S.pendingNew.push(w);
     setTimeout(() => {
-      if (S.wrongStreak >= 8) { finishPlace(1); return; }
-      // 下一题出在当前后验均值处（边界追踪）
+      // 连错 8 题不再突兀归零；继续用后续证据修正，最终取近 5 题中位数
       catPosVal = Math.min(Math.max(Math.round(postMean()), 1), 10987);
       save(); place();
     }, 650);
