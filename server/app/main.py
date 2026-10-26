@@ -882,6 +882,26 @@ from datetime import datetime, timezone
 from fsrs import Card as _FsrsCard, Rating as _FsrsRating, Scheduler as _FsrsScheduler, State as _FsrsState
 
 FSRS = _FsrsScheduler(desired_retention=0.9)
+_FSRS_USER_CACHE = {}
+
+
+def fsrs_for_user(uid):
+    """按用户加载 FSRS 优化参数；无优化文件/游客使用默认参数。
+    文件 mtime 变化时自动重载，无需重启服务。"""
+    if not uid:
+        return FSRS
+    path = DATA_DIR / f"fsrs_optimal_uid{uid}.json"
+    try:
+        mtime = path.stat().st_mtime
+    except FileNotFoundError:
+        return FSRS
+    cached = _FSRS_USER_CACHE.get(uid)
+    if cached and cached[0] == mtime:
+        return cached[1]
+    data = json.loads(path.read_text())
+    scheduler = _FsrsScheduler(parameters=data["parameters"], desired_retention=data.get("desired_retention", 0.9))
+    _FSRS_USER_CACHE[uid] = (mtime, scheduler)
+    return scheduler
 
 
 class FsrsIn(BaseModel):
@@ -897,7 +917,9 @@ class FsrsIn(BaseModel):
 
 
 @app.post("/api/v1/fsrs/review")
-def fsrs_review(body: FsrsIn):
+def fsrs_review(body: FsrsIn, authorization: str = Header(default="")):
+    uid = user_by_token(authorization)
+    scheduler = fsrs_for_user(uid)
     now = None
     if body.now:
         now = datetime.fromisoformat(body.now.replace("Z", "+00:00"))
@@ -921,7 +943,7 @@ def fsrs_review(body: FsrsIn):
                 c.last_review = now
         else:
             c.last_review = now or datetime.now(timezone.utc)
-    c, log = FSRS.review_card(c, _FsrsRating(body.rating), review_datetime=now)
+    c, log = scheduler.review_card(c, _FsrsRating(body.rating), review_datetime=now)
     return {"state": c.state.value,
             "stability": round(c.stability, 3),
             "difficulty": round(c.difficulty, 3),
