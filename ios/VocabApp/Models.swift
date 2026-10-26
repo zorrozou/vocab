@@ -118,6 +118,12 @@ struct EvalReport: Codable, Equatable {
     var count: Int
 }
 
+struct KnowledgeStat: Codable, Equatable {
+    var a: Double = 0
+    var b: Double = 0
+    var pos: Int?
+}
+
 struct Settings: Codable, Equatable {
     var newPerDay: Int = 10
     var dailyCap: Int = 100
@@ -160,6 +166,8 @@ struct LearningState: Codable, Equatable {
     var track: TrackState?          // 自适应水平追踪状态（v1.2 新增，可选兼容旧存档）
     var evalReport: EvalReport?     // 独立留出校验报告（v1.4；不参与学习调度）
     var placementResetAt: Double?   // 显式重新定级时间戳，防止同步合并撤销重测
+    var bandStats: [String: KnowledgeStat]?   // 各词汇量档位先验（v2.0 词级模型）
+    var knowledge: [String: KnowledgeStat]?   // 每词 a/b 证据（v2.0 词级模型）
 
     init() {}
 
@@ -189,6 +197,8 @@ struct LearningState: Codable, Equatable {
         track = try c.decodeIfPresent(TrackState.self, forKey: .track)
         evalReport = try c.decodeIfPresent(EvalReport.self, forKey: .evalReport)
         placementResetAt = try c.decodeIfPresent(Double.self, forKey: .placementResetAt)
+        bandStats = try c.decodeIfPresent([String: KnowledgeStat].self, forKey: .bandStats)
+        knowledge = try c.decodeIfPresent([String: KnowledgeStat].self, forKey: .knowledge)
     }
 }
 

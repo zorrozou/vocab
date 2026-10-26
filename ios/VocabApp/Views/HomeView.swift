@@ -100,11 +100,10 @@ struct HomeView: View {
                 StatCell(number: "\(app.S.settings.newPerDay)", label: "新词")
                 // v1.3：已校准就显示后验估值 + 滞回级别（不再显示发词游标）
                 if app.S.calibrated, app.S.posterior != nil {
-                    let m = Int(StudyEngine.postMean(app.S).rounded())
-                    let shown = app.S.track?.shownLevel ?? levelForPos(max(1, m))
-                    StatCell(number: "≈\(m) · \(levelDisplayName(shown))", label: "当前词汇量")
+                    let shown = app.S.track?.shownLevel ?? levelForPos(max(1, app.S.frontier))
+                    StatCell(number: "≈\(StudyEngine.expectedKnown(app.S)) · \(levelDisplayName(shown))", label: "预计认识")
                 } else {
-                    StatCell(number: "未定级", label: "当前词汇量")
+                    StatCell(number: "未定级", label: "预计认识")
                 }
             }
             Text("先复习到期单词，再学新词").font(.system(size: 12)).foregroundStyle(Theme.muted)

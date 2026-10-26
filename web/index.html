@@ -246,6 +246,7 @@ async function learn(word, pos, rating = 3) {
   if (r) { c.fsrs = r; c.due = r.due || new Date(addDays(today(), 1) + "T08:00:00").toISOString(); delete c.stage; }
   else ladderFallback(c, rating);
   S.log.push({ d: today(), word, rating, kind: "learn" });
+  recordKnowledge(word, pos, rating !== 1);
   // 水平追踪观测（v1.2）：不熟悉=强证据；学会了=自评弱证据
   if (S.calibrated) posteriorUpdate(pos, rating === 1 ? 0 : 1, rating === 1 ? 1.0 : 0.5);
 }
@@ -268,6 +269,7 @@ async function review(word, rating, trackWeight) {
   if (rating === 1) undoSnapshot = { word, card: JSON.parse(JSON.stringify(c)), logCount: S.log.length };
   else undoSnapshot = null;
   S.log.push({ d: today(), word, rating, kind: "review" });
+  recordKnowledge(word, c.pos || S.pointer, rating !== 1);
   const body = c.fsrs
     ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: lastReview ? lastReview + "T08:00:00Z" : null }
     : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating, last_review: lastReview ? lastReview + "T08:00:00Z" : null };
@@ -335,6 +337,83 @@ const posteriorStd = post => {
 };
 const postMean = () => posteriorMean(S.posterior);
 const postStd = () => posteriorStd(S.posterior);
+
+/* ---------------- v2.0 词级知识预测（HLR/BKT 思路） ----------------
+   每个词/每个档位保留 a/b 证据；已学卡片用 FSRS 的 R(t)，未学词用档位先验。
+   展示 ΣP(认识)，而不是把一次测试的点估值当成真实词汇量。 */
+function bandIndexOfPos(pos) {
+  for (let i = 0; i < PLACEMENT_BANDS.length; i++) {
+    if (pos >= PLACEMENT_BANDS[i].lo && pos <= PLACEMENT_BANDS[i].hi) return i;
+  }
+  return PLACEMENT_BANDS.length - 1;
+}
+
+function bandPrior(i) {
+  const st = S.bandStats && S.bandStats[i];
+  if (st && st.a + st.b > 0) return st.a / (st.a + st.b);
+  // 没有定级证据时用当前边界做弱先验，避免默认所有词都未知
+  const center = (PLACEMENT_BANDS[i].lo + PLACEMENT_BANDS[i].hi) / 2;
+  if (S.frontier) return Math.max(0.05, Math.min(0.95, logistic((S.frontier - center) / 400)));
+  return 0.5;
+}
+
+function knowledgeProb(word, pos) {
+  const c = S.cards[word];
+  if (c && c.fsrs) {
+    const last = lastReviewDate(word);
+    const elapsed = last ? Math.max(0, (Date.now() - new Date(last + "T08:00:00Z").getTime()) / 86400000) : 0;
+    return Math.pow(1 + 0.9805 * elapsed / Math.max(0.2, c.fsrs.stability), -0.1542);
+  }
+  const k = S.knowledge && S.knowledge[word];
+  if (k && k.a + k.b > 0) return k.a / (k.a + k.b);
+  return bandPrior(bandIndexOfPos(pos));
+}
+
+function expectedKnown() {
+  let total = 0;
+  const adjusted = new Set();
+  for (let i = 0; i < PLACEMENT_BANDS.length; i++) {
+    const b = PLACEMENT_BANDS[i];
+    const size = b.hi - b.lo + 1;
+    total += size * bandPrior(i);
+  }
+  // 有词级证据或卡片的词，用更准确的概率替换档位先验
+  const words = new Set([...Object.keys(S.knowledge || {}), ...Object.keys(S.cards || {})]);
+  words.forEach(w => {
+    const pos = (S.cards[w] && S.cards[w].pos) || (S.knowledge[w] && S.knowledge[w].pos) || S.pointer;
+    const idx = bandIndexOfPos(pos);
+    const size = PLACEMENT_BANDS[idx].hi - PLACEMENT_BANDS[idx].lo + 1;
+    total += knowledgeProb(w, pos) - bandPrior(idx);
+    adjusted.add(w);
+  });
+  return Math.max(0, Math.round(total));
+}
+
+function placementPointer() {
+  for (let i = 0; i < PLACEMENT_BANDS.length; i++) {
+    const b = PLACEMENT_BANDS[i];
+    const p = bandPrior(i);
+    if (p < 0.75) {
+      return Math.max(b.lo, Math.min(b.hi, b.lo + Math.floor((b.hi - b.lo + 1) * p)));
+    }
+  }
+  return PLACEMENT_BANDS[PLACEMENT_BANDS.length - 1].hi - 50;
+}
+
+function recordKnowledge(word, pos, ok, isPlacement = false) {
+  if (!S.knowledge) S.knowledge = {};
+  const k = S.knowledge[word] || { a: 0, b: 0, pos };
+  if (ok) k.a++; else k.b++;
+  k.pos = pos;
+  S.knowledge[word] = k;
+  if (isPlacement) {
+    const i = bandIndexOfPos(pos);
+    if (!S.bandStats) S.bandStats = {};
+    const st = S.bandStats[i] || { a: 0, b: 0 };
+    if (ok) st.a++; else st.b++;
+    S.bandStats[i] = st;
+  }
+}
 const converged = () => (postStd() < 500 && S.probeCount >= 12) || S.probeCount >= 40;
 
 /* ---------------- v1.3 置信度扩散：水平会漂移，系统保持"可被说服" ---------------- */
@@ -663,6 +742,7 @@ async function place() {
     $("#bUnknown").disabled = true;
     if (!ok && guessed && btn) btn.classList.add("wrong");
     placeAnswers[S.probeCount] = ok;
+    recordKnowledge(w.word, w.pos, ok, true);
     posteriorUpdate(w.pos, ok ? 1 : 0, 1.0, guessed ? 0.25 : 0);
     catMeans.push(Math.round(postMean()));
     S.log.push({ d: today(), word: w.word, rating: ok ? 4 : 1, kind: "placement" });
@@ -675,14 +755,14 @@ async function place() {
 
 function finishPlace(r) {
   S.calibrated = true;
-  S.frontier = Math.max(1, r);
+  S.frontier = placementPointer();
   S.pointer = S.frontier;
   // 保留 30 题形成的后验供每日追踪，不用单点估值重置它
   save();
   $("#app").innerHTML = `<div class="card center">
     <h2>定级完成</h2>
-    <div class="score">${S.frontier}</div>
-    <p class="muted">你的词汇边界 ≈ ${S.frontier}（${LVL_NAME[lvlOfPos(S.frontier)]}）<br>${placementScoreText()}<br>新词将从这个位置开始，${S.pendingNew.length} 个答错词会优先补学</p>
+    <div class="score">预计认识 ${expectedKnown()} 词</div>
+    <p class="muted">当前级别：${LVL_NAME[lvlOfPos(S.frontier)]} · 发词位置 ${S.frontier}<br>${placementScoreText()}<br>新词将从这个位置开始，${S.pendingNew.length} 个答错词会优先补学</p>
     <div class="row"><button class="act" id="bGo">开始学习</button></div>
   </div>`;
   renderChips();
@@ -1029,7 +1109,7 @@ function doneDay() {
       <div class="stat"><b>${session.learnedToday}</b><span>新词</span></div>
       <div class="stat"><b>${S.streak}</b><span>连续天数</span></div>
     </div>
-    ${S.calibrated && S.posterior ? `<p style="font-size:12px;color:#5f9cec;margin-top:8px">系统判断你的词汇量 ≈${Math.round(postMean())}（${LVL_NAME[(S.track && S.track.shownLevel) || lvlOfPos(Math.round(postMean()))]} · ±${Math.round(postStd())}），明天从这里发词</p><p class="muted" style="font-size:12px;margin-top:4px">今日水平证据：↑${S.log.filter(l => l.d === today() && ["learn", "review", "probe"].includes(l.kind) && l.rating >= 2).length} / ↓${S.log.filter(l => l.d === today() && ["learn", "review", "probe"].includes(l.kind) && l.rating === 1).length}（含 ${S.log.filter(l => l.d === today() && l.kind === "probe").length} 次水平探测）</p>${S.track && S.track.lastNote ? `<p class="muted" style="font-size:12px;margin-top:4px">${S.track.lastNote}</p>` : ""}` : ""}
+    ${S.calibrated && S.posterior ? `<p style="font-size:12px;color:#5f9cec;margin-top:8px">预计认识 ${expectedKnown()} 词（${LVL_NAME[(S.track && S.track.shownLevel) || lvlOfPos(S.frontier)]}），明天从 ${S.pointer} 附近发词</p><p class="muted" style="font-size:12px;margin-top:4px">今日水平证据：↑${S.log.filter(l => l.d === today() && ["learn", "review", "probe"].includes(l.kind) && l.rating >= 2).length} / ↓${S.log.filter(l => l.d === today() && ["learn", "review", "probe"].includes(l.kind) && l.rating === 1).length}（含 ${S.log.filter(l => l.d === today() && l.kind === "probe").length} 次水平探测）</p>${S.track && S.track.lastNote ? `<p class="muted" style="font-size:12px;margin-top:4px">${S.track.lastNote}</p>` : ""}` : ""}
     <div id="laterRow" style="margin-top:10px"></div>
     <div class="card" style="background:#12151a;margin-top:14px">
       <h2>今日薄弱词 · 个性化例句</h2>
@@ -1249,6 +1329,7 @@ function showSettings() {
   $("#bReplace").onclick = () => {
     if (!confirm("重新回答 30 道词义选择题（全新随机卷），更新词汇边界和新词起点。\n已学单词与进度全部保留。确定开始？")) return;
     S.posterior = null; S.probeCount = 0; S.wrongStreak = 0; S.track = null; quizSet = [];
+    S.bandStats = null;   // 重新定级重置档位先验；词级历史证据保留
     S.placementResetAt = Date.now() / 1000;   // 告诉服务端：这是显式重测，不要合并回旧后验
     save(); place();
   };

@@ -138,6 +138,7 @@ struct PlacementView: View {
 
     private func answer(_ q: Quiz, ok: Bool, guessed: Bool = true) {
         answers.append(ok)
+        StudyEngine.recordKnowledge(&app.S, word: q.word, pos: q.pos, ok: ok, isPlacement: true)
         StudyEngine.posteriorUpdate(&app.S, rank: q.pos, resp: ok ? 1 : 0, guess: guessed ? 0.25 : 0)
         recentMeans.append(StudyEngine.postMean(app.S))
         app.S.log.append(LogEntry(d: DayUtil.today(), word: q.word, rating: ok ? 4 : 1, kind: "placement"))
@@ -150,7 +151,7 @@ struct PlacementView: View {
 
     private func finish(boundary: Int) {
         app.S.calibrated = true
-        app.S.frontier = max(1, boundary)
+        app.S.frontier = StudyEngine.placementPointer(app.S)
         app.S.pointer = app.S.frontier
         // 保留 30 题形成的后验供每日追踪，不用单点估值重置它
         app.save()
@@ -162,9 +163,9 @@ struct PlacementView: View {
             Spacer()
             Card {
                 Text("定级完成").font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
-                Text("\(boundary)")
-                    .font(.system(size: 56, weight: .bold)).foregroundStyle(Theme.accentLight)
-                Text("你的词汇边界 ≈ \(boundary)（\(levelDisplayName(levelForPos(boundary)))）\n\(scoreText)\n新词将从这个位置开始，\(app.S.pendingNew.count) 个答错词会优先补学")
+                Text("预计认识 \(StudyEngine.expectedKnown(app.S)) 词")
+                    .font(.system(size: 34, weight: .bold)).foregroundStyle(Theme.accentLight)
+                Text("当前级别：\(levelDisplayName(levelForPos(boundary))) · 发词位置 \(boundary)\n\(scoreText)\n新词将从这个位置开始，\(app.S.pendingNew.count) 个答错词会优先补学")
                     .font(.system(size: 14)).foregroundStyle(Theme.muted)
                     .multilineTextAlignment(.center)
                 PrimaryButton(title: "开始学习") { app.route = .home }

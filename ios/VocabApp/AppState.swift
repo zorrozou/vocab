@@ -280,6 +280,7 @@ final class AppState {
         S.probeCount = 0
         S.wrongStreak = 0
         S.track = nil          // 追踪状态一并刷新（先验更换）
+        S.bandStats = nil      // 重新定级重置档位先验；词级历史证据保留
         S.placementResetAt = Date().timeIntervalSince1970   // 显式重测，服务端不得合并回旧后验
         placementSet = nil
         placementSession = UUID()
@@ -366,6 +367,7 @@ final class AppState {
         }
         S.cards[word] = c
         S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "learn"))
+        StudyEngine.recordKnowledge(&S, word: word, pos: pos, ok: rating != 1)
         // 水平追踪观测（v1.2）：不熟悉=强证据(resp 0, w1.0)；学会了=自评弱证据(resp 1, w0.5)
         observeLevel(pos: pos, known: rating != 1, weight: rating == 1 ? 1.0 : 0.5)
     }
@@ -388,6 +390,7 @@ final class AppState {
             undoSnapshot = nil
         }
         S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "review"))
+        StudyEngine.recordKnowledge(&S, word: word, pos: c.pos ?? S.pointer, ok: rating != 1)
         let body = StudyEngine.fsrsBody(for: c, rating: rating, isNewCard: false, lastReview: lastReview)
         if let r = try? await api.fsrsReview(body) {
             StudyEngine.applyFsrs(r, to: &c, today: today)

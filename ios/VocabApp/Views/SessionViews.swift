@@ -735,12 +735,10 @@ struct DoneView: View {
                             StatCell(number: "\(app.session.learnedToday)", label: "新词")
                             StatCell(number: "\(app.S.streak)", label: "连续天数")
                         }
-                        // v1.3 水平追踪透明化：估值 + 滞回级别 + 不确定度 + 今日证据
+                        // v2.0 词级知识预测：预计认识词数 + 滞回级别 + 今日证据
                         if app.S.calibrated, app.S.posterior != nil {
-                            let mean = Int(StudyEngine.postMean(app.S).rounded())
-                            let std = Int(StudyEngine.postStd(app.S).rounded())
-                            let shown = app.S.track?.shownLevel ?? levelForPos(max(1, mean))
-                            Text("系统判断你的词汇量 ≈\(mean)（\(levelDisplayName(shown)) · ±\(std)），明天从这里发词")
+                            let shown = app.S.track?.shownLevel ?? levelForPos(max(1, app.S.frontier))
+                            Text("预计认识 \(StudyEngine.expectedKnown(app.S)) 词（\(levelDisplayName(shown))），明天从 \(app.S.pointer) 附近发词")
                                 .font(.system(size: 12)).foregroundStyle(Theme.accentLight)
                             let todayLog = app.S.log.filter { $0.d == DayUtil.today() && ["learn", "review", "probe"].contains($0.kind) }
                             let ups = todayLog.filter { $0.rating >= 2 }.count

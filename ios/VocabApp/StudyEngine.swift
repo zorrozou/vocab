@@ -110,6 +110,74 @@ enum StudyEngine {
 
     static func postStd(_ s: LearningState) -> Double { posteriorStd(s.posterior) }
 
+    // MARK: v2.0 词级知识预测（HLR/BKT 思路）
+
+    static let placementBands = [(1, 2000), (2001, 4000), (4001, 6000),
+                                 (6001, 8000), (8001, 10000), (10001, 10987)]
+
+    static func bandIndex(of pos: Int) -> Int {
+        for (i, b) in placementBands.enumerated() where pos >= b.0 && pos <= b.1 { return i }
+        return placementBands.count - 1
+    }
+
+    static func bandPrior(_ s: LearningState, _ index: Int) -> Double {
+        if let st = s.bandStats?["\(index)"], st.a + st.b > 0 { return st.a / (st.a + st.b) }
+        let b = placementBands[index]
+        let center = Double(b.0 + b.1) / 2
+        if s.frontier > 0 { return max(0.05, min(0.95, logistic((Double(s.frontier) - center) / 400))) }
+        return 0.5
+    }
+
+    static func knowledgeProb(_ s: LearningState, word: String, pos: Int) -> Double {
+        if let c = s.cards[word], let fsrs = c.fsrs {
+            let last = s.log.last { $0.word == word && ($0.kind == "learn" || $0.kind == "review") }?.d
+            let elapsed = last.flatMap { DayUtil.parseISO($0 + "T08:00:00Z").map { max(0, Date().timeIntervalSince($0) / 86400) } } ?? 0
+            return pow(1 + 0.9805 * elapsed / max(0.2, fsrs.stability), -0.1542)
+        }
+        if let k = s.knowledge?[word], k.a + k.b > 0 { return k.a / (k.a + k.b) }
+        return bandPrior(s, bandIndex(of: pos))
+    }
+
+    static func expectedKnown(_ s: LearningState) -> Int {
+        var total = 0.0
+        for i in placementBands.indices {
+            let b = placementBands[i]
+            total += Double(b.1 - b.0 + 1) * bandPrior(s, i)
+        }
+        let words = Set((s.knowledge ?? [:]).keys).union(s.cards.keys)
+        for w in words {
+            let pos = s.cards[w]?.pos ?? s.knowledge?[w]?.pos ?? s.pointer
+            let idx = bandIndex(of: pos)
+            total += knowledgeProb(s, word: w, pos: pos) - bandPrior(s, idx)
+        }
+        return max(0, Int(total.rounded()))
+    }
+
+    static func placementPointer(_ s: LearningState) -> Int {
+        for (i, b) in placementBands.enumerated() {
+            let p = bandPrior(s, i)
+            if p < 0.75 {
+                return max(b.0, min(b.1, b.0 + Int(Double(b.1 - b.0 + 1) * p)))
+            }
+        }
+        return placementBands[placementBands.count - 1].1 - 50
+    }
+
+    static func recordKnowledge(_ s: inout LearningState, word: String, pos: Int, ok: Bool, isPlacement: Bool = false) {
+        var k = s.knowledge?[word] ?? KnowledgeStat(a: 0, b: 0, pos: pos)
+        if ok { k.a += 1 } else { k.b += 1 }
+        k.pos = pos
+        if s.knowledge == nil { s.knowledge = [:] }
+        s.knowledge?[word] = k
+        if isPlacement {
+            let idx = bandIndex(of: pos)
+            var st = s.bandStats?["\(idx)"] ?? KnowledgeStat(a: 0, b: 0, pos: nil)
+            if ok { st.a += 1 } else { st.b += 1 }
+            if s.bandStats == nil { s.bandStats = [:] }
+            s.bandStats?["\(idx)"] = st
+        }
+    }
+
     /// v1.3 置信度扩散（借鉴 Glicko RD 增长）：每天一次，后验与 σ=100 高斯核卷积。
     /// 均值不变、std 缓慢回升（封顶 400）——水平会漂移，收敛后的后验保持"可被说服"
     static func diffusePosterior(_ s: inout LearningState) {
