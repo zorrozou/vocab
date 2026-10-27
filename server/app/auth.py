@@ -72,6 +72,25 @@ def _log_key(entry):
     return _j.dumps(entry, ensure_ascii=False, sort_keys=True)
 
 
+def _merge_evidence_maps(old, new):
+    """v2.0 字段合并：缺字段的一端不能清空另一端；每词/每档保留证据更多的一侧。"""
+    if not old:
+        return new
+    if not new:
+        return old
+    out = dict(old)
+    for key, nv in new.items():
+        ov = out.get(key)
+        if ov is None:
+            out[key] = nv
+            continue
+        old_total = (ov.get("a", 0) or 0) + (ov.get("b", 0) or 0)
+        new_total = (nv.get("a", 0) or 0) + (nv.get("b", 0) or 0)
+        if new_total >= old_total:
+            out[key] = nv
+    return out
+
+
 def merge_learning_states(old, new):
     """多设备学习状态字段级合并，避免旧设备整包覆盖新进度。
 
@@ -98,7 +117,7 @@ def merge_learning_states(old, new):
         entry = _j.loads(key)
         merged_logs.extend([entry] * max(ca[key], cb[key]))
     merged_logs.sort(key=lambda x: (x.get("d", ""), x.get("word", ""), x.get("kind", ""), x.get("rating", 0)))
-    out["log"] = merged_logs
+    out["log"] = merged_logs[-1200:]   # 合并后也遵守客户端日志上限，防止跨设备状态无限膨胀
 
     # 每个词在两边的最近学习日/活动次数，用于选卡
     def activity(logs):
@@ -134,6 +153,9 @@ def merge_learning_states(old, new):
             else:
                 cards[w] = nc
     out["cards"] = cards
+    # v2.0 字段：不能像整包替换一样把 bandStats/knowledge 清空或覆盖
+    out["bandStats"] = _merge_evidence_maps(old.get("bandStats"), new.get("bandStats"))
+    out["knowledge"] = _merge_evidence_maps(old.get("knowledge"), new.get("knowledge"))
 
     # 后验不能取平均：保留证据更多的一侧。
     # 但重新定级是显式重置：placementResetAt 更新（或新客户端清空 posterior/probeCount）时，

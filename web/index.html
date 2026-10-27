@@ -238,7 +238,7 @@ async function learn(word, pos, rating = 3) {
   const lastReview = lastReviewDate(word);
   if (!c) c = S.cards[word] = { stage: 1, due: tomorrow(), lt: 0, pos };
   const body = c.fsrs
-    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: lastReview ? lastReview + "T08:00:00Z" : null }
+    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: c.fsrs.lastReview || (lastReview ? lastReview + "T08:00:00Z" : null) }
     : isNewCard
       ? { is_new: true, rating }
       : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating, last_review: lastReview ? lastReview + "T08:00:00Z" : null };
@@ -271,7 +271,7 @@ async function review(word, rating, trackWeight) {
   S.log.push({ d: today(), word, rating, kind: "review" });
   recordKnowledge(word, c.pos || S.pointer, rating !== 1);
   const body = c.fsrs
-    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: lastReview ? lastReview + "T08:00:00Z" : null }
+    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: c.fsrs.lastReview || (lastReview ? lastReview + "T08:00:00Z" : null) }
     : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating, last_review: lastReview ? lastReview + "T08:00:00Z" : null };
   const r = await fsrsCall(body);
   if (r) { c.fsrs = r; c.due = r.due || new Date(addDays(today(), 1) + "T08:00:00").toISOString(); if (rating === 1) c.lt = 0; delete c.stage; }
@@ -354,13 +354,13 @@ function bandPrior(i) {
   // 没有定级证据时用当前边界做弱先验，避免默认所有词都未知
   const center = (PLACEMENT_BANDS[i].lo + PLACEMENT_BANDS[i].hi) / 2;
   if (S.frontier) return Math.max(0.05, Math.min(0.95, logistic((S.frontier - center) / 400)));
-  return 0.5;
+  return 0.2;   // 没有定级证据时保持保守先验，避免默认每档都“会一半”导致预计认识词数虚高
 }
 
 function knowledgeProb(word, pos) {
   const c = S.cards[word];
   if (c && c.fsrs) {
-    const last = lastReviewDate(word);
+    const last = c.fsrs.lastReview || lastReviewDate(word);
     const elapsed = last ? Math.max(0, (Date.now() - new Date(last + "T08:00:00Z").getTime()) / 86400000) : 0;
     return Math.pow(1 + 0.9805 * elapsed / Math.max(0.2, c.fsrs.stability), -0.1542);
   }
@@ -881,6 +881,7 @@ function logSentenceExposures(text, source, played = false) {
 }
 
 function sentenceBlock(word, personal, sents) {
+  if (S.cards[word] && isMastered(S.cards[word])) personal = null;   // 已掌握词不再显示旧个性化例句
   const TIER = { 1: "基础", 2: "进阶", 3: "挑战" };
   const list = Array.isArray(sents) ? sents : (sents ? [{ tier: 1, text: sents }] : []);
   let html = "";
@@ -1097,8 +1098,16 @@ async function showReviewClassic(item) {
   $("#bFlip").onclick = () => answerCard(item, true);
 }
 
+/* 每日结算时清理已掌握词的个性化映射，防止毕业后继续展示 */
+function prunePersonalized() {
+  for (const w of Object.keys(S.personalized || {})) {
+    if (S.cards[w] && isMastered(S.cards[w])) delete S.personalized[w];
+  }
+}
+
 /* ---- 完成 + 自动触发个性化 ---- */
 function doneDay() {
+  prunePersonalized();
   if (S.lastDay !== today()) { S.streak = S.lastDay === addDays(today(), -1) ? S.streak + 1 : 1; S.lastDay = today(); }
   save(); renderChips();
   if (AUTH) pushState();   // 当日完成立即推服务器（不等防抖），手机端马上同步得到
@@ -1243,7 +1252,7 @@ let validation = null;
 async function startValidation() {
   const r = await fetch(`${API}/api/v1/placement/set?seed=${encodeURIComponent("validation-" + deviceId() + "-" + Date.now())}`).then(r => r.json());
   const words = r.words.slice(0, 24).map((w, i) => ({ ...w, reverse: i % 2 === 1 }));
-  validation = { words, idx: 0, posterior: null, correct: 0 };
+  validation = { words, idx: 0, posterior: null, correct: 0, failed: 0 };
   showValidation();
 }
 
@@ -1253,7 +1262,7 @@ async function showValidation() {
   const w = validation.words[validation.idx];
   let q = null;
   try { q = await fetch(`${API}/api/v1/quiz?pos=${w.pos}&seed=${Date.now() % 99991}&mode=${w.reverse ? "reverse" : "forward"}`).then(r => r.json()); } catch (e) {}
-  if (!q || !q.options || q.options.length < 4) { validation.idx++; return showValidation(); }
+  if (!q || !q.options || q.options.length < 4) { validation.failed++; validation.idx++; return showValidation(); }
   const isRev = w.reverse && q.mode === "reverse" && q.prompt;
   $("#app").innerHTML = `<div class="card center">
     <h2>独立水平校验 ${validation.idx + 1}/${validation.words.length}</h2>
@@ -1281,6 +1290,17 @@ async function showValidation() {
 }
 
 function finishValidation() {
+  if (validation.failed > 0 || !validation.posterior) {
+    $("#app").innerHTML = `<div class="card center">
+      <h2>校验暂不可用</h2>
+      <p class="muted">部分题目加载失败，本次结果不作为估值依据。请重试。</p>
+      <div class="row"><button class="act" id="bValRetry">重新校验</button><button class="ghost" id="bValBack">返回设置</button></div>
+    </div>`;
+    validation = null;
+    $("#bValRetry").onclick = startValidation;
+    $("#bValBack").onclick = showSettings;
+    return;
+  }
   const mean = Math.round(posteriorMean(validation.posterior));
   const std = Math.round(posteriorStd(validation.posterior));
   const appMean = Math.round(postMean());
@@ -1380,6 +1400,7 @@ async function pushState(expectedOwner = AUTH && AUTH.userId, snapshot = S) {
       if (!r.ok) throw new Error("HTTP " + r.status);   // 413 等非 200 也算失败
     });
     syncFailed = false; renderUserTag();
+    localStorage.setItem("vocab_last_sync_ts", String(Date.now() / 1000));
   } catch (e) { handleSyncError(e); }
 }
 async function pullState(expectedOwner = AUTH && AUTH.userId) {
@@ -1389,6 +1410,21 @@ async function pullState(expectedOwner = AUTH && AUTH.userId) {
   const out = await r.json();   // {state, updated_at}——updated_at 用于"谁新听谁的"
   if (!AUTH || AUTH.userId !== expectedOwner) return undefined;   // 等待期间切号，旧响应作废
   return out;
+}
+
+/* 有未同步修改先补推，再拉服务器合并结果；没有未同步修改则以服务器为准。
+   避免“本地时间新”被误当成“本地内容更新”而覆盖新服务器状态。 */
+async function syncFromServer() {
+  const localTs = +(localStorage.getItem("vocab_write_ts") || 0);
+  const lastSync = +(localStorage.getItem("vocab_last_sync_ts") || 0);
+  if (AUTH && localTs > lastSync + 0.5) await pushState();
+  const remote = await pullState();
+  if (remote && remote.state) {
+    S = Object.assign(defaultState(), remote.state);
+    localStorage.setItem("vocab_v1", JSON.stringify(S));
+    return true;
+  }
+  return false;
 }
 
 function renderUserTag() {
@@ -1457,26 +1493,19 @@ async function onAuthed(d, isRegister) {
   AUTH = { userId: d.user.id, username: d.user.username, nickname: d.user.nickname, token: d.token };
   localStorage.setItem("vocab_auth", JSON.stringify(AUTH));
   localStorage.removeItem("vocab_guest");
-  const server = await pullState();
+  const hasRemote = await syncFromServer();
   const slotKey = `vocab_v1_u${AUTH.userId}`;
-  if (server && server.state) {
-    // 谁新听谁的：本机有比服务器更新的未推送学习时，保留本机并补推（防旧档抹新档）
-    const localTs = +(localStorage.getItem("vocab_write_ts") || 0);
-    if (localTs > (server.updated_at || 0) + 2) {
-      pushState();
+  if (!hasRemote) {
+    if (loadSlot(slotKey)) {
+      S = Object.assign(defaultState(), S);
+      pushState();                      // 本机有这个账号的存档 → 推上服务器
+    } else if (!isRegister && Object.keys(S.cards || {}).length) {
+      pushState();                      // 游客进度并入老账号（仅登录时）
     } else {
-      S = Object.assign(defaultState(), server.state);   // 服务器为准 + 默认字段兜底
+      S = defaultState();               // 注册新账号 = 全新开始（出定级），不并入任何现成进度
       localStorage.setItem("vocab_v1", JSON.stringify(S));
+      pushState();
     }
-  } else if (loadSlot(slotKey)) {
-    S = Object.assign(defaultState(), S);
-    pushState();                      // 本机有这个账号的存档 → 推上服务器
-  } else if (!isRegister && Object.keys(S.cards || {}).length) {
-    pushState();                      // 游客进度并入老账号（仅登录时）
-  } else {
-    S = defaultState();               // 注册新账号 = 全新开始（出定级），不并入任何现成进度
-    localStorage.setItem("vocab_v1", JSON.stringify(S));
-    pushState();
   }
   renderUserTag();
   home();
@@ -1523,20 +1552,7 @@ $("#btnUser").onclick = userMenu;
 function boot() {
   renderUserTag();
   if (AUTH) {
-    pullState().then(remote => {
-      if (remote && remote.state) {
-        // 谁新听谁的（不再服务器无条件覆盖）：本机比服务器新（防抖推送没来得及发/断网）时保留本机并补推，
-        // 否则学过的词会被旧档抹掉、第二天当新词重发（用户实测踩到两次）
-        const localTs = +(localStorage.getItem("vocab_write_ts") || 0);
-        if (localTs > (remote.updated_at || 0) + 2) {
-          pushState();
-        } else {
-          S = Object.assign(defaultState(), remote.state);
-          localStorage.setItem("vocab_v1", JSON.stringify(S));
-        }
-      }
-      home();
-    }).catch(() => home());
+    syncFromServer().then(() => home()).catch(() => home());
   } else if (localStorage.getItem("vocab_guest")) {
     home();
   } else {

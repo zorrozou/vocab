@@ -111,6 +111,23 @@ def main():
     assert merged["probeCount"] == 0 and merged["posterior"] is None
     assert merged["placementResetAt"] > 100.0
 
+    # v2.0 新字段：缺字段不清空，证据更多的一侧优先；日志合并后仍受上限
+    rich = base()
+    rich["bandStats"] = {"2": {"a": 3, "b": 1}, "3": {"a": 1, "b": 2}}
+    rich["knowledge"] = {"apple": {"a": 4, "b": 1, "pos": 3000}}
+    poor = base()
+    poor["log"] = [log("2026-10-20", f"w{i}") for i in range(1300)]
+    merged = merge_learning_states(rich, poor)
+    assert merged["bandStats"]["2"]["a"] == 3
+    assert merged["knowledge"]["apple"]["a"] == 4
+    assert len(merged["log"]) == 1200
+    newer = base()
+    newer["bandStats"] = {"2": {"a": 5, "b": 0}}
+    newer["knowledge"] = {"apple": {"a": 6, "b": 0, "pos": 3000}}
+    merged = merge_learning_states(rich, newer)
+    assert merged["bandStats"]["2"]["a"] == 5
+    assert merged["knowledge"]["apple"]["a"] == 6
+
     print("PASS 多设备状态合并：日志并集/计数保真/卡片新旧/游标/后验/重新定级/个性化 全部通过")
 
 

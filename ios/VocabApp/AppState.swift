@@ -21,6 +21,7 @@ struct ValidationSession {
     var idx = 0
     var posterior: [Double]?
     var correct = 0
+    var failed = 0
 }
 
 struct Auth: Equatable {
@@ -69,6 +70,8 @@ final class AppState {
         auth.map { "u\($0.userId)" } ?? "guest"
     }
 
+    private var lastSyncKey: String { "vocab_sync_\(slotKey)" }
+
     private func stateURL(for slot: String) -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("\(Config.stateFilePrefix)_\(slot).json")
@@ -87,15 +90,10 @@ final class AppState {
         try? (auth?.username ?? "guest").write(to: userURL(for: slotKey), atomically: true, encoding: .utf8)
     }
 
-    /// 回到前台：服务器存档比本机新就拉取（学习会话中不打扰）
+    /// 回到前台：有未同步修改先补推，再拉服务器合并结果（学习会话中不打扰）
     func pullIfNewer() async {
         guard auth != nil, route != .session else { return }
-        guard let remote = try? await api.pullState(), let rs = remote.state else { return }
-        let localTs = UserDefaults.standard.double(forKey: "vocab_write_\(slotKey)")
-        if (remote.updated_at ?? 0) > localTs + 1 {
-            S = rs
-            saveLocal()
-        }
+        await syncFromServer()
     }
 
     private func loadLocal(slot: String, forUsername: String? = nil) -> LearningState? {
@@ -141,6 +139,7 @@ final class AppState {
             guard self.auth?.userId == owner else { return }   // 账号已切换，旧推送作废
             do {
                 try await self.api.pushState(snapshot)
+                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: self.lastSyncKey)
                 self.syncFailed = false
             } catch {
                 await self.handleSyncError(error)
@@ -153,11 +152,30 @@ final class AppState {
         pushTask?.cancel()
         do {
             try await api.pushState(S)
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastSyncKey)
             syncMsg = "✓ 已同步"
             syncFailed = false
         } catch {
             await handleSyncError(error)
         }
+    }
+
+    /// 有未同步修改先补推，再拉服务器合并结果；没有未同步修改则以服务器为准。
+    /// 避免“本地时间新”被误当成“本地内容更新”而覆盖新服务器状态。
+    @discardableResult
+    func syncFromServer() async -> Bool {
+        let localTs = UserDefaults.standard.double(forKey: "vocab_write_\(slotKey)")
+        let lastSync = UserDefaults.standard.double(forKey: lastSyncKey)
+        if localTs > lastSync + 0.5 {
+            try? await api.pushState(S)
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastSyncKey)
+        }
+        if let remote = try? await api.pullState(), let rs = remote.state {
+            S = rs
+            saveLocal()
+            return true
+        }
+        return false
     }
 
     // MARK: 设备 ID（个性化例句分桶，与 web 规则一致）
@@ -195,25 +213,11 @@ final class AppState {
         if let a = restoreAuth() {
             auth = a
             await api.setToken(a.token)
-            // 谁新听谁的（不再服务器无条件覆盖）：
-            // 上次学习若在防抖推送前退出/断网，本机比服务器新——这时以本机为准并立刻补推，
-            // 否则学过的词会被旧档抹掉、第二天当新词重发（用户实测踩到两次）
             let local = loadLocal(slot: slotKey, forUsername: a.username)
-            let localTs = UserDefaults.standard.double(forKey: "vocab_write_\(slotKey)")
-            if let remote = try? await api.pullState() {
-                if let rs = remote.state {
-                    if let local, localTs > (remote.updated_at ?? 0) + 2 {
-                        S = local
-                        try? await api.pushState(S)   // 本机更新 → 补推上服务器
-                    } else {
-                        S = rs
-                    }
-                } else if let local {
-                    S = local
-                    try? await api.pushState(S)
-                }
-            } else if let local {
+            let hasRemote = await syncFromServer()
+            if !hasRemote, let local {
                 S = local
+                try? await api.pushState(S)
             }
             saveLocal()
             route = .home
@@ -263,24 +267,18 @@ final class AppState {
             UserDefaults.standard.set(d, forKey: "vocab_profile")
         }
         UserDefaults.standard.set(false, forKey: "vocab_guest")
-        // 服务器为准 → 但本机槽位比服务器新（有未推送的学习）则以本机为准并补推
-        if let remote = try? await api.pullState(), let rs = remote.state {
-            guard auth?.userId == owner else { return }   // 等待期间又切号，旧账号响应不得落地
-            let local = loadLocal(slot: slotKey, forUsername: r.user.username)
-            let localTs = UserDefaults.standard.double(forKey: "vocab_write_\(slotKey)")
-            if let local, localTs > (remote.updated_at ?? 0) + 2 {
+        // 有未同步修改先补推，再拉服务器合并结果；没有则以服务器为准
+        let hasRemote = await syncFromServer()
+        guard auth?.userId == owner else { return }   // 等待期间又切号，旧账号响应不得落地
+        if !hasRemote {
+            if let local = loadLocal(slot: slotKey, forUsername: r.user.username) {
                 S = local
                 try? await api.pushState(S)
+            } else if !isRegistration && !S.cards.isEmpty {
+                try? await api.pushState(S)   // 游客进度并入老账号
             } else {
-                S = rs
+                S = LearningState()           // 新账号全新开始
             }
-        } else if let local = loadLocal(slot: slotKey, forUsername: r.user.username) {
-            S = local
-            try? await api.pushState(S)
-        } else if !isRegistration && !S.cards.isEmpty {
-            try? await api.pushState(S)   // 游客进度并入老账号
-        } else {
-            S = LearningState()           // 新账号全新开始
         }
         saveLocal()
         route = .home
@@ -316,16 +314,22 @@ final class AppState {
             v.posterior = StudyEngine.posteriorCalc(v.posterior, rank: w.pos, resp: ok ? 1 : 0,
                                                     weight: 1.0, guess: reverse ? 0 : 0.25)
             if ok { v.correct += 1 }
+        } else {
+            v.failed += 1
         }
         v.idx += 1
         validation = v
         if v.idx >= v.words.count {
-            let mean = Int(StudyEngine.posteriorMean(v.posterior).rounded())
-            let std = Int(StudyEngine.posteriorStd(v.posterior).rounded())
-            let appMean = Int(StudyEngine.postMean(S).rounded())
-            S.evalReport = EvalReport(date: DayUtil.today(), mean: mean, std: std,
-                                      appMean: appMean, delta: appMean - mean,
-                                      correct: v.correct, count: v.words.count)
+            if v.failed == 0 {
+                let mean = Int(StudyEngine.posteriorMean(v.posterior).rounded())
+                let std = Int(StudyEngine.posteriorStd(v.posterior).rounded())
+                let appMean = Int(StudyEngine.postMean(S).rounded())
+                S.evalReport = EvalReport(date: DayUtil.today(), mean: mean, std: std,
+                                          appMean: appMean, delta: appMean - mean,
+                                          correct: v.correct, count: v.words.count)
+            } else {
+                S.evalReport = nil   // 有题目失败，不给出伪精确估值
+            }
             save()
         }
     }
@@ -597,6 +601,18 @@ final class AppState {
         return words.count
     }
 
+    /// 已掌握词不再显示旧个性化例句
+    func personalFor(_ word: String) -> PersonalizedSentence? {
+        if let c = S.cards[word], StudyEngine.isMastered(c) { return nil }
+        return S.personalized[word]
+    }
+
+    func prunePersonalized() {
+        for (w, c) in S.cards where StudyEngine.isMastered(c) {
+            S.personalized.removeValue(forKey: w)
+        }
+    }
+
     // MARK: 每日队列（到期复习 + 提前巩固概率池 + 新词）
 
     func buildQueue() async {
@@ -738,6 +754,7 @@ final class AppState {
         }
         // 注意：不在这里设 quizDay——只有验收测试真正跑完才能标记（与 web 一致），
         // 否则同一天二次学习的新词会永远错过验收。
+        prunePersonalized()
         save()
     }
 

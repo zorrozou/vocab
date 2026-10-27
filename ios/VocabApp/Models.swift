@@ -11,6 +11,7 @@ struct FsrsState: Codable, Equatable {
     var due: String?
     var scheduled_days: Double?
     var step: Int?            // Learning/Relearning 当前步数；可选兼容旧存档
+    var lastReview: String?   // 上次复习时间，避免依赖会被裁剪的日志推导
 }
 
 struct CardState: Codable, Equatable {
@@ -292,6 +293,7 @@ struct FsrsResponse: Codable {
     var due: String?
     var scheduled_days: Double?
     var step: Int?
+    var lastReview: String?
 }
 
 // MARK: - 日期工具（"今天"用设备本地日期——UTC 日期会让 UTC+8 用户上午被错判成"昨天"，

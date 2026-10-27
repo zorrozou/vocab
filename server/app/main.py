@@ -195,7 +195,7 @@ def quality_check(sentence, target, recall=None):
         nums = [int(x) for x in re.findall(r"\d", out)][:4]
         return min(nums) if nums else 3
     except Exception:
-        return 4   # 评审失败默认放行，不阻塞
+        return 0   # 评审不可用时不把未知质量当成合格，避免低质句进入缓存
 
 
 def validate_multi(cand, target, recalls, max_pos, max_len=16):
@@ -767,8 +767,9 @@ def sentence_trio(word: str = Query(min_length=1, max_length=40), weak: str = ""
         return {"word": word, "sentences": []}
     rows = _lx.execute(
         """SELECT text, tier, translation FROM sentence
-           WHERE targetWordId=? AND genMethod LIKE 'llm-%'
-             AND COALESCE(flag,'') != 'reported'""", (wid,)).fetchall()
+           WHERE targetWordId=? AND (genMethod LIKE 'llm-%' OR genMethod='tatoeba')
+             AND COALESCE(flag,'') != 'reported'
+           ORDER BY CASE genMethod WHEN 'tatoeba' THEN 0 ELSE 1 END, id DESC""", (wid,)).fetchall()
     have = {}
     for r in rows:
         have.setdefault(r["tier"], (r["text"], r["translation"] or ""))
@@ -949,4 +950,5 @@ def fsrs_review(body: FsrsIn, authorization: str = Header(default="")):
             "difficulty": round(c.difficulty, 3),
             "due": c.due.isoformat(),
             "step": c.step,
+            "last_review": c.last_review.isoformat() if c.last_review else None,
             "scheduled_days": getattr(log, "scheduled_days", None)}

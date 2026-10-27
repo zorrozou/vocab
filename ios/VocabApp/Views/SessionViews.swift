@@ -166,7 +166,7 @@ struct LearnCardView: View {
     }
 
     private func setup() {
-        personal = app.S.personalized[item.word]
+        personal = app.personalFor(item.word)
         if let s = item.sentences, !s.isEmpty {
             sentences = s
         } else if let st = item.static, !st.isEmpty {
@@ -586,7 +586,7 @@ struct AnswerCardView: View {
             app.session.reviewedToday += 1
             app.save()
         }
-        personal = app.S.personalized[word]
+        personal = app.personalFor(word)
         let pos = app.S.cards[word]?.pos ?? app.S.pointer
         if let r = try? await APIClient.shared.lexiconAt(pos: pos, n: 1),
            let d = r.words.first(where: { $0.word == word }) ?? r.words.first {

@@ -23,7 +23,8 @@ enum StudyEngine {
         if let fsrs = c?.fsrs {
             return APIClient.FsrsIn(is_new: false, state: fsrs.state,
                                     stability: fsrs.stability, difficulty: fsrs.difficulty,
-                                    due: fsrs.due, rating: rating, step: fsrs.step, last_review: lr)
+                                    due: fsrs.due, rating: rating, step: fsrs.step,
+                                    last_review: fsrs.lastReview ?? lr)
         }
         if isNewCard {
             return APIClient.FsrsIn(is_new: true, rating: rating)
@@ -41,7 +42,7 @@ enum StudyEngine {
     static func applyFsrs(_ r: FsrsResponse, to c: inout CardState, today: String) {
         c.fsrs = FsrsState(state: r.state, stability: r.stability,
                            difficulty: r.difficulty, due: r.due,
-                           scheduled_days: r.scheduled_days, step: r.step)
+                           scheduled_days: r.scheduled_days, step: r.step, lastReview: r.lastReview)
         c.due = r.due ?? DayUtil.isoString(
             Calendar.current.date(byAdding: .day, value: 1,
                                   to: DayUtil.parseISO(today + "T08:00:00Z") ?? Date()) ?? Date())
@@ -125,12 +126,12 @@ enum StudyEngine {
         let b = placementBands[index]
         let center = Double(b.0 + b.1) / 2
         if s.frontier > 0 { return max(0.05, min(0.95, logistic((Double(s.frontier) - center) / 400))) }
-        return 0.5
+        return 0.2   // 没有定级证据时保持保守先验，避免默认每档都“会一半”导致预计认识词数虚高
     }
 
     static func knowledgeProb(_ s: LearningState, word: String, pos: Int) -> Double {
         if let c = s.cards[word], let fsrs = c.fsrs {
-            let last = s.log.last { $0.word == word && ($0.kind == "learn" || $0.kind == "review") }?.d
+            let last = fsrs.lastReview ?? s.log.last { $0.word == word && ($0.kind == "learn" || $0.kind == "review") }?.d
             let elapsed = last.flatMap { DayUtil.parseISO($0 + "T08:00:00Z").map { max(0, Date().timeIntervalSince($0) / 86400) } } ?? 0
             return pow(1 + 0.9805 * elapsed / max(0.2, fsrs.stability), -0.1542)
         }

@@ -161,7 +161,18 @@ struct ValidationView: View {
     var body: some View {
         VStack(spacing: 0) {
             if let v = app.validation {
-                if v.idx >= v.words.count, let r = app.S.evalReport {
+                if v.idx >= v.words.count, v.failed > 0 {
+                    VStack(spacing: 14) {
+                        Spacer()
+                        Text("校验暂不可用").font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
+                        Text("部分题目加载失败，本次结果不作为估值依据。请重试。")
+                            .font(.system(size: 14)).foregroundStyle(Theme.muted)
+                        Spacer()
+                        PrimaryButton(title: "重新校验") { Task { await app.startValidation() } }
+                        GhostButton(title: "返回设置") { app.closeValidation() }
+                    }
+                    .padding(.horizontal, 16)
+                } else if v.idx >= v.words.count, let r = app.S.evalReport {
                     resultView(r)
                 } else {
                     SessionHeader(title: "独立水平校验 \(v.idx + 1)/\(v.words.count)",
