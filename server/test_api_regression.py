@@ -96,7 +96,10 @@ def main():
 
     words = req("/api/v1/lexicon/at?pos=3000&n=10")["words"]
     assert len(words) >= 8 and all(w.get("senses") for w in words)
-    ok("词库词条与义项")
+    exact = req("/api/v1/lexicon/word?word=professional")
+    assert exact["word"] == "professional" and exact["pos"] == 989
+    assert exact["senses"] and exact["sentences"]
+    ok("词库词条、精确词形查询与义项")
 
     trio = req("/api/v1/sentence/trio?word=assert&weak=apple&cap=5000", timeout=240)
     assert len(trio["sentences"]) == 3 and trio.get("err") is None

@@ -4,6 +4,7 @@ import SwiftUI
 struct HomeView: View {
     @Environment(AppState.self) private var app
     @State private var starting = false
+    @State private var startError = ""
 
     private var learnedCount: Int { app.S.cards.count }
     private var masteredCount: Int { app.S.cards.values.filter { StudyEngine.isMastered($0) }.count }
@@ -39,16 +40,24 @@ struct HomeView: View {
                         app.route = .placement
                     }
                 } else {
-                    PrimaryButton(title: starting ? "准备中…" : "开始今天") {
-                        guard !starting else { return }
-                        starting = true
-                        Task {
-                            await app.buildQueue()
-                            starting = false
-                            if app.session.queue.isEmpty {
-                                app.markDayDone()
+                    VStack(spacing: 6) {
+                        PrimaryButton(title: starting ? "准备中…" : (startError.isEmpty ? "开始今天" : "重新加载")) {
+                            guard !starting else { return }
+                            starting = true
+                            startError = ""
+                            Task {
+                                let ready = await app.buildQueue()
+                                starting = false
+                                if ready {
+                                    if app.session.queue.isEmpty { app.markDayDone() }
+                                    app.route = .session
+                                } else {
+                                    startError = "任务加载失败，请检查网络后重试"
+                                }
                             }
-                            app.route = .session
+                        }
+                        if !startError.isEmpty {
+                            Text(startError).font(.system(size: 12)).foregroundStyle(Theme.bad)
                         }
                     }
                 }
@@ -72,7 +81,7 @@ struct HomeView: View {
     private var placementIntro: some View {
         Card {
             Text("首次使用 · 智能定级").font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
-            Text("最多 30 道词义选择（4 选 1），难度随作答实时调整，\n系统根据你的真实答题成绩估计词汇量，\n把新词起点放到适合你的位置；收敛后会提前结束。")
+            Text("共 30 道词义选择（4 选 1），难度随作答实时调整，\n系统根据你的真实答题成绩估计词汇量，\n答完后把新词起点放到适合你的位置。")
                 .font(.system(size: 15)).foregroundStyle(Theme.text)
                 .multilineTextAlignment(.center)
             if app.S.probeCount > 0 {
@@ -97,7 +106,7 @@ struct HomeView: View {
             }
             HStack(spacing: 0) {
                 StatCell(number: "\(dueCount)", label: "待复习")
-                StatCell(number: "\(app.S.settings.newPerDay)", label: "新词")
+                StatCell(number: "\(app.S.track?.throttle == true ? 5 : app.S.settings.newPerDay)", label: "新词")
                 // v1.3：已校准就显示后验估值 + 滞回级别（不再显示发词游标）
                 if app.S.calibrated, app.S.posterior != nil {
                     let shown = app.S.track?.shownLevel ?? levelForPos(max(1, app.S.frontier))

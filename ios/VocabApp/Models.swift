@@ -58,6 +58,8 @@ struct NewWord: Codable, Equatable {
     var senses: [Sense]?
     var `static`: String?
     var sentences: [SentenceItem]?
+    /// 仅本地组队使用：定级/探测答错产生的待补学词，不推进顺序发词游标。
+    var fromPending: Bool?
 }
 
 // MARK: - 词库等级显示（定义见 pipeline/build_lexicon_*.py）

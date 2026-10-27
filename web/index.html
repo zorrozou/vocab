@@ -135,13 +135,20 @@ let audioTimers = [];
 let actx = null, activeSrcs = [];
 function audioCtx() { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); return actx; }
 document.addEventListener("pointerdown", () => { const c = audioCtx(); if (c.state === "suspended") c.resume(); }, { passive: true });
-function playText(text) {
+async function playText(text) {
   stopAudio();
-  const a = new Audio(`${API}/api/v1/tts?text=${encodeURIComponent(text)}&v=${encodeURIComponent(S.settings.voice || "")}`);
-  audio = a;
-  // 没有兜底音：音频若未生成，等待服务器生成完毕自动播放
-  a.play().catch(() => apHint());
-  return a;
+  const my = ++seqToken;
+  try {
+    // 点击重听也走带重试的音频链路，服务器正在生成时不再“点了没反应”。
+    const buf = await fetchBuf(text);
+    if (my !== seqToken) return;
+    const ctx = audioCtx();
+    if (ctx.state === "suspended") await ctx.resume();
+    const src = ctx.createBufferSource();
+    src.buffer = buf; src.connect(ctx.destination);
+    activeSrcs.push(src); src.start();
+    logSentenceExposures(text, "audio", true);
+  } catch (e) { if (my === seqToken) apHint(); }
 }
 function stopAudio() {
   if (audio) { audio.pause(); audio.currentTime = 0; audio = null; }
@@ -212,11 +219,15 @@ const LEGACY_STAB = { 1: 1, 2: 6, 3: 8, 4: 15, 5: 45 };  // 旧阶梯卡迁移�
 
 async function fsrsCall(body) {
   try {
-    return await fetch(API + "/api/v1/fsrs/review", {
+    const resp = await fetch(API + "/api/v1/fsrs/review", {
       method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body)
-    }).then(r => r.json());
+    });
+    if (!resp.ok) return null;
+    const r = await resp.json();
+    return r && Number.isFinite(r.stability) && Number.isFinite(r.difficulty) && r.due ? r : null;
   } catch (e) { return null; }
 }
+const fsrsDue = d => !d ? null : (d.length === 10 ? d + "T12:00:00Z" : d);
 function ladderFallback(c, rating) {  // 端点不可用时的本地兜底
   const INTERVAL = { 1: 1, 2: 6, 3: 8, 4: 15, 5: 45 };
   if (rating === 1) { c.stage = Math.max(1, (c.stage || 1) - 1); c.due = tomorrow(); c.lt = 0; return; }
@@ -232,7 +243,7 @@ function lastReviewDate(word) {
   return l ? l.d : null;
 }
 
-async function learn(word, pos, rating = 3) {
+async function learn(word, pos, rating = 3, fromPending = false) {
   let c = S.cards[word];
   const isNewCard = !c;
   const lastReview = lastReviewDate(word);
@@ -241,10 +252,13 @@ async function learn(word, pos, rating = 3) {
     ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: c.fsrs.lastReview || (lastReview ? lastReview + "T08:00:00Z" : null) }
     : isNewCard
       ? { is_new: true, rating }
-      : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating, last_review: lastReview ? lastReview + "T08:00:00Z" : null };
+      : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: fsrsDue(c.due), rating, last_review: lastReview ? lastReview + "T08:00:00Z" : null };
   const r = await fsrsCall(body);
   if (r) { c.fsrs = r; c.due = r.due || new Date(addDays(today(), 1) + "T08:00:00").toISOString(); delete c.stage; }
   else ladderFallback(c, rating);
+  // 完成学习才消耗待补学词/推进顺序游标；待补学词的位置不能改写主学习进度。
+  S.pendingNew = S.pendingNew.filter(w => w.word !== word);
+  if (!fromPending) S.pointer = Math.max(S.pointer, pos + 1);
   S.log.push({ d: today(), word, rating, kind: "learn" });
   recordKnowledge(word, pos, rating !== 1);
   // 水平追踪观测（v1.2）：不熟悉=强证据；学会了=自评弱证据
@@ -272,7 +286,7 @@ async function review(word, rating, trackWeight) {
   recordKnowledge(word, c.pos || S.pointer, rating !== 1);
   const body = c.fsrs
     ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: c.fsrs.lastReview || (lastReview ? lastReview + "T08:00:00Z" : null) }
-    : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: c.due ? c.due + "T12:00:00Z" : null, rating, last_review: lastReview ? lastReview + "T08:00:00Z" : null };
+    : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: fsrsDue(c.due), rating, last_review: lastReview ? lastReview + "T08:00:00Z" : null };
   const r = await fsrsCall(body);
   if (r) { c.fsrs = r; c.due = r.due || new Date(addDays(today(), 1) + "T08:00:00").toISOString(); if (rating === 1) c.lt = 0; delete c.stage; }
   else ladderFallback(c, rating);
@@ -544,27 +558,30 @@ async function buildQueue() {
   trackLevelDaily();   // v1.2：水平追踪每日一次（可能跳位/减压）
   const nNew = Math.min(S.track && S.track.throttle ? 5 : S.settings.newPerDay, Math.max(0, S.settings.dailyCap - reviewsAll.length));
   const news = [];
-  const rest = [...S.pendingNew];
-  // 防重守卫：已在卡片里的词（学过/在复习）绝不再当新词发
-  while (news.length < nNew && rest.length) {
-    const w = rest.shift();
-    if (!S.cards[w.word] && !news.find(x => x.word === w.word)) news.push(w);
+  // 只清理已入卡项；选中但未学完的词继续保留，退出重进不会丢词。
+  S.pendingNew = S.pendingNew.filter(w => !S.cards[w.word]);
+  for (const w of S.pendingNew) {
+    if (news.length >= nNew) break;
+    if (!news.find(x => x.word === w.word)) news.push({ ...w, fromPending: true });
   }
-  S.pendingNew = rest;
   if (news.length < nNew) {
-    const r = await fetch(`${API}/api/v1/lexicon/at?pos=${S.pointer}&n=${nNew - news.length + 2}`).then(r => r.json());
+    const resp = await fetch(`${API}/api/v1/lexicon/at?pos=${S.pointer}&n=${nNew - news.length + 2}`);
+    if (!resp.ok) throw new Error("词条加载失败");
+    const r = await resp.json();
     for (const w of r.words) {
       if (news.length >= nNew) break;
       if (!S.cards[w.word] && !news.find(x => x.word === w.word)) news.push(w);
     }
   }
-  // pendingNew 词只有 word+pos（定级遗留），补全音标/义项/静态例句，否则学习卡义项区是空的
+  // 统一按词形补全详情，避免位置漂移造成空释义或错词释义。
   for (const w of news) {
-    if (!w.senses) {
+    if (!w.senses || !w.senses.length) {
       try {
-        const r = await fetch(`${API}/api/v1/lexicon/at?pos=${w.pos}&n=10`).then(r => r.json());
-        const full = r.words.find(x => x.word === w.word);
-        if (full) Object.assign(w, full);
+        const resp = await fetch(`${API}/api/v1/lexicon/word?word=${encodeURIComponent(w.word)}`);
+        if (!resp.ok) continue;
+        const full = await resp.json(), pending = w.fromPending;
+        Object.assign(w, full);
+        w.fromPending = pending;
       } catch (e) {}
     }
   }
@@ -581,8 +598,7 @@ async function buildQueue() {
     ...news.map(w => ({ kind: "learn", word: w.word, detail: w }))
   ];
   session.idx = 0;
-  const lastNew = news[news.length - 1];
-  if (lastNew && lastNew.pos) S.pointer = lastNew.pos + 1;
+  save();
   prefetchDay(news, reviewsAll);
 }
 
@@ -626,7 +642,7 @@ function home() {
   if (!S.calibrated) {
     el.innerHTML = guestBanner + `<div class="card center">
       <h2>首次使用 · 智能定级</h2>
-      <p style="font-size:15px;margin:10px 0">最多 30 道词义选择（4 选 1），难度会随作答实时调整，<br>系统根据你的真实答题成绩估计词汇量，<br>把新词起点放到适合你的位置；收敛后会提前结束。</p>
+      <p style="font-size:15px;margin:10px 0">最多 30 道词义选择（4 选 1），难度会随作答实时调整，<br>系统根据你的真实答题成绩估计词汇量，<br>答完 30 题后，把新词起点放到适合你的位置。</p>
       <p class="muted">已完成 ${S.probeCount}/30${S.probeCount >= 4 ? ` · 当前估计 ≈${Math.round(postMean())}` : ""}</p>
       <div class="row"><button class="act" id="bPlace">开始定级</button></div>
     </div>`;
@@ -640,13 +656,20 @@ function home() {
     <h2>今日任务</h2>
     <div class="stat-grid">
       <div class="stat"><b>${dueN}</b><span>待复习</span></div>
-      <div class="stat"><b>${S.settings.newPerDay}</b><span>新词</span></div>
-      <div class="stat"><b>${S.frontier}</b><span>学习位置</span></div>
+      <div class="stat"><b>${S.track && S.track.throttle ? 5 : S.settings.newPerDay}</b><span>新词</span></div>
+      <div class="stat"><b>${S.pointer}</b><span>学习位置</span></div>
     </div>
     <div class="row"><button class="act" id="bStart">开始今天</button></div>
-    <p class="muted" style="margin-top:10px">先复习到期单词，再学新词</p>
+    <p class="muted" id="startHint" style="margin-top:10px">先复习到期单词，再学新词</p>
   </div>`;
-  $("#bStart").onclick = async () => { await buildQueue(); step(); };
+  $("#bStart").onclick = async () => {
+    const b = $("#bStart"); b.disabled = true; b.textContent = "正在准备今日任务…";
+    try { await buildQueue(); step(); }
+    catch (e) {
+      b.disabled = false; b.textContent = "重新加载";
+      $("#startHint").textContent = "任务加载失败，请检查网络后重试";
+    }
+  };
   const gb = $("#gBanner");
   if (gb) gb.onclick = () => welcome();
 }
@@ -723,7 +746,7 @@ async function place() {
     return;
   }
   renderChips();
-  const band = Math.floor(S.probeCount / 5) + 1;
+  const band = PLACEMENT_BANDS.findIndex(b => w.pos >= b.lo && w.pos <= b.hi) + 1;
   $("#app").innerHTML = `<div class="card center">
     <h2>智能定级 · 第 ${S.probeCount + 1}/30 题 · 第 ${band} 区间</h2>
     <div><span class="big">${w.word}</span><button class="playw" data-t="${w.word}">▶</button></div>
@@ -855,8 +878,11 @@ async function quizRound(words, i) {
 }
 
 async function wordDetail(word, pos) {
-  const r = await fetch(`${API}/api/v1/lexicon/at?pos=${pos}&n=1`).then(r => r.json());
-  return r.words.find(x => x.word === word) || r.words[0];
+  try {
+    const resp = await fetch(`${API}/api/v1/lexicon/word?word=${encodeURIComponent(word)}`);
+    if (resp.ok) return await resp.json();
+  } catch (e) {}
+  return { word, pos, senses: [], sentences: [], loadError: true };
 }
 
 /* 例句曝光埋点：用于后续评估"薄弱词复现 → 3/7/30 天记忆效果" */
@@ -896,16 +922,27 @@ function sentenceBlock(word, personal, sents) {
            texts: [...(personal ? [personal.text] : []), ...list.map(s => s.text)] };
 }
 
+function isCurrentLearn(word) {
+  const cur = session.queue[session.idx];
+  return cur && cur.kind === "learn" && cur.word === word;
+}
+
 async function showLearn(item) {
-  const w = item.detail;
+  let w = item.detail;
+  if (!w.senses || !w.senses.length) {
+    const full = await wordDetail(w.word, w.pos);
+    if (!full.loadError) { full.fromPending = w.fromPending; w = full; item.detail = full; }
+  }
   const personal = S.personalized[w.word];
   const sents = w.sentences || (w.static ? [{ tier: 1, text: w.static }] : []);
   const sb = sentenceBlock(w.word, personal, sents);
+  const senseHtml = (w.senses || []).map(s => `<span><i>${s.pos || "·"}</i>${s.text}</span>`).join("")
+    || (w.sense ? `<span>${w.sense}</span>` : `<span class="muted">词义加载失败，请检查网络</span><button class="ghost" id="bRetrySense">重新加载</button>`);
   $("#app").innerHTML = `<div class="card">
     <h2>新词 ${session.idx + 1}/${session.queue.length} · ${lvlName(w)}</h2>
     <div><span class="big">${w.word}</span><button class="playw" data-t="${w.word}">▶</button></div>
     <div class="phon">${w.phonetic ? "/" + w.phonetic + "/" : ""}</div>
-    <div class="sense">${(w.senses || []).map(s => `<span><i>${s.pos || "·"}</i>${s.text}</span>`).join("")}</div>
+    <div class="sense">${senseHtml}</div>
     ${sb.html}
     <div class="row">
       ${SR ? `<button class="icon" id="bShadow">🎤 跟读</button>` : ""}
@@ -916,6 +953,7 @@ async function showLearn(item) {
     <div class="muted" id="shadowOut" style="margin-top:8px"></div>
   </div>`;
   bindPlays();
+  if ($("#bRetrySense")) $("#bRetrySense").onclick = () => showLearn(item);
   const sentence = sb.first;
   autoPlaySequence(w.word, sb.texts);
   if (SR) $("#bShadow").onclick = () => {
@@ -923,7 +961,7 @@ async function showLearn(item) {
     if (!target) { $("#shadowOut").textContent = "例句还在生成，稍等"; return; }
     $("#shadowOut").textContent = "请朗读例句…";
     shadow(target, res => {
-      if (!res) { $("#shadowOut").textContent = "未听清，再试一次"; return; }
+      if (!res || !isCurrentLearn(w.word)) return;
       const exp = tokens(target), got = new Set(tokens(res.text));
       const hit = exp.filter(t => got.has(t)).length;
       const pct = Math.round(hit / exp.length * 100);
@@ -932,13 +970,22 @@ async function showLearn(item) {
       $("#shadowOut").innerHTML = `识别：${res.text}<br>完整度 <span class="${pct >= 80 ? "hl" : "rec"}" style="font-size:18px;font-weight:700">${pct}%</span> · 置信度 <span class="${conf >= 75 ? "hl" : "rec"}" style="font-size:18px;font-weight:700">${conf}%</span>`;
     });
   };
-  $("#bWeak").onclick = async () => { await learn(w.word, w.pos, 1); session.learnedToday++; session.idx++; save(); step(); };
-  $("#bNext").onclick = async () => { await learn(w.word, w.pos, 3); session.learnedToday++; session.idx++; save(); step(); };
+  let acted = false;
+  const act = async rating => {
+    if (acted) return;
+    acted = true;
+    $("#bWeak").disabled = true; $("#bNext").disabled = true;
+    await learn(w.word, w.pos, rating, w.fromPending === true);
+    session.learnedToday++; session.idx++; save(); step();
+  };
+  $("#bWeak").onclick = () => act(1);
+  $("#bNext").onclick = () => act(3);
   if (!personal && sents.length < 3) {
     const weak = [...new Set(S.log.filter(l => l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))].slice(0, 15).join(",");
     fetch(`${API}/api/v1/sentence/trio?word=${encodeURIComponent(w.word)}&weak=${encodeURIComponent(weak)}&cap=${S.pointer + 10}`)
       .then(r => r.json()).then(r => {
-        if (!r.sentences || !r.sentences.length) return;
+        if (!isCurrentLearn(w.word) || !r.sentences || !r.sentences.length) return;
+        w.sentences = r.sentences;
         const newSb = sentenceBlock(w.word, personal, r.sentences);
         document.querySelectorAll("#app .sent").forEach(e => e.remove());
         const anchor = document.querySelector("#app .sense");
@@ -957,7 +1004,7 @@ async function showLearn(item) {
     S.weaveCount++; save();
     fetch(`${API}/api/v1/sentence/weave?word=${encodeURIComponent(w.word)}&weak=${encodeURIComponent(weakW)}&cap=${S.pointer + 10}&device=${deviceId()}`)
       .then(r => r.json()).then(r => {
-        if (!r.text) return;
+        if (!isCurrentLearn(w.word) || !r.text) return;
         logExposure(weakW, "weave", r.text, false);
         const anchor = document.querySelector("#app .sense");
         if (!anchor) return;
@@ -1047,20 +1094,22 @@ async function showReview(item) {
 }
 
 /* 答案卡：答错已记「忘记」，答对再选掌握程度 */
-async function answerCard(item, quizOk) {
+async function answerCard(item, quizOk, wrongRecorded = false) {
   const word = item.word;
   const c = S.cards[word];
+  if (!quizOk && !wrongRecorded) { await review(word, 1); session.reviewedToday++; save(); }
   const d = await wordDetail(word, c.pos);
   let sents = d.sentences || [];
   if (!sents.length) { const t = await ensureSentence(word); if (t) sents = [{ tier: 1, text: t }]; }
   const personal = S.personalized[word];
   const sb = sentenceBlock(word, personal, sents);
-  if (!quizOk) { await review(word, 1); session.reviewedToday++; save(); }
+  const answerSenses = d.senses.map(s => `<span><i>${s.pos || "·"}</i>${s.text}</span>`).join("")
+    || `<span class="muted">词义加载失败，请检查网络</span><button class="ghost" id="bRetryDetail">重新加载</button>`;
   $("#app").innerHTML = `<div class="card">
     <h2>${quizOk ? "✓ 答对了——这次掌握程度？" : "✗ 正确答案"}</h2>
     <div><span class="big">${word}</span><button class="playw" data-t="${word}">▶</button></div>
     <div class="phon">${d.phonetic ? "/" + d.phonetic + "/" : ""}</div>
-    <div class="sense">${d.senses.map(s => `<span><i>${s.pos || "·"}</i>${s.text}</span>`).join("")}</div>
+    <div class="sense">${answerSenses}</div>
     ${sb.html.replace('id="pendingSent"', "")}
     ${quizOk
       ? `<div class="row" style="margin-top:14px">
@@ -1072,8 +1121,15 @@ async function answerCard(item, quizOk) {
          <p class="muted center" style="margin-top:8px">已记为「忘记」，降级并明天再见；误点可撤销重答</p>`}
   </div>`;
   bindPlays();
+  if ($("#bRetryDetail")) $("#bRetryDetail").onclick = () => answerCard(item, quizOk, true);
   autoPlaySequence(word, sb.texts);
-  const go = async r => { await review(word, r); session.reviewedToday++; session.idx++; save(); step(); };
+  let rated = false;
+  const go = async r => {
+    if (rated) return;
+    rated = true;
+    document.querySelectorAll("#r2,#r3,#r4").forEach(b => b.disabled = true);
+    await review(word, r); session.reviewedToday++; session.idx++; save(); step();
+  };
   if (quizOk) {
     $("#r2").onclick = () => go(2); $("#r3").onclick = () => go(3); $("#r4").onclick = () => go(4);
   } else {
@@ -1394,14 +1450,15 @@ function handleSyncError(e) {
 }
 
 async function pushState(expectedOwner = AUTH && AUTH.userId, snapshot = S) {
-  if (!AUTH || AUTH.userId !== expectedOwner) return;   // 切换账号后，旧推送作废
+  if (!AUTH || AUTH.userId !== expectedOwner) return false;   // 切换账号后，旧推送作废
   try {
     await fetch(API + "/api/v1/me/state", { method: "PUT", headers: { "Content-Type": "application/json", ...authHeaders() }, body: JSON.stringify(snapshot) }).then(r => {
       if (!r.ok) throw new Error("HTTP " + r.status);   // 413 等非 200 也算失败
     });
     syncFailed = false; renderUserTag();
     localStorage.setItem("vocab_last_sync_ts", String(Date.now() / 1000));
-  } catch (e) { handleSyncError(e); }
+    return true;
+  } catch (e) { handleSyncError(e); return false; }
 }
 async function pullState(expectedOwner = AUTH && AUTH.userId) {
   if (!AUTH || AUTH.userId !== expectedOwner) return undefined;
@@ -1417,7 +1474,10 @@ async function pullState(expectedOwner = AUTH && AUTH.userId) {
 async function syncFromServer() {
   const localTs = +(localStorage.getItem("vocab_write_ts") || 0);
   const lastSync = +(localStorage.getItem("vocab_last_sync_ts") || 0);
-  if (AUTH && localTs > lastSync + 0.5) await pushState();
+  if (AUTH && localTs > lastSync + 0.5) {
+    const pushed = await pushState();
+    if (!pushed) return false;   // 推送失败保留本地，不拉服务器旧档覆盖
+  }
   const remote = await pullState();
   if (remote && remote.state) {
     S = Object.assign(defaultState(), remote.state);
@@ -1493,14 +1553,20 @@ async function onAuthed(d, isRegister) {
   AUTH = { userId: d.user.id, username: d.user.username, nickname: d.user.nickname, token: d.token };
   localStorage.setItem("vocab_auth", JSON.stringify(AUTH));
   localStorage.removeItem("vocab_guest");
+  const owner = AUTH.userId, previousState = S;
+  const slotKey = `vocab_v1_u${owner}`;
+  const hasLocal = loadSlot(slotKey);
+  S = Object.assign(defaultState(), hasLocal ? S : defaultState());
+  localStorage.setItem("vocab_v1", JSON.stringify(S));
   const hasRemote = await syncFromServer();
-  const slotKey = `vocab_v1_u${AUTH.userId}`;
+  if (!AUTH || AUTH.userId !== owner) return;   // 凭证失效或等待期间切号，不覆盖后续页面
   if (!hasRemote) {
-    if (loadSlot(slotKey)) {
-      S = Object.assign(defaultState(), S);
+    if (hasLocal) {
       pushState();                      // 本机有这个账号的存档 → 推上服务器
-    } else if (!isRegister && Object.keys(S.cards || {}).length) {
-      pushState();                      // 游客进度并入老账号（仅登录时）
+    } else if (!isRegister && (Object.keys(previousState.cards || {}).length || previousState.probeCount > 0)) {
+      S = Object.assign(defaultState(), previousState);
+      localStorage.setItem("vocab_v1", JSON.stringify(S));
+      pushState();                      // 老账号无存档时才并入之前的游客进度
     } else {
       S = defaultState();               // 注册新账号 = 全新开始（出定级），不并入任何现成进度
       localStorage.setItem("vocab_v1", JSON.stringify(S));
@@ -1528,7 +1594,7 @@ async function userMenu() {
     <div class="muted" id="mMsg"></div>
   </div>`;
   $("#mBack").onclick = home;
-  $("#mSync").onclick = async () => { await pushState(); $("#mMsg").textContent = "✓ 已同步"; };
+  $("#mSync").onclick = async () => { const ok = await pushState(); $("#mMsg").textContent = ok ? "✓ 已同步" : "同步失败，本地进度已保留，请稍后重试"; };
   $("#mSwitch").onclick = () => { clearTimeout(save._t); archiveCurrent(); quizSet = []; AUTH = null; localStorage.removeItem("vocab_auth"); renderUserTag(); welcome(); };
   $("#mLogout").onclick = async () => {
     await pushState();

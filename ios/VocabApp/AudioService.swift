@@ -157,18 +157,26 @@ final class AudioService {
                 for await r in group { arr.append(r) }
                 return arr.sorted { $0.0 < $1.0 }
             }
-            // 但第一条单独先取，开播不等其余
-            guard let first = await makePlayer(items[0], voice: voice), !Task.isCancelled else { return }
+            // 第一条就绪立即开播；即使单词音频失败，也继续尝试后续例句，不让整链失声。
+            let first = await makePlayer(items[0], voice: voice)
+            guard !Task.isCancelled else { return }
+            if let first {
+                current = first
+                playingText = items[0]
+                first.play()
+            }
             let sorted = await all
             var byIndex: [Int: AVAudioPlayer] = [:]
             for (i, p) in sorted { byIndex[i] = p }
             byIndex[0] = first
             for i in 0..<items.count {
                 if Task.isCancelled { return }
-                guard let p = byIndex[i] else { continue }   // 该条拉取失败则跳过
-                current = p
-                playingText = items[i]
-                p.play()
+                guard let p = byIndex[i] else { continue }
+                if i > 0 {   // 第一条已在等待其余音频时开始播放
+                    current = p
+                    playingText = items[i]
+                    p.play()
+                }
                 let gap = (i + 1 < items.count) ? max(0.6, byIndex[i + 1]?.duration ?? 1.2) : 0
                 try? await Task.sleep(nanoseconds: UInt64((p.duration + gap) * 1e9))
             }

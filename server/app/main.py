@@ -8,10 +8,12 @@
   GET  /api/v1/lexicon/latest|download  词库版本与整包下载
   GET  /                          测试页（static/index.html）
 """
-import json, os, re, sqlite3, threading, time, urllib.request
+import json, logging, os, re, sqlite3, threading, time, urllib.request
 from pathlib import Path
 
-from fastapi import FastAPI, Header, Query
+logger = logging.getLogger(__name__)
+
+from fastapi import FastAPI, Header, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -126,7 +128,14 @@ def llm(prompt):
                             if os.environ.get("LLM_MAX_TOKENS") else {})}).encode(),
         headers={"Authorization": f"Bearer {LLM_KEY}", "Content-Type": "application/json"})
     with urllib.request.urlopen(req, timeout=120) as r:
-        return json.loads(r.read())["choices"][0]["message"]["content"].strip().strip('"').splitlines()[0].strip()
+        # 保留多行：三档例句一次返回 A/B/C；单行提示也不受影响。
+        return json.loads(r.read())["choices"][0]["message"]["content"].strip().strip('"')
+
+
+def core_sense(wid, limit=50):
+    """生成时只锚定最高频核心义项，避免 apple 被写成俚语“家伙”等边缘用法。"""
+    raw = SENSE.get(wid) or ""
+    return re.split(r"[,，;；]", raw, maxsplit=1)[0].strip()[:limit]
 
 
 def validate(cand, target, recall, max_pos, max_len=MAX_LEN):
@@ -245,10 +254,10 @@ def generate(device, date, weak_words, max_pos):
         others = [w for w in weak_words if w != target]
         rng.shuffle(others)
         recalls = others[:min(2, len(others))]   # 随机 1~2 个其他薄弱词
-        t_sense = (SENSE.get(WORD2ID.get(target, -1)) or "")[:50]
-        r_desc = "、".join(f'"{r}"（{(SENSE.get(WORD2ID.get(r, -1)) or "")[:20]}）' for r in recalls)
+        t_sense = core_sense(WORD2ID.get(target, -1))
+        r_desc = "、".join(f'"{r}"（{core_sense(WORD2ID.get(r, -1), 20)}）' for r in recalls)
         prompt = (f"为背单词 App 写一条英语例句。要求：\n"
-                  f"1. 必须包含目标词 \"{target}\"（词义：{t_sense}）\n"
+                  f"1. 必须包含目标词 \"{target}\"（核心词义，只使用此义项：{t_sense}）\n"
                   + (f"2. 同时自然地包含这些复习词：{r_desc}\n" if recalls else "") +
                   f"3. 【真实使用场景】描述日常/工作/学习中的真实情境，几个词要自然融入同一情境；"
                   f"【地道】必须使用英语母语者日常真实会说的固定搭配和常用句型，严禁生造词组、中式英语或生硬拼凑\n"
@@ -280,9 +289,10 @@ def generate(device, date, weak_words, max_pos):
                 ensure_tts(cand)   # 生成即产音频（本函数已在后台线程，无用户侧延迟）
                 return 1
             time.sleep(0.2)
+        logger.warning("个性化组合句未通过，改为单词独句：device=%s target=%s reason=%s", device, target, err)
         # 兜底：组合太难就只含目标词
         try:
-            out = llm(f"为背单词 App 的单词 \"{target}\"（词义：{t_sense}）写一条英语例句："
+            out = llm(f"为背单词 App 的单词 \"{target}\"（核心词义，只使用此义项：{t_sense}）写一条英语例句："
                       f"真实日常场景、语法正确、自然地道，6~16 词，常见高频词。"
                       f"必须使用英语母语者日常真实会说的固定搭配，严禁生造词组或中式英语。"
                       f"输出格式：英文句子 || 中文翻译，一行，不要解释。")
@@ -431,6 +441,15 @@ def lexicon_at(pos: int = Query(ge=1), n: int = Query(default=10, ge=1, le=30)):
     return {"from": pos, "words": out}
 
 
+@app.get("/api/v1/lexicon/word")
+def lexicon_word(word: str = Query(min_length=1, max_length=40)):
+    """按词形取唯一词条，避免学习位置变化或非实义词占位导致错词/空释义。"""
+    wid = WORD2ID.get(word.strip().lower())
+    if not wid:
+        raise HTTPException(status_code=404, detail="词条不存在")
+    return word_detail(wid)
+
+
 @app.get("/api/v1/lexicon/band")
 def lexicon_band(lo: int = Query(ge=1), hi: int = Query(ge=2),
                  n: int = Query(default=2, ge=1, le=10), seed: int = 0):
@@ -570,34 +589,50 @@ def kokoro_synth(text, out_path):
     os.unlink(wav_path)
 
 
+_TTS_LOCKS = {}
+_TTS_LOCKS_GUARD = threading.Lock()
+
+
 def ensure_tts(text, voice=None):
-    """生成即产音频（用户要求：产生出来的例句必须能播，不是播不了就跳过）：
-    edge-tts 重试 2 次（指数退避）→ Kokoro 本地兜底。返回是否成功。"""
+    """同文本串行生成、临时文件原子落盘，杜绝后台预产与首播请求互相误判。"""
     import asyncio as _aio, hashlib as _hl
     import edge_tts
     v = voice or TTS_VOICE
     key = _hl.sha1(f"{v}|{text}".encode()).hexdigest()[:16]
     f = TTS_DIR / f"{key}.mp3"
-    if f.exists():
-        return True
-    def _ok():
-        return f.exists() and f.stat().st_size > 500   # 防空文件/截断文件
-    for attempt in range(2):
-        try:
-            _aio.run(edge_tts.Communicate(text, v).save(str(f)))
-            if _ok():
-                return True
-        except Exception:
-            pass
-        time.sleep(1 + attempt)
-    try:
-        kokoro_synth(text, f)
-        if _ok():
+    with _TTS_LOCKS_GUARD:
+        lock = _TTS_LOCKS.setdefault(key, threading.Lock())
+    with lock:
+        def _ok(path):
+            return path.exists() and path.stat().st_size > 500
+        if _ok(f):
             return True
-    except Exception as e:
-        print(f"[tts] Kokoro 失败: {text[:40]}… {e}", flush=True)
-    print(f"[tts] 双路均失败: {text[:40]}…", flush=True)
-    return False
+        tmp = TTS_DIR / f"{key}.{threading.get_ident()}.tmp.mp3"
+        try:
+            for attempt in range(2):
+                try:
+                    _aio.run(edge_tts.Communicate(text, v).save(str(tmp)))
+                    if _ok(tmp):
+                        os.replace(tmp, f)
+                        return True
+                except Exception:
+                    pass
+                time.sleep(1 + attempt)
+            try:
+                kokoro_synth(text, tmp)
+                if _ok(tmp):
+                    os.replace(tmp, f)
+                    return True
+            except Exception as e:
+                logger.warning("Kokoro 合成失败：%s", e)
+            logger.warning("双路 TTS 均失败：%s", text[:60])
+            return False
+        finally:
+            for path in (tmp, Path(str(tmp) + ".wav")):
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
 
 
 @app.get("/api/v1/tts")
@@ -629,9 +664,9 @@ def sentence_ensure(word: str = Query(min_length=1, max_length=40)):
         return {"word": word, "text": s[0]["text"], "cached": True}
     pos = POS_OF[wid]
     cap = max(pos, 300)
-    sense = (SENSE.get(wid) or "")[:50]
+    sense = core_sense(wid)
     prompt = (f"为背单词 App 写一条英语例句，要求：\n"
-              f"1. 必须包含目标词 \"{word}\"（词义：{sense}）\n"
+              f"1. 必须包含目标词 \"{word}\"（核心词义，只使用此义项：{sense}）\n"
               f"2. 句长 3~12 个单词，句子自然、地道、简单\n"
               f"3. 其他用词必须是英语最常见的简单高频词\n"
               f"4. 只输出英文例句本身，一行，不要解释")
@@ -692,7 +727,50 @@ def placement_set(seed: str = ""):
     return {"words": items[:30], "seed": seed_val}
 
 
-# ---------- 巩固句：新词 × 近期薄弱词 共现句（先查句库，无则生成）----------
+# ---------- 巩固句：新词 × 近期薄弱词 共现句（缓存优先，后台生成）----------
+_WEAVE_JOBS = set()
+_WEAVE_LOCK = threading.Lock()
+
+
+def _generate_weave_job(key, device, date, word, weak, cap):
+    """后台补巩固句，绝不让学习卡同步等待多次 LLM+评审而触发网关 504。"""
+    wid, rid = WORD2ID[word], WORD2ID[weak]
+    try:
+        t_sense, w_sense = core_sense(wid), core_sense(rid, 40)
+        prompt = (f"为背单词 App 写一条英语例句。要求：\n"
+                  f"1. 必须包含目标词 \"{word}\"（核心词义，只使用此义项：{t_sense}）\n"
+                  f"2. 同时自然地包含复习词 \"{weak}\"（核心词义，只使用此义项：{w_sense}），这是学习者最近没记住的词\n"
+                  f"3. 【真实使用场景】描述日常/工作/学习中的真实情境，两词自然融入同一情境；"
+                  f"【地道】必须使用英语母语者日常真实会说的固定搭配和常用句型，严禁生造词组、中式英语或生硬拼凑\n"
+                  f"4. 句长 6~16 个单词，语法正确、表达地道、有意义\n"
+                  f"5. 其余用词为常见高频简单词\n"
+                  f"6. 输出格式：英文句子 || 中文翻译，一行，不要任何解释")
+        err = None
+        for _ in range(3):
+            try:
+                out = llm(prompt + (f"\n\n上次失败原因：{err}，请修正。" if err else ""))
+                cand_text, _, zh = out.partition("||")
+                cand_text = cand_text.strip().strip('"')
+            except Exception as e:
+                err = f"API错误:{e}"
+                time.sleep(1.5)
+                continue
+            err = validate_multi(cand_text, word, [weak], cap)
+            if not err and quality_check(cand_text, word, weak) >= 4:
+                conn = sqlite3.connect(PERSONAL_DB)
+                conn.execute("INSERT INTO sentences VALUES(?,?,?,?,?,?,?)",
+                             (device, date, word, weak, cand_text, time.time(), zh.strip()))
+                conn.commit()
+                conn.close()
+                ensure_tts(cand_text)
+                return
+            time.sleep(0.2)
+        logger.warning("巩固句生成未通过：device=%s word=%s weak=%s reason=%s", device, word, weak, err)
+    finally:
+        with _WEAVE_LOCK:
+            _WEAVE_JOBS.discard(key)
+
+
 @app.get("/api/v1/sentence/weave")
 def sentence_weave(word: str = Query(min_length=1, max_length=40),
                    weak: str = Query(min_length=1, max_length=40),
@@ -701,54 +779,32 @@ def sentence_weave(word: str = Query(min_length=1, max_length=40),
     uid = user_by_token(authorization)
     if uid:
         device = f"u{uid}"
-    wid = WORD2ID.get(word)
-    rid = WORD2ID.get(weak)
+    wid, rid = WORD2ID.get(word), WORD2ID.get(weak)
     if not wid or not rid or wid == rid:
         return {"text": "", "source": "none"}
-    pos = POS_OF[wid]
-    cap = max(pos, 300, cap)
-    # 1) 句库共现句：wordIds 同时含两个词（规范化为 ,12,34, 后精确匹配）
+    cap = max(POS_OF[wid], 300, cap)
     norm = "REPLACE(REPLACE(REPLACE(wordIds,' ',''),'[',','),']',',')"
     cand = []
     for r in _lx.execute(
-            f"SELECT text, genMethod FROM sentence WHERE instr({norm}, ?) > 0 AND instr({norm}, ?) > 0",
+            f"SELECT text, genMethod, translation FROM sentence WHERE instr({norm}, ?) > 0 AND instr({norm}, ?) > 0",
             (f",{rid},", f",{wid},")).fetchall():
-        cand.append((r[0], r[1]))
+        cand.append((r[0], r[1], r[2]))
     if cand:
         cand.sort(key=lambda x: (0 if x[1] == "tatoeba" else 1, len(x[0])))
-        return {"text": cand[0][0], "source": "pool"}
-    # 2) 无共现句 → LLM 生成（校验 + 自评分）
-    t_sense = (SENSE.get(wid) or "")[:50]
-    w_sense = (SENSE.get(rid) or "")[:40]
-    prompt = (f"为背单词 App 写一条英语例句。要求：\n"
-              f"1. 必须包含目标词 \"{word}\"（词义：{t_sense}）\n"
-              f"2. 同时自然地包含复习词 \"{weak}\"（词义：{w_sense}），这是学习者最近没记住的词\n"
-              f"3. 【真实使用场景】描述日常/工作/学习中的真实情境，两词自然融入同一情境；"
-              f"【地道】必须使用英语母语者日常真实会说的固定搭配和常用句型，严禁生造词组、中式英语或生硬拼凑\n"
-              f"4. 句长 6~16 个单词，语法正确、表达地道、有意义\n"
-              f"5. 其余用词为常见高频简单词\n"
-              f"6. 输出格式：英文句子 || 中文翻译，一行，不要任何解释")
-    err = None
-    for _ in range(3):
-        try:
-            out = llm(prompt + (f"\n\n上次失败原因：{err}，请修正。" if err else ""))
-            cand_text, _, zh = out.partition("||")
-            cand_text = cand_text.strip().strip('"')
-        except Exception as e:
-            err = f"API错误:{e}"
-            time.sleep(1.5)
-            continue
-        err = validate_multi(cand_text, word, [weak], cap)
-        if not err and quality_check(cand_text, word, weak) >= 4:
-            conn = sqlite3.connect(PERSONAL_DB)
-            conn.execute("INSERT INTO sentences VALUES(?,?,?,?,?,?,?)",
-                         (device, today_str(), word, weak, cand_text, time.time(), zh.strip()))
-            conn.commit()
-            conn.close()
-            threading.Thread(target=ensure_tts, args=(cand_text,), daemon=True).start()   # 生成即产音频
-            return {"text": cand_text, "zh": zh.strip(), "source": "generated"}
-        time.sleep(0.2)
-    return {"text": "", "source": "none"}
+        return {"text": cand[0][0], "zh": cand[0][2] or "", "source": "pool"}
+    date = today_str()
+    conn = sqlite3.connect(PERSONAL_DB)
+    row = conn.execute("SELECT text, zh FROM sentences WHERE device=? AND date=? AND target=? AND recall=? ORDER BY created DESC LIMIT 1",
+                       (device, date, word, weak)).fetchone()
+    conn.close()
+    if row:
+        return {"text": row[0], "zh": row[1] or "", "source": "generated"}
+    key = (device, date, word, weak)
+    with _WEAVE_LOCK:
+        if key not in _WEAVE_JOBS:
+            _WEAVE_JOBS.add(key)
+            threading.Thread(target=_generate_weave_job, args=(key, device, date, word, weak, cap), daemon=True).start()
+    return {"text": "", "source": "pending", "pending": True}
 
 
 def today_str():
@@ -777,7 +833,7 @@ def sentence_trio(word: str = Query(min_length=1, max_length=40), weak: str = ""
         return {"word": word, "sentences": [{"tier": t, "text": have[t][0], "zh": have[t][1]} for t in sorted(have)][:3]}
     pos = POS_OF[wid]
     cap = max(pos, 300, cap)  # 调用方可传入真实学习位置（召回词是用户已学的词）
-    sense = (SENSE.get(wid) or "")[:50]
+    sense = core_sense(wid)
     weaks = [x for x in weak.split(",") if x]
     recall = None
     # 薄弱词按概率织入，而不是每个新词的基础句都强行带：
@@ -792,7 +848,7 @@ def sentence_trio(word: str = Query(min_length=1, max_length=40), weak: str = ""
         spec.append("B: 进阶句，10~16 个单词，必须含一个从句（when/because/that/which/who 等）")
     if 3 in need:
         spec.append("C: 挑战句，10~20 个单词，含复合结构（从句/非谓语/介词短语组合）")
-    prompt = (f"为背单词 App 的单词 \"{word}\"（词义：{sense}）写例句，逐条输出：\n"
+    prompt = (f"为背单词 App 的单词 \"{word}\"（核心词义，只使用此义项：{sense}）写例句，逐条输出：\n"
               + "\n".join(spec) +
               f"\n其他约束：除目标词和指定复习词外只用英语最常见的高频简单词（约前 {cap} 词范围）；"
               f"必须使用英语母语者日常真实会说的固定搭配和常用句型，严禁生造词组、中式英语或生硬拼凑；句子必须自然、地道、有意义。每行格式严格为 \"A: <英文句子> || <中文翻译>\"，"
@@ -854,7 +910,7 @@ def sentence_trio(word: str = Query(min_length=1, max_length=40), weak: str = ""
     for tier in need:
         if tier in have:
             continue
-        single = (f"为背单词 App 的单词 \"{word}\"（词义：{sense}）写一条英语例句：{TIER_DESC[tier]}。"
+        single = (f"为背单词 App 的单词 \"{word}\"（核心词义，只使用此义项：{sense}）写一条英语例句：{TIER_DESC[tier]}。"
                   + (f"必须包含复习词 \"{recall}\"。" if recall and tier == 1 else "")
                   + f"其他词用常见高频简单词。必须使用英语母语者日常真实会说的固定搭配，严禁生造词组或中式英语；句子自然地道。输出格式：英文句子 || 中文翻译，一行，不要其他内容。")
         for _ in range(2):

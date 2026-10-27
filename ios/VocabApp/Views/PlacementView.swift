@@ -12,10 +12,15 @@ struct PlacementView: View {
     @State private var answers: [Bool] = []
     @State private var recentMeans: [Double] = []
     @State private var finished: Int? = nil
+    @State private var answering = false
 
     private let bands = [(1, 2000), (2001, 4000), (4001, 6000),
                          (6001, 8000), (8001, 10000), (10001, 10987)]
     private var probeCount: Int { app.S.probeCount }
+    private var currentBand: Int {
+        guard let quiz else { return 1 }
+        return (bands.firstIndex { quiz.pos >= $0.0 && quiz.pos <= $0.1 } ?? 0) + 1
+    }
     private var finalMean: Int {
         let a = recentMeans.suffix(5).sorted()
         return a.isEmpty ? max(1, Int(StudyEngine.postMean(app.S).rounded())) : Int(a[a.count / 2].rounded())
@@ -28,7 +33,7 @@ struct PlacementView: View {
             } else {
                 VStack(spacing: 0) {
                     HStack {
-                        Text("智能定级 · 第 \(probeCount + 1)/30 题 · 第 \(probeCount / 5 + 1) 区间")
+                        Text("智能定级 · 第 \(probeCount + 1)/30 题 · 第 \(currentBand) 区间")
                             .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
                         Spacer()
                         Button("退出") { app.route = .home }.foregroundStyle(Theme.muted)
@@ -111,6 +116,7 @@ struct PlacementView: View {
     }
 
     private func loadNext() async {
+        answering = false
         if positions.isEmpty { positions = makePositions() }
         if probeCount >= 30 {
             finish(boundary: finalMean)
@@ -137,6 +143,8 @@ struct PlacementView: View {
     }
 
     private func answer(_ q: Quiz, ok: Bool, guessed: Bool = true) {
+        guard !answering else { return }
+        answering = true
         answers.append(ok)
         StudyEngine.recordKnowledge(&app.S, word: q.word, pos: q.pos, ok: ok, isPlacement: true)
         StudyEngine.posteriorUpdate(&app.S, rank: q.pos, resp: ok ? 1 : 0, guess: guessed ? 0.25 : 0)

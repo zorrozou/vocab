@@ -166,16 +166,21 @@ final class AppState {
     func syncFromServer() async -> Bool {
         let localTs = UserDefaults.standard.double(forKey: "vocab_write_\(slotKey)")
         let lastSync = UserDefaults.standard.double(forKey: lastSyncKey)
-        if localTs > lastSync + 0.5 {
-            try? await api.pushState(S)
-            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastSyncKey)
+        do {
+            if localTs > lastSync + 0.5 {
+                try await api.pushState(S)   // 推送失败绝不记已同步，也绝不继续拉旧档覆盖本地
+                UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: lastSyncKey)
+            }
+            if let rs = try await api.pullState().state {
+                S = rs
+                saveLocal()
+                return true
+            }
+            return false
+        } catch {
+            await handleSyncError(error)
+            return false
         }
-        if let remote = try? await api.pullState(), let rs = remote.state {
-            S = rs
-            saveLocal()
-            return true
-        }
-        return false
     }
 
     // MARK: 设备 ID（个性化例句分桶，与 web 规则一致）
@@ -214,12 +219,10 @@ final class AppState {
             auth = a
             await api.setToken(a.token)
             let local = loadLocal(slot: slotKey, forUsername: a.username)
+            S = local ?? LearningState()   // 先装本机存档，绝不能用空白内存覆盖服务器
             let hasRemote = await syncFromServer()
-            if !hasRemote, let local {
-                S = local
-                try? await api.pushState(S)
-            }
-            saveLocal()
+            guard auth?.userId == a.userId else { return }   // 401 已切到登录页，不再跳回主页
+            if !hasRemote { saveLocal() }   // 网络失败保留本机进度，稍后重试同步
             route = .home
         } else if UserDefaults.standard.bool(forKey: "vocab_guest") {
             S = loadLocal(slot: "guest") ?? LearningState()
@@ -267,17 +270,17 @@ final class AppState {
             UserDefaults.standard.set(d, forKey: "vocab_profile")
         }
         UserDefaults.standard.set(false, forKey: "vocab_guest")
-        // 有未同步修改先补推，再拉服务器合并结果；没有则以服务器为准
+        let previousState = S
+        let local = loadLocal(slot: slotKey, forUsername: r.user.username)
+        S = local ?? LearningState()   // 先切换到目标账号存档，不能把上一个账号/游客状态误推过去
         let hasRemote = await syncFromServer()
         guard auth?.userId == owner else { return }   // 等待期间又切号，旧账号响应不得落地
         if !hasRemote {
-            if let local = loadLocal(slot: slotKey, forUsername: r.user.username) {
-                S = local
+            if local == nil && !isRegistration && (!previousState.cards.isEmpty || previousState.probeCount > 0) {
+                S = previousState             // 仅老账号无存档时合并之前的游客进度
                 try? await api.pushState(S)
-            } else if !isRegistration && !S.cards.isEmpty {
-                try? await api.pushState(S)   // 游客进度并入老账号
             } else {
-                S = LearningState()           // 新账号全新开始
+                S = local ?? LearningState()  // 新账号全新开始；网络失败保留本机存档
             }
         }
         saveLocal()
@@ -370,7 +373,7 @@ final class AppState {
         S.log.last { $0.word == word && ($0.kind == "learn" || $0.kind == "review") }?.d
     }
 
-    func learn(word: String, pos: Int, rating: Int) async {
+    func learn(word: String, pos: Int, rating: Int, fromPending: Bool = false) async {
         let today = DayUtil.today()
         let lastReview = lastReviewDate(word)
         var c = S.cards[word] ?? CardState(stage: 1, due: DayUtil.addDays(today, 1) + "T12:00:00Z",
@@ -383,6 +386,9 @@ final class AppState {
             StudyEngine.ladderFallback(&c, rating: rating, today: today)
         }
         S.cards[word] = c
+        // 只有真正完成学习才消耗待补学词/推进顺序游标；中途退出不丢词、不跳词。
+        S.pendingNew.removeAll { $0.word == word }
+        if !fromPending { S.pointer = max(S.pointer, pos + 1) }
         S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "learn"))
         StudyEngine.recordKnowledge(&S, word: word, pos: pos, ok: rating != 1)
         // 水平追踪观测（v1.2）：不熟悉=强证据(resp 0, w1.0)；学会了=自评弱证据(resp 1, w0.5)
@@ -615,7 +621,8 @@ final class AppState {
 
     // MARK: 每日队列（到期复习 + 提前巩固概率池 + 新词）
 
-    func buildQueue() async {
+    @discardableResult
+    func buildQueue() async -> Bool {
         let now = Date()
         let cap = S.settings.dailyCap
 
@@ -647,15 +654,15 @@ final class AppState {
         let newPerDay = (S.track?.throttle == true) ? 5 : S.settings.newPerDay
         let nNew = min(newPerDay, max(0, cap - reviewsAll.count))
         var news: [NewWord] = []
-        var rest = S.pendingNew
-        // 防重守卫：已在卡片里的词（学过/在复习）绝不再当新词发
-        while news.count < nNew, !rest.isEmpty {
-            let w = rest.removeFirst()
-            if S.cards[w.word] == nil && !news.contains(where: { $0.word == w.word }) {
-                news.append(w)
+        // 只清理已经入卡的旧待学项；本次选中但未学完的词必须留在 pendingNew。
+        S.pendingNew = S.pendingNew.filter { S.cards[$0.word] == nil }
+        for w in S.pendingNew where news.count < nNew {
+            if !news.contains(where: { $0.word == w.word }) {
+                var pending = w
+                pending.fromPending = true
+                news.append(pending)
             }
         }
-        S.pendingNew = rest
         if news.count < nNew {
             let want = nNew - news.count + 2
             if let r = try? await api.lexiconAt(pos: S.pointer, n: want) {
@@ -667,13 +674,15 @@ final class AppState {
                 }
             }
         }
-        // pendingNew 词只有 word+pos（定级遗留），补全音标/义项/静态例句等完整词条
-        for i in news.indices where news[i].senses == nil {
-            if let r = try? await api.lexiconAt(pos: news[i].pos, n: 10),
-               let full = r.words.first(where: { $0.word == news[i].word }) {
+        // 统一按词形补全详情：不能按可能已过期的位置猜词，更不能把别的词释义填进来。
+        for i in news.indices where news[i].senses?.isEmpty != false {
+            if let full = try? await api.lexiconWord(news[i].word) {
+                let pending = news[i].fromPending
                 news[i] = full
+                news[i].fromPending = pending
             }
         }
+        guard news.count == nNew else { return false }   // 词条未加载完整时不误记“今日完成”
         // 跳段复核：发生过跳位（pointer 已显著领先定级边界）时，每天从跳过区间随机抽 1 个词
         // 顶替 1 个新词位——给"视为已会"的跳过词一次被抓住的机会。
         // 答对就过（确认真会），答错它会正常进卡片复习，同时水平后验自动回落纠偏。
@@ -700,9 +709,9 @@ final class AppState {
 
         session = Session()
         session.queue = revBlock + news.map { .learn(word: $0) }
-        if let lastPos = news.last?.pos { S.pointer = lastPos + 1 }
         save()
         prefetchDay(news: news, reviewWords: reviewsAll)
+        return true
     }
 
     /// 队列确定后立即后台预生成三句套装 + TTS 预热（不等翻卡）

@@ -91,6 +91,10 @@ actor APIClient {
         try await get("/api/v1/lexicon/at", ["pos": "\(pos)", "n": "\(n)"])
     }
 
+    func lexiconWord(_ word: String) async throws -> NewWord {
+        try await get("/api/v1/lexicon/word", ["word": word])
+    }
+
     func placementSet(seed: String) async throws -> PlacementSet {
         try await get("/api/v1/placement/set", ["seed": seed])
     }

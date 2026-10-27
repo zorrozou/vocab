@@ -1,7 +1,7 @@
 # 项目进展手册（PROGRESS）
 
 > 目的：让任何人（包括未来的自己）在 10 分钟内完整接手本项目。
-> 最近更新：2026-09-04 · 状态：Web 版功能完整，多用户上线，例句质量全量打磨完成
+> 最近更新：2026-10-27 · 状态：Web/iOS 学习主链路上线，释义、同步、例句与音频稳定性二次审查完成
 
 ---
 
@@ -31,7 +31,7 @@ Web 单页学习应用已功能完整上线（定级/学习/复习/FSRS/个性�
 | vocab-api | `~/vocab-api/`（systemd `vocab-api.service`，127.0.0.1:8000） | FastAPI；重启 `sudo systemctl restart vocab-api` |
 | 词库 | `~/vocab-api/data/lexicon_v0.1.sqlite` | 7.4MB，WAL 模式 |
 | 音频缓存 | **69,210 个 mp3（`data/tts_cache/`）** |
-| 模型配置 | `/etc/vocab-api/vocab-api.env`（服务）· `pipeline.env`（批量） | 服务=hy3，批量=glm-5.2；`run-pipeline` 包装命令注入批量配置 |
+| 模型配置 | `/etc/vocab-api/vocab-api.env`（服务）· `pipeline.env`（批量） | 服务=hy4-preview，评审/批量=glm-5.2；`run-pipeline` 包装命令注入批量配置 |
 | nginx | `/etc/nginx/sites-enabled/default` | `location /vocab/` 反代；主站证书 TrustAsia 已过期（2026-07-10），Let's Encrypt 因 DNSPod 境外 webblock 无法签——待处理 |
 | 日志 | `journalctl -u vocab-api` · `~/vocab-api/*.log` | 量产日志在 vocab-api 根目录 |
 
@@ -115,6 +115,16 @@ Web 单页学习应用已功能完整上线（定级/学习/复习/FSRS/个性�
 - **校验**：题目加载失败时显示"校验不可用"，不展示伪精确估值；未学先验默认从 0.5 降为 0.2，降低虚高
 - **诊断**：新增 `pipeline/diagnose_state_pollution.py`，只读比较账号状态；实测当前 uid3/uid6 无相同 frontier/track/posterior
 - 回归：`test_state_merge`、11 组 API 回归、FSRS 回归、Tatoeba 三句实测全部通过；iOS 已安装到手机
+
+### 2026-10-27 学习卡释义与全链路稳定性二次审查
+- **新词无释义根因修复**：新增 `GET /api/v1/lexicon/word?word=...` 精确词条接口；双端待补学词统一按词形补全，不再按过期位置猜词。学习卡/答案卡支持加载状态、失败提示与重试，不再静默空白。
+- **队列与游标**：待补学词改为真正学完后才消耗；中途退出不丢词。顺序 pointer 也改为学完后推进，待补学词的位置不再把主进度改写/倒退；双端一致。
+- **同步数据保护**：启动/登录先装目标账号本机存档，禁止空白内存或游客状态误推；推送失败不记录已同步、不拉旧档覆盖本地；401 后不再跳回主页。
+- **异步竞态**：网页补句/巩固句返回前核对当前卡，防止旧词例句插入新卡；评分按钮防连点；定级区间按实际词位显示，说明统一为完整 30 题。
+- **例句生成**：LLM 保留多行 A/B/C 输出；所有生成只锚定核心义项，避免 apple 被写成俚语“家伙”。巩固句改缓存优先+后台生成，接口实测约 0.18s，不再同步等待 LLM 导致 504；池句补中文翻译。
+- **TTS 首播竞态**：同文本串行生成、临时文件原子替换；空文件不再被当成已生成。6 路并发首播全部返回同一有效 MP3。
+- **实测**：网页只有 word+pos 的 professional 待补学词显示 2 个义项+3 句；重复组队不丢词、不推进 pointer，学完后才消项。iOS 模拟器完整走通 10 复习+3 探测+10 新词+10 验收，连续新词卡均有释义/音标/三档句；答错撤销、完成页个性化句及中文翻译通过。
+- **回归**：11 组线上 API、FSRS 全链、状态合并、JS 语法、iOS 模拟器与真机构建全部通过；Web/服务端已部署。真机包编译成功，但本次设备 `unavailable`，尚未安装，需手机重新连接解锁后补装。
 
 ### 2026-10-26 v2.0 词级知识模型（调研驱动升级）
 - 调研 Duolingo HLR/Birdbrain、Lingvist KME、BKT、FSRS、DET IRT，详见 `docs/算法调研与升级-v2.0.md`

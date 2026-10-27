@@ -49,11 +49,15 @@ struct LearnCardView: View {
     @State private var shadowMsg = ""
     @State private var shadowResult: ShadowResult?
     @State private var acted = false
+    @State private var detail: NewWord?
+    @State private var detailError = ""
     @State private var sideTasks: [Task<Void, Never>] = []   // 异步补句/织入任务，翻页即取消
+
+    private var currentItem: NewWord { detail ?? item }
 
     var body: some View {
         VStack(spacing: 0) {
-            SessionHeader(title: "新词 \(app.session.idx + 1)/\(app.session.queue.count) · \(levelDisplayName(item.level ?? levelForPos(item.pos)))",
+            SessionHeader(title: "新词 \(app.session.idx + 1)/\(app.session.queue.count) · \(levelDisplayName(currentItem.level ?? levelForPos(currentItem.pos)))",
                           progress: Double(app.session.idx) / Double(max(1, app.session.queue.count)))
             // 内容区：可滚动，占满上方剩余空间
             ScrollView {
@@ -63,7 +67,7 @@ struct LearnCardView: View {
                             BigWord(word: item.word)
                             PlayButton(text: item.word)
                         }
-                        if let ph = item.phonetic, !ph.isEmpty {
+                        if let ph = currentItem.phonetic, !ph.isEmpty {
                             Text("/\(ph)/").font(.system(size: 15)).foregroundStyle(Theme.muted)
                         }
                         sensesView
@@ -94,12 +98,24 @@ struct LearnCardView: View {
     }
 
     private var sensesView: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            ForEach(Array((item.senses ?? []).enumerated()), id: \.offset) { _, s in
+        VStack(alignment: .leading, spacing: 6) {
+            let senses = currentItem.senses ?? []
+            ForEach(Array(senses.enumerated()), id: \.offset) { _, s in
                 HStack(alignment: .top, spacing: 6) {
                     Text(s.pos ?? "·").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.accentLight)
                     Text(s.text).font(.system(size: 15)).foregroundStyle(Theme.text)
                 }
+            }
+            if senses.isEmpty, let sense = currentItem.sense, !sense.isEmpty {
+                Text(sense).font(.system(size: 15)).foregroundStyle(Theme.text)
+            } else if senses.isEmpty && detailError.isEmpty {
+                HStack { Text("正在加载词义…"); ProgressView().scaleEffect(0.7) }
+                    .font(.system(size: 14)).foregroundStyle(Theme.muted)
+            }
+            if !detailError.isEmpty {
+                Text(detailError).font(.system(size: 13)).foregroundStyle(Theme.bad)
+                Button("重新加载词义") { loadDetail() }
+                    .font(.system(size: 14, weight: .semibold))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -167,9 +183,10 @@ struct LearnCardView: View {
 
     private func setup() {
         personal = app.personalFor(item.word)
-        if let s = item.sentences, !s.isEmpty {
+        if currentItem.senses?.isEmpty != false { loadDetail() }
+        if let s = currentItem.sentences, !s.isEmpty {
             sentences = s
-        } else if let st = item.static, !st.isEmpty {
+        } else if let st = currentItem.static, !st.isEmpty {
             sentences = [SentenceItem(tier: 1, text: st, zh: nil)]
         }
         // 自动连播：单词 → 全部例句；同时记录薄弱词的真实展示/播放曝光
@@ -222,6 +239,27 @@ struct LearnCardView: View {
         }
     }
 
+    private func loadDetail() {
+        detailError = ""
+        let t = Task {
+            do {
+                let full = try await APIClient.shared.lexiconWord(item.word)
+                guard !Task.isCancelled else { return }
+                detail = full
+                let hadSentences = !sentences.isEmpty
+                if let fresh = full.sentences, !fresh.isEmpty {
+                    sentences = fresh
+                    if !hadSentences {
+                        app.audio.playSequence(word: item.word, sentences: fresh.map { $0.text }, voice: app.S.settings.voice)
+                    }
+                }
+            } catch {
+                if !Task.isCancelled { detailError = "词义加载失败，请检查网络后重试" }
+            }
+        }
+        sideTasks.append(t)
+    }
+
     /// 跟读目标句：选最短的（挑战句 15~20 词一口气读不下来，基础句最适合跟读）
     private func shadowTarget() -> String {
         ([personal?.text].compactMap { $0 } + sentences.map { $0.text })
@@ -240,7 +278,7 @@ struct LearnCardView: View {
         guard !acted else { return }
         acted = true
         Task {
-            await app.learn(word: item.word, pos: item.pos, rating: rating)
+            await app.learn(word: item.word, pos: item.pos, rating: rating, fromPending: item.fromPending == true)
             app.session.learnedToday += 1
             app.session.idx += 1
             app.save()
@@ -471,6 +509,7 @@ struct AnswerCardView: View {
     @State private var shadowMsg = ""
     @State private var shadowResult: ShadowResult?
     @State private var rated = false
+    @State private var detailError = ""
 
     var body: some View {
         VStack(spacing: 0) {
@@ -493,6 +532,16 @@ struct AnswerCardView: View {
                                 HStack(alignment: .top, spacing: 6) {
                                     Text(s.pos ?? "·").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.accentLight)
                                     Text(s.text).font(.system(size: 15)).foregroundStyle(Theme.text)
+                                }
+                            }
+                            if detail == nil {
+                                if detailError.isEmpty {
+                                    HStack { Text("正在加载词义…"); ProgressView().scaleEffect(0.7) }
+                                        .font(.system(size: 14)).foregroundStyle(Theme.muted)
+                                } else {
+                                    Text(detailError).font(.system(size: 13)).foregroundStyle(Theme.bad)
+                                    Button("重新加载词义") { Task { await loadDetail() } }
+                                        .font(.system(size: 14, weight: .semibold))
                                 }
                             }
                         }
@@ -587,12 +636,7 @@ struct AnswerCardView: View {
             app.save()
         }
         personal = app.personalFor(word)
-        let pos = app.S.cards[word]?.pos ?? app.S.pointer
-        if let r = try? await APIClient.shared.lexiconAt(pos: pos, n: 1),
-           let d = r.words.first(where: { $0.word == word }) ?? r.words.first {
-            detail = d
-            sentences = d.sentences ?? (d.static.map { [SentenceItem(tier: 1, text: $0, zh: nil)] } ?? [])
-        }
+        await loadDetail()
         if sentences.isEmpty, let e = try? await APIClient.shared.ensure(word: word), !e.text.isEmpty {
             sentences = [SentenceItem(tier: 1, text: e.text, zh: nil)]
         }
@@ -603,6 +647,18 @@ struct AnswerCardView: View {
         if let p = personal { app.logSentenceExposures(p.text, source: "personal", played: true) }
         sentences.forEach { app.logSentenceExposures($0.text, source: "trio", played: true) }
         app.audio.playSequence(word: word, sentences: texts, voice: app.S.settings.voice)
+    }
+
+    private func loadDetail() async {
+        detailError = ""
+        do {
+            let d = try await APIClient.shared.lexiconWord(word)
+            guard d.word == word else { throw APIError(message: "词条不匹配") }
+            detail = d
+            sentences = d.sentences ?? (d.static.map { [SentenceItem(tier: 1, text: $0, zh: nil)] } ?? [])
+        } catch {
+            if !Task.isCancelled { detailError = "词义加载失败，请检查网络后重试" }
+        }
     }
 
     /// 跟读目标句：选最短的（挑战句 15~20 词一口气读不下来，基础句最适合跟读）
@@ -640,6 +696,7 @@ struct AcceptanceQuizView: View {
     @State private var i = 0
     @State private var quiz: Quiz?
     @State private var loading = true
+    @State private var answering = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -693,6 +750,8 @@ struct AcceptanceQuizView: View {
     }
 
     private func answer(ok: Bool) {
+        guard !answering else { return }
+        answering = true
         let w = words[i]
         Task {
             // 验收是客观实测，水平观测权重 1.0（强于复习的 0.2/0.3）
@@ -703,6 +762,7 @@ struct AcceptanceQuizView: View {
     }
 
     private func advance() {
+        answering = false
         if i + 1 < words.count {
             i += 1
             app.audio.play(words[i], voice: app.S.settings.voice)
@@ -785,8 +845,8 @@ struct DoneView: View {
                 if app.dueNowCount() > 0 {
                     PrimaryButton(title: "还有 \(app.dueNowCount()) 词已到期，继续复习 →") {
                         Task {
-                            await app.buildQueue()
-                            app.route = .session
+                            if await app.buildQueue() { app.route = .session }
+                            else { genStatus = "任务加载失败，请返回主页检查网络后重试" }
                         }
                     }
                 }

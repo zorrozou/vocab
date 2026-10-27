@@ -20,5 +20,6 @@ __pycache__/
 .venv/
 venv/
 
-# 系统
+# 系统与本地构建产物
 .DS_Store
+ios/.ios-build/
