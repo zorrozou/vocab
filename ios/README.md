@@ -60,7 +60,7 @@ VocabApp/
 - **state 同构**：`LearningState` 字段与 Web 端 `vocab_v1` 一一对应（含运行期扩展字段 quizDay/weaveDay/weaveCount/wrongStreak/personalizedDay/personalizedWeak），UTC 日期口径一致，跨端同步无损
 - **调度单一事实源**：FSRS 一律走服务端 `/api/v1/fsrs/review`；离线只用阶梯给出临时到期时间，待处理评分重放成功后以 FSRS 结果替换。
 - **日期字符串原样保留**：due 等时间不做 Date 往返，避免格式漂移
-- **服务地址**：Release 只接受 HTTPS，默认 `https://zorrozou.online/vocab`，可用构建设置 `VOCAB_API_BASE_URL` 覆盖；Debug 单独保留原 IP 的 HTTP 测试例外。该域名的证书在 2026-10-27 检查时已过期，必须先续期才能正常连接。
+- **服务地址**：按部署要求，Release 默认使用 `http://175.27.210.206/vocab`，仅对这个确切地址允许 HTTP；其他服务地址必须使用 HTTPS，可通过构建设置 `VOCAB_API_BASE_URL` 指定。HTTP 不加密账号密码、令牌和学习数据。
 
 ## 已知边界 / TODO
 

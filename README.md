@@ -6,7 +6,7 @@
 
 ## 快速体验
 
-请按“本地启动”运行，或使用已配置有效证书的 HTTPS 部署地址。不要通过明文 HTTP 提交账号或学习数据。
+请按“本地启动”运行。当前 iOS 部署按要求使用 IP 的明文 HTTP，账号密码、令牌和学习数据在传输中不加密；如需加密，应配置有效证书并使用 HTTPS。
 
 首次使用会进入 30 题智能定级（4 选 1，按词频带随机抽题），定级后开始每日学习闭环。
 
@@ -90,7 +90,7 @@ cd server
 
 服务端对登录、注册、例句生成、反馈和音频请求设置了进程内限流。systemd 示例只信任来自本机代理的转发地址；多进程或多机部署还需在可信网关配置共享限流，且不能直接信任客户端自填的转发头。
 
-HTTPS 参考 `config/nginx-vocab-https.conf.example`，必须先替换域名、配置有效证书并验证后再重载。iOS Release 默认使用 `https://zorrozou.online/vocab`，也可通过构建设置 `VOCAB_API_BASE_URL` 指定其他 HTTPS 地址；Release 拒绝 HTTP，Debug 保留原测试地址。2026-10-27 检查时该域名证书已过期，不能在证书修复前假定 Release 能连接服务。
+HTTPS 参考 `config/nginx-vocab-https.conf.example`，必须先替换域名、配置有效证书并验证后再重载。按部署要求，iOS Release 默认使用 `http://175.27.210.206/vocab`，仅对这一确切地址允许 HTTP；也可通过构建设置 `VOCAB_API_BASE_URL` 指定 HTTPS 地址。HTTP 传输不会加密账号密码、令牌和学习数据。
 
 详细进展与运维手册见 **[PROGRESS.md](PROGRESS.md)**，产品需求见 **[docs/PRD-艾宾浩斯背单词App.md](docs/PRD-艾宾浩斯背单词App.md)**。
 

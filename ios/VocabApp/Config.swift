@@ -14,7 +14,14 @@ enum Config {
         return components.url
     }
 
-    /// 可用 Xcode 构建设置 VOCAB_API_BASE_URL 覆盖；正式版只接受 HTTPS。
+    static let approvedHTTPBase = "http://175.27.210.206/vocab"
+
+    static func releaseAPIBase(_ raw: String) -> URL? {
+        if raw == approvedHTTPBase { return validatedAPIBase(raw, requireHTTPS: false) }
+        return validatedAPIBase(raw, requireHTTPS: true)
+    }
+
+    /// 可用 Xcode 构建设置 VOCAB_API_BASE_URL 覆盖；HTTP 仅允许指定的服务器地址。
     static let apiBase: URL? = {
         let configured = Bundle.main.object(forInfoDictionaryKey: "VocabAPIBaseURL") as? String
         #if DEBUG
@@ -24,13 +31,13 @@ enum Config {
         }
         let fallback = "http://175.27.210.206/vocab"
         #else
-        let fallback = "https://zorrozou.online/vocab"
+        let fallback = approvedHTTPBase
         #endif
         let raw = configured.flatMap { $0.isEmpty || $0.hasPrefix("$(") ? nil : $0 } ?? fallback
         #if DEBUG
         return validatedAPIBase(raw, requireHTTPS: false)
         #else
-        return validatedAPIBase(raw, requireHTTPS: true)
+        return releaseAPIBase(raw)
         #endif
     }()
     static let appName = "词航"

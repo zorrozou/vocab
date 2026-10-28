@@ -22,6 +22,10 @@ targets:
         NSMicrophoneUsageDescription: 跟读评分需要用麦克风采集你的朗读
         NSSpeechRecognitionUsageDescription: 跟读需要使用本机语音识别；本机识别不可用时不会自动切换网络识别
         VocabAPIBaseURL: "$(VOCAB_API_BASE_URL)"
+        NSAppTransportSecurity:
+          NSExceptionDomains:
+            175.27.210.206:
+              NSExceptionAllowsInsecureHTTPLoads: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zorro.vocab
