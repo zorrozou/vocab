@@ -1,15 +1,13 @@
 import SwiftUI
 
-/// 定级测试（固定分层 30 题）：6 个词汇量区间各随机 5 题。
-/// 每个区间独立评估，答完全部题再定边界；前几题答对不会直接跳到高级别。
-/// 低于 60% 的区间判为不扎实，落到前一区间；60% 为边界，80% 以上为通过。
+/// 定级测试共 30 题：前 12 题覆盖六个词汇量区间，后 18 题围绕当前估计探测。
+/// 答完后根据各区间累计证据计算学习边界。
 struct PlacementView: View {
     @Environment(AppState.self) private var app
     @State private var quiz: Quiz?
     @State private var loading = true
     @State private var loadFailed = false
     @State private var positions: [Int] = []
-    @State private var answers: [Bool] = []
     @State private var recentMeans: [Double] = []
     @State private var finished: Int? = nil
     @State private var answering = false
@@ -34,6 +32,7 @@ struct PlacementView: View {
                 VStack(spacing: 0) {
                     HStack {
                         Text("智能定级 · 第 \(probeCount + 1)/30 题 · 第 \(currentBand) 区间")
+                            .accessibilityIdentifier("placement-progress")
                             .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
                         Spacer()
                         Button("退出") { app.route = .home }.foregroundStyle(Theme.muted)
@@ -80,24 +79,13 @@ struct PlacementView: View {
 
     private func makePositions() -> [Int] {
         var out: [Int] = []
-        for (lo, hi) in bands {
-            var used = Set<Int>()
-            while used.count < 2 { used.insert(Int.random(in: lo...hi)) }
-            out.append(contentsOf: used)
+        for (index, (lo, hi)) in bands.enumerated() {
+            let used = Set(app.S.bandEvidence?["\(index)"]?.events.values.map(\.pos) ?? [])
+            var candidates = (lo...hi).filter { !used.contains($0) }
+            if candidates.count < 2 { candidates = Array(lo...hi) }
+            for _ in 0..<2 { out.append(candidates.remove(at: Int.random(in: 0..<candidates.count))) }
         }
         return out
-    }
-
-    private func estimate() -> Int {
-        var result = bands[0].0
-        for (i, (lo, hi)) in bands.enumerated() {
-            let start = i * 5
-            let end = min(start + 5, answers.count)
-            let score = answers[start..<end].filter { $0 }.count
-            if score < 3 { break }   // 低于60%：该区间不扎实，停在最后通过区间的估值
-            result = min(hi, lo + (hi - lo) * (score - 1) / 5)
-        }
-        return result
     }
 
     private func posteriorAround(_ mean: Int, sd: Double = 500) -> [Double] {
@@ -108,11 +96,14 @@ struct PlacementView: View {
 
     private var scoreText: String {
         bands.enumerated().map { i, b in
-            let start = i * 2
-            let end = min(start + 2, answers.count)
-            let score = answers[start..<end].filter { $0 }.count
-            return "\(b.0)~\(b.1)：\(score)/2"
+            let stat = app.S.bandStats?["\(i)"]
+            let known = stat?.a ?? 0, total = known + (stat?.b ?? 0)
+            return "\(b.0)~\(b.1)：\(formatCount(known))/\(formatCount(total))"
         }.joined(separator: "　")
+    }
+
+    private func formatCount(_ value: Double) -> String {
+        value.rounded() == value ? String(format: "%.0f", value) : String(format: "%.1f", value)
     }
 
     private func loadNext() async {
@@ -145,7 +136,6 @@ struct PlacementView: View {
     private func answer(_ q: Quiz, ok: Bool, guessed: Bool = true) {
         guard !answering else { return }
         answering = true
-        answers.append(ok)
         StudyEngine.recordKnowledge(&app.S, word: q.word, pos: q.pos, ok: ok, isPlacement: true)
         StudyEngine.posteriorUpdate(&app.S, rank: q.pos, resp: ok ? 1 : 0, guess: guessed ? 0.25 : 0)
         recentMeans.append(StudyEngine.postMean(app.S))

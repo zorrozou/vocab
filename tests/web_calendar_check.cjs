@@ -1,0 +1,16 @@
+const fs = require('fs'), vm = require('vm'), assert = require('assert');
+const html = fs.readFileSync('web/index.html','utf8');
+const source = html.slice(html.indexOf('const addDays = '), html.indexOf('const INTERVAL ='));
+const ctx = {}; vm.createContext(ctx); vm.runInContext(source + '\nthis.addDays = addDays; this.forecastDueDates = forecastDueDates;', ctx);
+assert.equal(ctx.addDays('2026-03-08', 1), '2026-03-09');
+assert.equal(ctx.addDays('2026-11-01', -1), '2026-10-31');
+assert.equal(ctx.addDays('2024-02-28', 1), '2024-02-29');
+assert.equal(ctx.addDays('2026-12-31', 1), '2027-01-01');
+assert.equal(new Date('2026-10-28').getTime(), new Date('2026-10-28T00:00:00Z').getTime());
+const cards={a:{due:'2026-03-08T07:30:00Z'},b:{due:'2026-03-09T00:30:00Z'},c:{due:'2026-03-08'},d:{due:'2026-03-08T23:00:00-08:00'},invalid:{due:'2026-02-29'},later:{due:'2026-04-01'}};
+const forecast=ctx.forecastDueDates(cards,'2026-03-08');
+assert.equal(forecast.length,14);assert.equal(forecast[1].d,'2026-03-09');
+if(process.env.TZ==='Pacific/Kiritimati')assert.deepEqual([forecast[0].n,forecast[1].n],[2,2]);
+if(process.env.TZ==='America/Los_Angeles')assert.deepEqual([forecast[0].n,forecast[1].n],[3,1]);
+assert.equal(forecast.reduce((total,item)=>total+item.n,0),4);
+console.log('PASS calendar dates in ' + process.env.TZ);

@@ -11,9 +11,8 @@ struct ShadowResult {
 }
 
 /// 跟读评分（M1：SFSpeechRecognizer）
-/// 优先纯本机识别（requiresOnDeviceRecognition）；若本机模型初始化失败
-/// （如模拟器/个别无本机模型的环境），降级为系统默认识别重试一次。
-/// 真实 iPhone 均走纯本机，语音不出设备。
+/// 只使用系统的本机识别；本机模型不可用或初始化失败时停止，
+/// 不自动切换为可能通过网络处理的系统默认识别。
 /// TODO(M1.5)：iOS 26+ 换 SpeechAnalyzer（无时长限制、词级时间戳，可算流利度子分）。
 @MainActor
 @Observable
@@ -32,7 +31,6 @@ final class SpeechService: NSObject {
     private var onResult: ((ShadowResult?) -> Void)?
     private var timeoutTask: Task<Void, Never>?
     private var finished = false
-    private var triedFallback = false
 
     static func requestPermissions() async -> Bool {
         let speechOK = await withCheckedContinuation { cont in
@@ -47,17 +45,16 @@ final class SpeechService: NSObject {
     /// 开始监听；最多 15 秒自动收尾。结果通过 onResult 回调一次。
     func start(target: String, onResult: @escaping (ShadowResult?) -> Void) {
         guard state == .idle else { return }
-        guard let recognizer, recognizer.isAvailable else {
+        guard let recognizer, recognizer.isAvailable, recognizer.supportsOnDeviceRecognition else {
             Logger.app.error("跟读: 识别器不可用")
             onResult(nil); return
         }
         self.target = target
         self.onResult = onResult
         finished = false
-        triedFallback = false
         liveText = ""
         state = .listening
-        startCapture(requireOnDevice: recognizer.supportsOnDeviceRecognition)
+        startCapture()
         timeoutTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 15_000_000_000)
             guard let self, !Task.isCancelled else { return }
@@ -65,14 +62,15 @@ final class SpeechService: NSObject {
         }
     }
 
-    /// 建立一轮收音+识别（本机优先，失败可降级重试）
-    private func startCapture(requireOnDevice: Bool) {
-        Logger.app.error("跟读开始: onDevice=\(requireOnDevice)")
+    var onDeviceAvailable: Bool { recognizer?.isAvailable == true && recognizer?.supportsOnDeviceRecognition == true }
+
+    /// 建立一轮本机收音和识别。
+    private func startCapture() {
         let eng = AVAudioEngine()
         engine = eng
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
-        req.requiresOnDeviceRecognition = requireOnDevice
+        req.requiresOnDeviceRecognition = true
         request = req
 
         #if os(iOS)
@@ -102,15 +100,8 @@ final class SpeechService: NSObject {
                         self.finish(with: result)
                     }
                 } else if let error {
-                    Logger.app.error("跟读识别错误(onDevice=\(requireOnDevice)): \(error.localizedDescription)")
-                    // 本机识别初始化失败 → 降级默认识别重试一次（真实设备不会走到这）
-                    if requireOnDevice && !self.triedFallback {
-                        self.triedFallback = true
-                        self.teardownCapture()
-                        self.startCapture(requireOnDevice: false)
-                    } else {
-                        self.finish(with: nil)
-                    }
+                    Logger.app.error("本机跟读识别错误: \(error.localizedDescription)")
+                    self.finish(with: nil)
                 }
             }
         }

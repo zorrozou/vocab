@@ -51,6 +51,10 @@ struct ShadowHoldButton: View {
                 onBusy("需要麦克风和语音识别权限（设置 → 词航）")
                 return
             }
+            guard app.speech.onDeviceAvailable else {
+                onBusy("本机语音识别暂不可用；请检查设备语言与语音模型")
+                return
+            }
             app.speech.start(target: target, onResult: onResult)
         }
     }
@@ -75,6 +79,8 @@ struct ShadowResultDisplay: View {
                     Text("已记入薄弱词").font(.system(size: 11)).foregroundStyle(Theme.bad)
                 }
             }
+            Text("完整度是识别到的目标词比例；识别置信度不代表发音准确度。")
+                .font(.system(size: 11)).foregroundStyle(Theme.muted)
             if !result.words.isEmpty {
                 result.words.reduce(Text("")) { acc, w in
                     acc + Text(w.text + " ").foregroundStyle(color(of: w.confidence))
@@ -227,6 +233,8 @@ struct SentenceRow: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("换一句：\(word)")
+                .accessibilityIdentifier("swap-\(kind)-\(word)")
                 .disabled(swapping)
             }
             if let recallNote {
@@ -265,6 +273,7 @@ struct QuizOptionsView: View {
                         .foregroundStyle(Theme.text)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
+                .accessibilityIdentifier("quiz-option-\(i)")
                 .disabled(picked != nil)
             }
         }

@@ -20,12 +20,8 @@ targets:
         UISupportedInterfaceOrientations:
           - UIInterfaceOrientationPortrait
         NSMicrophoneUsageDescription: 跟读评分需要用麦克风采集你的朗读
-        NSSpeechRecognitionUsageDescription: 跟读评分需要识别你的朗读内容（支持本机识别的设备上不会上传）
-        NSAppTransportSecurity:
-          NSExceptionDomains:
-            175.27.210.206:
-              NSExceptionAllowsInsecureHTTPLoads: true
-              NSIncludesSubdomains: true
+        NSSpeechRecognitionUsageDescription: 跟读需要使用本机语音识别；本机识别不可用时不会自动切换网络识别
+        VocabAPIBaseURL: "$(VOCAB_API_BASE_URL)"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zorro.vocab
@@ -34,3 +30,29 @@ targets:
         CODE_SIGN_STYLE: Automatic
         DEVELOPMENT_TEAM: "X5ANMACUCD"
         ENABLE_USER_SCRIPT_SANDBOXING: NO
+      configs:
+        Debug:
+          INFOPLIST_FILE: VocabApp/Info-Debug.plist
+  VocabUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: VocabUITests
+    dependencies:
+      - target: VocabApp
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.zorro.vocab.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "5.9"
+        TEST_TARGET_NAME: VocabApp
+schemes:
+  VocabUIRegression:
+    build:
+      targets:
+        VocabApp: all
+        VocabUITests: [test]
+    test:
+      targets:
+        - VocabUITests

@@ -14,11 +14,15 @@ def main():
     total = 0
     for rowid, device, date, payload in rows:
         p = json.loads(payload)
+        # 旧版本把即时任务也放进夜间队列；不要清除它已经生成的结果。
+        if p.get("sync"):
+            conn.execute("UPDATE requests SET processed=1 WHERE rowid=?", (rowid,))
+            conn.commit()
+            continue
         # 幂等：重跑先清掉该设备当日旧句
         conn.execute("DELETE FROM sentences WHERE device=? AND date=?", (device, date))
         conn.commit()
-        n = generate(device, date, p.get("new_words", []), p.get("weak_words", []),
-                     p.get("learned_max_pos", 300))
+        n = generate(device, date, p.get("weak_words", []), p.get("learned_max_pos", 300))
         conn.execute("UPDATE requests SET processed=1 WHERE rowid=?", (rowid,))
         conn.commit()
         total += n

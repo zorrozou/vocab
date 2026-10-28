@@ -1,0 +1,11 @@
+const fs=require('fs'),vm=require('vm'),assert=require('assert');
+const html=fs.readFileSync('web/index.html','utf8');
+const code=html.slice(html.indexOf('function trimLearningLog('),html.indexOf('const save = () =>'));
+const ctx={today:()=> '2026-10-24'};vm.createContext(ctx);vm.runInContext(code,ctx);
+const log=['2026-10-24','2026-10-25','2026-10-26','2026-10-27'].map(d=>({d,kind:'review',word:'apple'}));
+log.push(...Array.from({length:1400},()=>({d:'2026-10-27',kind:'exposure',word:'noise'})));
+const trimmed=ctx.trimLearningLog(log,'2026-10-24');
+assert.deepEqual(trimmed.filter(x=>x.kind==='review').map(x=>x.d),['2026-10-24','2026-10-25','2026-10-26','2026-10-27']);
+const ordinary=ctx.trimLearningLog(log,'2026-10-27');
+assert.deepEqual(ordinary.filter(x=>x.kind==='review').map(x=>x.d),['2026-10-25','2026-10-26','2026-10-27']);
+console.log('PASS retained recent activity days and local day after exposure-heavy trim');

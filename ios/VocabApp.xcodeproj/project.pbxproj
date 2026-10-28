@@ -16,28 +16,43 @@
 		4A46A09B0175FA26B133A5CC /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2B68581C7F190A29D49092D /* Models.swift */; };
 		63A4D24C72D3C97AA2C8525D /* AuthViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED7AFBBDA25365BDF9262EA2 /* AuthViews.swift */; };
 		70C4E4FA06974B92ECB18D30 /* VocabApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AC23A079372B08085F8448D /* VocabApp.swift */; };
+		7BE82BEE474E44431CA26747 /* VocabUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B4A2AC97C94B9F8F85177636 /* VocabUITests.swift */; };
 		7C33628014DEDD51F7BFF829 /* APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3208F3D855D300A027FF03C8 /* APIClient.swift */; };
 		8A310F457351BB7658D9A504 /* NotificationService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EE5DB36D080E289F4AFBD8A /* NotificationService.swift */; };
 		9AB9049FA87909102A5C506F /* AppState.swift in Sources */ = {isa = PBXBuildFile; fileRef = AFB6A7E6F213B7F638C3D2C8 /* AppState.swift */; };
 		BEF737F7775DFEB5824AB501 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDC962FAC6009D31FCFE13B0 /* SettingsView.swift */; };
 		C0AF4A62D4A2B1ECCD737FAC /* Config.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA32DC753AA6AEA8502E3BE6 /* Config.swift */; };
 		DDCF4C89E5BA89A10DE00BEF /* AudioService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 528CE37515870A27DF461AEB /* AudioService.swift */; };
+		EEA9A1631529AA53A0B853A1 /* Foundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 500146D20069EA9B24ECE51A /* Foundation.framework */; };
 		EF776B0F8F2BDC7DEA9A3C3B /* SessionViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = 98F16D9F4207E3D25D452F39 /* SessionViews.swift */; };
 		FC735A76CCA8FF61F0B91105 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE8A39DD05E106049AC4C0F5 /* Components.swift */; };
 /* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		D571CD69CA09353702543130 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 79291EB669248C7B2B092AF9 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 3DBDD1FFF61E584ECC697774;
+			remoteInfo = VocabApp;
+		};
+/* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
 		04F52F05D0467A25F754C17E /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
 		3208F3D855D300A027FF03C8 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		3D4F8B2A41EA6D83B9F5D37D /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
 		479F54AD39DB2C3FC05AD82E /* SpeechService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpeechService.swift; sourceTree = "<group>"; };
+		500146D20069EA9B24ECE51A /* Foundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Foundation.framework; path = Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS26.0.sdk/System/Library/Frameworks/Foundation.framework; sourceTree = DEVELOPER_DIR; };
 		528CE37515870A27DF461AEB /* AudioService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AudioService.swift; sourceTree = "<group>"; };
 		6AC23A079372B08085F8448D /* VocabApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VocabApp.swift; sourceTree = "<group>"; };
 		7EE5DB36D080E289F4AFBD8A /* NotificationService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NotificationService.swift; sourceTree = "<group>"; };
 		7F93C6585AF5AFE9D77AEBC2 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		98F16D9F4207E3D25D452F39 /* SessionViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionViews.swift; sourceTree = "<group>"; };
+		A41944A782B81DE2379AD233 /* VocabUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = VocabUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AFB6A7E6F213B7F638C3D2C8 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		B2B68581C7F190A29D49092D /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		B4A2AC97C94B9F8F85177636 /* VocabUITests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VocabUITests.swift; sourceTree = "<group>"; };
 		BE5C2C058B8161F7EFBA5F26 /* PlacementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlacementView.swift; sourceTree = "<group>"; };
 		C55ADD069F1A3763B8BFEA82 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
 		C8D22EE326CAD50DC57B9CB5 /* VocabApp.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = VocabApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -48,12 +63,50 @@
 		FEF8B4518D2CC8CCE963F645 /* StudyEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StudyEngine.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
+/* Begin PBXFrameworksBuildPhase section */
+		F5A433411498B643B86528A2 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EEA9A1631529AA53A0B853A1 /* Foundation.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
 /* Begin PBXGroup section */
+		1AD0CF43614DADEEE09FC404 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				500146D20069EA9B24ECE51A /* Foundation.framework */,
+			);
+			name = iOS;
+			sourceTree = "<group>";
+		};
+		4CE329B36BCFB307B3EB442D /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				1AD0CF43614DADEEE09FC404 /* iOS */,
+			);
+			name = Frameworks;
+			sourceTree = "<group>";
+		};
+		529477434C59B28811728549 /* VocabUITests */ = {
+			isa = PBXGroup;
+			children = (
+				B4A2AC97C94B9F8F85177636 /* VocabUITests.swift */,
+			);
+			name = VocabUITests;
+			path = VocabUITests;
+			sourceTree = "<group>";
+		};
 		56EB1AAECFB4C9F1D589A4F2 = {
 			isa = PBXGroup;
 			children = (
 				BA937C66CA68193F75E915B2 /* VocabApp */,
 				CFF59DDF90E53AE588D18A0C /* Products */,
+				4CE329B36BCFB307B3EB442D /* Frameworks */,
+				529477434C59B28811728549 /* VocabUITests */,
 			);
 			sourceTree = "<group>";
 		};
@@ -94,6 +147,7 @@
 			isa = PBXGroup;
 			children = (
 				C8D22EE326CAD50DC57B9CB5 /* VocabApp.app */,
+				A41944A782B81DE2379AD233 /* VocabUITests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -112,11 +166,27 @@
 			dependencies = (
 			);
 			name = VocabApp;
-			packageProductDependencies = (
-			);
 			productName = VocabApp;
 			productReference = C8D22EE326CAD50DC57B9CB5 /* VocabApp.app */;
 			productType = "com.apple.product-type.application";
+		};
+		C7E0CAFE2CCF4F78F59836AD /* VocabUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = ED1F9954AE5AC10370A23487 /* Build configuration list for PBXNativeTarget "VocabUITests" */;
+			buildPhases = (
+				13711846115B6B8FBAB54B74 /* Sources */,
+				F5A433411498B643B86528A2 /* Frameworks */,
+				4D64F0D8FEFF18F45C5C3BB2 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				693ADBD9AC84858F5D2B8392 /* PBXTargetDependency */,
+			);
+			name = VocabUITests;
+			productName = VocabUITests;
+			productReference = A41944A782B81DE2379AD233 /* VocabUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
 		};
 /* End PBXNativeTarget section */
 
@@ -148,11 +218,30 @@
 			projectRoot = "";
 			targets = (
 				3DBDD1FFF61E584ECC697774 /* VocabApp */,
+				C7E0CAFE2CCF4F78F59836AD /* VocabUITests */,
 			);
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		4D64F0D8FEFF18F45C5C3BB2 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
+		13711846115B6B8FBAB54B74 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				7BE82BEE474E44431CA26747 /* VocabUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		A339BEA09BAC2E6C06ECEDC3 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -178,6 +267,15 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		693ADBD9AC84858F5D2B8392 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			name = VocabApp;
+			target = 3DBDD1FFF61E584ECC697774 /* VocabApp */;
+			targetProxy = D571CD69CA09353702543130 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		19171F134D5C0BCDD200B7B4 /* Release */ = {
@@ -236,6 +334,20 @@
 			};
 			name = Release;
 		};
+		9539C30FD2A4AC92FB424E96 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zorro.vocab.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TEST_TARGET_NAME = VocabApp;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
 		AB7A9B14469AE82DC43C95E8 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -265,7 +377,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				DEVELOPMENT_TEAM = X5ANMACUCD;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
-				INFOPLIST_FILE = VocabApp/Info.plist;
+				INFOPLIST_FILE = "VocabApp/Info-Debug.plist";
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
@@ -341,6 +453,19 @@
 			};
 			name = Debug;
 		};
+		EE486104B1C3C5E35C762515 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_OBJC_WEAK = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.zorro.vocab.uitests;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.9;
+				TEST_TARGET_NAME = VocabApp;
+			};
+			name = Debug;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -361,6 +486,15 @@
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Debug;
+		};
+		ED1F9954AE5AC10370A23487 /* Build configuration list for PBXNativeTarget "VocabUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				9539C30FD2A4AC92FB424E96 /* Release */,
+				EE486104B1C3C5E35C762515 /* Debug */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
 	};

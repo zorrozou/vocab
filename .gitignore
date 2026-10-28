@@ -3,6 +3,10 @@
 !*.env.example
 pipeline.env
 personal.db
+/server/data/
+/server/static/
+*.sqlite-shm
+*.sqlite-wal
 *.pem
 *.key
 

@@ -6,7 +6,7 @@ After=network.target
 User=ubuntu
 WorkingDirectory=/home/ubuntu/vocab-api
 EnvironmentFile=/etc/vocab-api/vocab-api.env
-ExecStart=/home/ubuntu/vocab-api/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+ExecStart=/home/ubuntu/vocab-api/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --proxy-headers --forwarded-allow-ips=127.0.0.1
 Restart=on-failure
 RestartSec=3
 

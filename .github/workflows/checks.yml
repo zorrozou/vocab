@@ -1,0 +1,419 @@
+name: Regression checks
+on:
+  push:
+  pull_request:
+
+jobs:
+  server-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r server/requirements.txt
+      - name: Prepare isolated lexicon
+        run: |
+          mkdir -p server/data server/static
+          cp data/lexicon_v0.1.sqlite server/data/
+          cp web/index.html server/static/index.html
+      - name: Server state, scheduling and content checks
+        run: |
+          python server/test_state_merge.py
+          python server/test_fsrs_history_merge.py
+          python server/test_fsrs_scheduler_versions.py
+          python server/test_fsrs_backup_portability.py
+          python server/test_rate_limits.py
+          python server/test_account_identity.py
+          python server/test_state_revision_migration.py
+          python server/test_state_segments.py
+          python server/test_state_verification_cache.py
+          python server/test_delta_staging_storage.py
+          python server/test_state_changes.py
+          python server/test_password_migration.py
+          python server/test_backup_rehearsal.py
+          python server/test_generation_restore_http.py
+          python server/test_optimizer_path.py
+          python server/test_settings_merge.py
+          python server/test_knowledge_evidence.py
+          python server/test_band_evidence.py
+          python server/test_posterior_evidence.py
+          python server/test_log_events.py
+          python server/test_checkpoint.py
+          python server/test_streak_evidence.py
+          python server/test_placement_version.py
+          python server/test_personal_rejections.py
+          python server/test_lexicon_concurrency.py
+          python server/test_lexicon_pagination.py
+          python server/test_personal_identity_migration.py
+          python server/test_personal_jobs.py
+          python server/test_guest_credentials.py
+          python server/test_quiz_quality.py
+          python pipeline/audit_content.py > /dev/null
+      - name: Web state and scheduling checks
+        run: |
+          TZ=Pacific/Kiritimati node tests/web_calendar_check.cjs
+          TZ=America/Los_Angeles node tests/web_calendar_check.cjs
+          node tests/web_retention_check.cjs
+          node tests/web_fsrs_check.cjs
+          node tests/web_fsrs_session_race.cjs
+          node tests/web_fsrs_versions_check.cjs
+          node tests/web_undo_check.cjs
+          node tests/web_log_retention_check.cjs
+          node tests/web_today_plan_check.cjs
+          node tests/web_streak_backfill_check.cjs
+          node tests/web_sync_race_check.cjs
+          node tests/web_backup_check.cjs
+          node tests/web_personal_jobs_check.cjs
+  ios-build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check iOS state coding
+        run: |
+          swiftc ios/VocabApp/Models.swift ios/VocabApp/StudyEngine.swift tests/FsrsCodingCheck.swift -o /tmp/vocab-fsrs-check
+          TZ=Pacific/Kiritimati /tmp/vocab-fsrs-check
+          TZ=America/Los_Angeles /tmp/vocab-fsrs-check
+          swiftc -D DEBUG ios/VocabApp/Config.swift tests/ConfigCheck.swift -o /tmp/vocab-config-debug
+          VOCAB_UI_TEST_API=http://127.0.0.1:18765 /tmp/vocab-config-debug
+          swiftc ios/VocabApp/Config.swift tests/ConfigCheck.swift -o /tmp/vocab-config-release
+          VOCAB_UI_TEST_API=http://127.0.0.1:18765 /tmp/vocab-config-release
+      - name: Build iOS simulator app without signing
+        run: xcodebuild -quiet -project ios/VocabApp.xcodeproj -scheme VocabApp -configuration Debug -sdk iphonesimulator CODE_SIGNING_ALLOWED=NO build
+  ios-staged-http:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r server/requirements.txt
+      - name: Verify compact iOS upload and pull record capacity and compatibility
+        run: |
+          swiftc ios/VocabApp/Models.swift ios/VocabApp/StudyEngine.swift ios/VocabApp/APIClient.swift tests/iOSDeltaRecordCompactCheck.swift -o "$RUNNER_TEMP/vocab-ios-compact-check"
+          "$RUNNER_TEMP/vocab-ios-compact-check"
+      - name: Verify iOS large restore intent and recovery fence
+        run: |
+          swiftc ios/VocabApp/Models.swift ios/VocabApp/StudyEngine.swift ios/VocabApp/APIClient.swift tests/iOSLargeRestoreStoreCheck.swift -o "$RUNNER_TEMP/vocab-ios-restore-store-check"
+          "$RUNNER_TEMP/vocab-ios-restore-store-check"
+      - name: Verify durable staged uploads against isolated service
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-ios-staged-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          swiftc ios/VocabApp/Models.swift ios/VocabApp/StudyEngine.swift ios/VocabApp/APIClient.swift tests/iOSStagedUploadCheck.swift -o "$RUNNER_TEMP/vocab-ios-staged-check"
+          "$RUNNER_TEMP/vocab-ios-staged-check"
+          "$RUNNER_TEMP/vocab-ios-staged-check" --compact-retention
+          "$RUNNER_TEMP/vocab-ios-staged-check" --experimental-large
+          "$RUNNER_TEMP/vocab-ios-staged-check" --restore-capability
+          swiftc ios/VocabApp/Models.swift ios/VocabApp/StudyEngine.swift ios/VocabApp/APIClient.swift tests/iOSMutationCrashCheck.swift -o "$RUNNER_TEMP/vocab-ios-mutation-crash-check"
+          "$RUNNER_TEMP/vocab-ios-mutation-crash-check"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install browser for staged cross-client regression
+        run: |
+          npm install --prefix "$RUNNER_TEMP/vocab-node" playwright@1.62.1
+          "$RUNNER_TEMP/vocab-node/node_modules/.bin/playwright" install chromium
+      - name: Run Web and Swift staged round trip
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-staged-interop-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_ios_staged_interop.cjs
+          node tests/web_ios_oversize_snapshot.cjs
+      - name: Verify Web experimental upload with Swift snapshot reader
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-web-large-interop-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_experimental_large_push_e2e.cjs
+      - name: Verify journal-backed large state across Web and Swift
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-large-journal-interop-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_large_sync_live_e2e.cjs
+      - name: Verify large-state download and upload round trip
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-large-roundtrip-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_ios_large_roundtrip_e2e.cjs
+      - name: Verify Swift and Web concurrent large-state rebase
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-large-rebase-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          VOCAB_REBASE_SWIFT_TEST=1 node tests/web_large_background_save_e2e.cjs
+      - name: Verify Swift staged large restore and Web read
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-large-restore-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_ios_large_restore_e2e.cjs
+      - name: Verify Web large restore transport and Swift read
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-web-restore-transport-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_ios_large_restore_transport_e2e.cjs
+      - name: Verify durable Web restore intent and Swift read
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-web-durable-restore-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_large_restore_intent_process_e2e.cjs
+      - name: Verify small-account restore migration with Swift read
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-web-small-restore-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_small_large_restore_process_e2e.cjs
+      - name: Verify Web large checkpoint with Swift read
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-web-checkpoint-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_large_checkpoint_process_e2e.cjs
+      - name: Verify Web checkpoint cancellation with Swift read
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-web-checkpoint-cancel-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_large_checkpoint_cancel_process_e2e.cjs
+      - name: Verify Web restore cancellation with Swift read
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-web-restore-cancel-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_large_restore_cancel_process_e2e.cjs
+      - name: Verify ordinary prepared Web upload with Swift read
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-normal-upload-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_normal_prepared_upload_process_e2e.cjs
+      - name: Verify Swift ordinary delta with prepared Web pull
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-normal-pull-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_normal_prepared_pull_process_e2e.cjs
+      - name: Verify disjoint Swift and Web card conflict recovery
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-normal-rebase-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_STAGED_CHECK="$RUNNER_TEMP/vocab-ios-staged-check"
+          node tests/web_normal_prepared_rebase_process_e2e.cjs
+      - name: Verify legacy due dates across Web and iOS
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-legacy-date-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture/identity >/dev/null; then break; fi
+            sleep 1
+          done
+          swiftc ios/VocabApp/Models.swift ios/VocabApp/StudyEngine.swift ios/VocabApp/APIClient.swift tests/iOSLegacyDateHttpCheck.swift -o "$RUNNER_TEMP/vocab-ios-legacy-date-check"
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          export VOCAB_IOS_LEGACY_DATE_CHECK="$RUNNER_TEMP/vocab-ios-legacy-date-check"
+          node tests/web_ios_legacy_date_e2e.cjs
+  http-browser:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python -m pip install -r server/requirements.txt
+      - name: Install browser for isolated integration tests
+        run: |
+          npm install --prefix "$RUNNER_TEMP/vocab-node" playwright@1.62.1
+          "$RUNNER_TEMP/vocab-node/node_modules/.bin/playwright" install --with-deps chromium
+      - name: Run HTTP and browser regressions
+        run: |
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          bash tests/run_http_browser_regression.sh
+          python tests/web_normal_reload_rollback_e2e.py
+          python tests/web_large_reload_rollback_e2e.py
+          python tests/web_large_reload_rollback_e2e.py
+  optimizer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install optional CPU optimizer dependencies
+        run: |
+          python -m pip install 'torch==2.14.1' --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install 'fsrs[optimizer]==6.3.2'
+      - run: python server/test_optimizer_real.py
+  ios-ui:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        scenario: [guest, account, offline, recovery, recovery-relogin, file, pull-fence, missing-delta, incremental-read, incremental-pruned, replace, personal, identity, legacy, legacy-date, forecast, retention, interop, normal-interop, normal-recovery-interop, normal-backup-interop, normal-checkpoint-interop, normal-reload-interop, large-reload-interop, large-reload-oversize-interop, budget, undo, queue, queue-switch, queue-pages, queue-end, acceptance-switch, meaning, manual-sync, delta-replay, staged-replay, staged-large-replay, large-login, large-restore-resume, large-restore-conflict, large-restore-new, large-restore-interrupt, large-checkpoint-interrupt, large-checkpoint-cancel-interrupt, large-restore-cancel-interrupt, backup-scheduler, disk-failure, fsrs-relogin]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        if: matrix.scenario == 'offline' || matrix.scenario == 'interop' || matrix.scenario == 'normal-interop' || matrix.scenario == 'normal-recovery-interop' || matrix.scenario == 'normal-backup-interop' || matrix.scenario == 'normal-checkpoint-interop' || matrix.scenario == 'normal-reload-interop' || matrix.scenario == 'large-reload-interop' || matrix.scenario == 'large-reload-oversize-interop' || matrix.scenario == 'large-restore-resume' || matrix.scenario == 'large-restore-new' || matrix.scenario == 'large-restore-interrupt' || matrix.scenario == 'large-checkpoint-interrupt' || matrix.scenario == 'large-checkpoint-cancel-interrupt' || matrix.scenario == 'large-restore-cancel-interrupt'
+        with:
+          node-version: '22'
+      - run: python -m pip install -r server/requirements.txt
+      - name: Prepare browser for cross-platform regression
+        if: matrix.scenario == 'offline' || matrix.scenario == 'interop' || matrix.scenario == 'normal-interop' || matrix.scenario == 'normal-recovery-interop' || matrix.scenario == 'normal-backup-interop' || matrix.scenario == 'normal-checkpoint-interop' || matrix.scenario == 'normal-reload-interop' || matrix.scenario == 'large-reload-interop' || matrix.scenario == 'large-reload-oversize-interop' || matrix.scenario == 'large-restore-resume' || matrix.scenario == 'large-restore-new' || matrix.scenario == 'large-restore-interrupt' || matrix.scenario == 'large-checkpoint-interrupt' || matrix.scenario == 'large-checkpoint-cancel-interrupt' || matrix.scenario == 'large-restore-cancel-interrupt'
+        run: |
+          npm install --prefix "$RUNNER_TEMP/vocab-node" playwright@1.62.1
+          "$RUNNER_TEMP/vocab-node/node_modules/.bin/playwright" install chromium
+      - name: Run isolated simulator study flow
+        run: |
+          set -euo pipefail
+          python tests/ui_stub_server.py > /tmp/vocab-ui-fixture.log 2>&1 &
+          fixture_pid=$!
+          trap 'kill "$fixture_pid" 2>/dev/null || true' EXIT
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18765/api/v1/__ui_fixture >/dev/null; then break; fi
+            sleep 1
+          done
+          if [[ "${{ matrix.scenario }}" == 'account' ]]; then
+            swiftc ios/VocabApp/Models.swift ios/VocabApp/StudyEngine.swift ios/VocabApp/APIClient.swift tests/iOSRestoreCheck.swift -o "$RUNNER_TEMP/vocab-ios-restore-check"
+            "$RUNNER_TEMP/vocab-ios-restore-check"
+          fi
+          device=$(xcrun simctl list devices available --json | python -c 'import json,sys; d=json.load(sys.stdin)["devices"]; items=[x for k,v in d.items() if "iOS" in k for x in v if x.get("isAvailable") and x["name"].startswith("iPhone")]; items.sort(key=lambda x: x["state"] != "Booted"); print(items[0]["udid"] if items else "")')
+          test -n "$device"
+          xcrun simctl boot "$device" 2>/dev/null || true
+          xcrun simctl bootstatus "$device" -b
+          export NODE_PATH="$RUNNER_TEMP/vocab-node/node_modules"
+          tests/run_ios_ui_regression.sh "$device" "${{ matrix.scenario }}"
+          if [[ "${{ matrix.scenario }}" == 'large-restore-resume' || "${{ matrix.scenario }}" == 'large-restore-new' || "${{ matrix.scenario }}" == 'large-restore-interrupt' || "${{ matrix.scenario }}" == 'large-checkpoint-interrupt' || "${{ matrix.scenario }}" == 'large-checkpoint-cancel-interrupt' || "${{ matrix.scenario }}" == 'large-restore-cancel-interrupt' ]]; then
+            if [[ "${{ matrix.scenario }}" == 'large-checkpoint-cancel-interrupt' || "${{ matrix.scenario }}" == 'large-restore-cancel-interrupt' ]]; then export VOCAB_EXPECT_RESTORE_KIND=cancel; elif [[ "${{ matrix.scenario }}" != 'large-restore-resume' ]]; then export VOCAB_EXPECT_RESTORE_KIND=new; fi
+            node tests/web_ios_large_restore_resume_e2e.cjs
+          fi

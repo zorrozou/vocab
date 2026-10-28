@@ -53,6 +53,7 @@ def main():
     merged = merge_learning_states(old, other)
     assert len(merged["log"]) == 3, merged["log"]
     assert set(merged["cards"]) == {"apple", "banana", "delta"}
+    assert list(merged["cards"]) == ["apple", "banana", "delta"]
 
     # 完全相同的重复学习事件是真实事件：计数取 max，不去重成 1，也不累加翻倍
     twice_old = base()
@@ -107,11 +108,78 @@ def main():
     reset_new2 = base()
     reset_new2["probeCount"] = 0
     reset_new2["posterior"] = None
-    merged = merge_learning_states(reset_old, reset_new2)
+    legacy_old = dict(reset_old)
+    legacy_old.pop("placementResetAt")
+    merged = merge_learning_states(legacy_old, reset_new2)
     assert merged["probeCount"] == 0 and merged["posterior"] is None
     assert merged["placementResetAt"] > 100.0
 
-    # v2.0 新字段：缺字段不清空，证据更多的一侧优先；日志合并后仍受上限
+    # 重测完成后旧设备晚到：整个定级状态必须保持在较新 epoch。
+    reset_new["frontier"] = 5000
+    reset_new["pointer"] = 5001
+    reset_new["track"] = {"evalDay": "2026-10-27"}
+    reset_new["bandStats"] = {"2": {"a": 1, "b": 0}}
+    reset_old["frontier"] = 3000
+    reset_old["pointer"] = 3001
+    reset_old["bandStats"] = {"2": {"a": 100, "b": 0}}
+    merged = merge_learning_states(reset_new, reset_old)
+    assert (merged["frontier"], merged["pointer"], merged["probeCount"]) == (5000, 5001, 12)
+    assert merged["posterior"] == [0.0, 1.0] and merged["placementResetAt"] == 200
+    assert merged["track"] == reset_new["track"] and merged["bandStats"] == reset_new["bandStats"]
+
+    # 离线评分不能被同起点的旧卡覆盖，重放完成后旧设备也不能让它复活。
+    from fastapi import HTTPException
+    baseline = {"state": 2, "stability": 5, "difficulty": 4, "due": "2026-10-20T00:00:00Z",
+                "step": None, "lastReview": "2026-10-15T00:00:00Z"}
+    replay_base = {"is_new": False, "state": 2, "stability": 5, "difficulty": 4,
+                   "due": baseline["due"], "step": None, "last_review": baseline["lastReview"]}
+    offline = base(); offline["cards"] = {"apple": {"fsrs": baseline, "due": "2026-10-28",
+        "pendingFsrs": {"base": replay_base, "events": [{"id": "offline-a", "rating": 1, "at": "2026-10-27T00:00:00Z"}]}}}
+    stale = base(); stale["cards"] = {"apple": {"fsrs": baseline, "due": baseline["due"]}}
+    assert merge_learning_states(offline, stale)["cards"]["apple"]["pendingFsrs"]["events"][0]["id"] == "offline-a"
+    done = base(); done["cards"] = {"apple": {"fsrs": {**baseline, "lastReview": "2026-10-27T00:00:00Z"},
+                                              "appliedFsrs": ["offline-a"]}}
+    for left, right in ((offline, done), (done, offline)):
+        card_out = merge_learning_states(left, right)["cards"]["apple"]
+        assert "pendingFsrs" not in card_out and card_out["appliedFsrs"] == ["offline-a"]
+        assert card_out["fsrs"]["lastReview"] == "2026-10-27T00:00:00Z"
+    diverged = base(); diverged["cards"] = {"apple": {"fsrs": {**baseline, "lastReview": "2026-10-26T00:00:00Z"}}}
+    try:
+        merge_learning_states(offline, diverged)
+        raise AssertionError("conflicting offline event was silently overwritten")
+    except HTTPException as exc:
+        assert exc.status_code == 409
+
+    # 旧设备不能让已入卡的待学词复活，重复待学项应去重。
+    pending_old = base(); pending_old["pendingNew"] = [{"word": "apple", "pos": 1}]
+    learned_new = base(); learned_new["cards"] = {"apple": card(5)}
+    learned_new["pendingNew"] = [{"word": "banana", "pos": 2}, {"word": "banana", "pos": 2}]
+    assert merge_learning_states(pending_old, learned_new)["pendingNew"] == [{"word": "banana", "pos": 2}]
+    assert merge_learning_states(learned_new, pending_old)["pendingNew"] == [{"word": "banana", "pos": 2}]
+
+    # 断签后以较新的学习日为准，旧设备的高连续天数不能复活。
+    stale_streak = base(); stale_streak.update(lastDay="2026-10-20", streak=20)
+    recent_streak = base(); recent_streak.update(lastDay="2026-10-27", streak=1)
+    assert merge_learning_states(stale_streak, recent_streak)["streak"] == 1
+    assert merge_learning_states(recent_streak, stale_streak)["streak"] == 1
+
+    # 同日跨设备验收取并集；日期变化时只保留新一天的结果，兼容缺字段的旧客户端。
+    qa = base(); qa.update(quizProgressDay="2026-10-27", quizCompleted=["apple"])
+    qb = base(); qb.update(quizProgressDay="2026-10-27", quizCompleted=["banana"])
+    assert merge_learning_states(qa, qb)["quizCompleted"] == ["apple", "banana"]
+    assert merge_learning_states(qa, base())["quizCompleted"] == ["apple"]
+    qc = base(); qc.update(quizProgressDay="2026-10-28", quizCompleted=["cherry"])
+    later = merge_learning_states(qa, qc)
+    assert later["quizProgressDay"] == "2026-10-28" and later["quizCompleted"] == ["cherry"]
+
+    # 待处理的个性化任务不能因旧客户端缺字段丢失；终态不被旧快照回退。
+    queued_job = {"id": "job-12345678", "date": "2026-10-27", "status": "queued"}
+    waiting = base(); waiting["personalJobs"] = [queued_job]
+    assert merge_learning_states(waiting, base())["personalJobs"] == [queued_job]
+    completed = base(); completed["personalJobs"] = [{**queued_job, "status": "complete"}]
+    assert merge_learning_states(completed, waiting)["personalJobs"][0]["status"] == "complete"
+
+    # v2.0 新字段：缺字段不清空，证据更多的一侧优先；近期学习计数不能被截断。
     rich = base()
     rich["bandStats"] = {"2": {"a": 3, "b": 1}, "3": {"a": 1, "b": 2}}
     rich["knowledge"] = {"apple": {"a": 4, "b": 1, "pos": 3000}}
@@ -120,7 +188,15 @@ def main():
     merged = merge_learning_states(rich, poor)
     assert merged["bandStats"]["2"]["a"] == 3
     assert merged["knowledge"]["apple"]["a"] == 4
-    assert len(merged["log"]) == 1200
+    assert len(merged["log"]) == 1300
+    busy = base()
+    busy["log"] = [log("2026-10-27", "apple")] + [
+        {"d":"2026-10-27", "word":f"zz{i:04}", "kind":"exposure", "rating":3}
+        for i in range(1400)
+    ]
+    preserved = merge_learning_states(base(), busy)["log"]
+    assert any(entry["word"] == "apple" for entry in preserved)
+    assert len(preserved) == 1201
     newer = base()
     newer["bandStats"] = {"2": {"a": 5, "b": 0}}
     newer["knowledge"] = {"apple": {"a": 6, "b": 0, "pos": 3000}}

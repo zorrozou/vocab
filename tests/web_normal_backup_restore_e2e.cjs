@@ -1,0 +1,46 @@
+const {chromium}=require('playwright'), assert=require('assert'),fs=require('fs');
+const base=(process.env.VOCAB_TEST_BASE||'http://127.0.0.1:18765').replace(/\/$/,''),mac='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+const chrome=process.env.VOCAB_BROWSER||(fs.existsSync(mac)?mac:chromium.executablePath());
+async function api(path,body,token){const r=await fetch(base+path,{method:body?'POST':'GET',headers:{'Content-Type':'application/json',...(token?{Authorization:'Bearer '+token}:{})},...(body?{body:JSON.stringify(body)}:{})});if(!r.ok)throw Error(`${path}: ${r.status} ${await r.text()}`);return r.json()}
+async function wait(page,fn){for(let i=0;i<600;i++){if(await page.evaluate(fn))return;await new Promise(r=>setTimeout(r,50))}throw Error('browser state timeout')}
+(async()=>{const seed=await api('/api/v1/__ui_fixture/recovery-case',{}),auth=await api('/api/v1/auth/login',{username:seed.username,password:seed.password}),browser=await chromium.launch({headless:true,executablePath:chrome});try{
+ const page=await browser.newPage();page.on('dialog',dialog=>dialog.accept());page.on('pageerror',error=>console.error('PAGE ERROR',error));
+ await page.goto(base);await page.evaluate(a=>onAuthed(a,false),auth);await wait(page,async()=>!!await deltaIDB(accountSlot(AUTH),'get'));
+ await page.evaluate(()=>navigator.locks.request(`vocab-delta:${accountSlot(AUTH)}`,()=>{}));await page.locator('#btnSettings').click();await page.locator('#bPrepareNormal').click();await page.locator('#normalTransitionResume').click();await page.waitForSelector('#bStart');
+ const before=await page.evaluate(()=>structuredClone(normalActive.prepared)), payload=JSON.parse(before.primary.raw);payload.cards.restoretest={pos:2};
+ let attempts=0;await page.route('**/api/v1/me/state/guarded-restore-idempotent',async route=>{attempts++;await route.fetch();await route.abort('failed')});
+ await page.locator('#btnSettings').click();
+ await page.locator('#bImport').setInputFiles({name:'invalid.json',mimeType:'application/json',buffer:Buffer.from([0x7b,0x22,0x61,0x22,0x3a,0x22,0xff,0x22,0x7d])});
+ await page.waitForFunction(()=>document.querySelector('#restoreMsg')?.textContent.includes('UTF-8'));
+ assert.equal(attempts,0);assert.equal(await page.evaluate(async()=>await normalSourceRecoveryRaw(accountSlot(AUTH))===undefined),true);
+ await page.evaluate(()=>{window.originalRestorePut=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(...args){if(this.name==='sourceRecoveryBackups')throw Error('injected backup failure');return window.originalRestorePut.apply(this,args)}});
+ await page.locator('#bImport').setInputFiles({name:'backup.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(payload))});
+ await page.waitForFunction(()=>document.querySelector('#restoreMsg')?.textContent.includes('injected backup failure'));
+ assert.equal(attempts,0);assert.equal(await page.evaluate(async()=>await normalSourceRecoveryRaw(accountSlot(AUTH))===undefined),true);
+ assert.equal((await api('/api/v1/me/state',null,seed.token)).state_revision,before.sync.record.revision);
+ await page.evaluate(()=>{IDBObjectStore.prototype.put=window.originalRestorePut});
+ await page.locator('#bImport').setInputFiles({name:'backup.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(payload))});
+ await page.waitForSelector('#normalRestoreRetry');await wait(page,()=>document.querySelector('#normalTransitionMessage')?.textContent.includes('fetch'));
+ const committed=await api('/api/v1/me/state',null,seed.token);assert.equal(committed.state_revision,String(BigInt(before.sync.record.revision)+1n));assert(committed.state.cards.restoretest);
+ const otherDevice=structuredClone(committed.state);otherDevice.cards.otherdevice={pos:3};
+ const concurrent=await fetch(base+'/api/v1/me/state',{method:'PUT',headers:{'Content-Type':'application/json',Authorization:'Bearer '+seed.token},body:JSON.stringify(otherDevice)});assert(concurrent.ok,await concurrent.text());
+ const advanced=await api('/api/v1/me/state',null,seed.token);assert.equal(advanced.state_revision,String(BigInt(committed.state_revision)+1n));
+ assert(await page.evaluate(async()=>!!await normalSourceRecoveryRaw(accountSlot(AUTH))));
+ await page.unroute('**/api/v1/me/state/guarded-restore-idempotent');await page.reload();await page.waitForSelector('#normalRestoreRetry');
+ await page.evaluate(()=>{window.originalRestorePut=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(...args){if(this.name==='sync')throw Error('injected commit failure');return window.originalRestorePut.apply(this,args)}});
+ await page.locator('#normalRestoreRetry').click();await page.waitForFunction(()=>document.querySelector('#normalTransitionMessage')?.textContent.includes('injected commit failure'));
+ assert(await page.evaluate(async()=>!!await normalSourceRecoveryRaw(accountSlot(AUTH))));assert.equal((await api('/api/v1/me/state',null,seed.token)).state_revision,advanced.state_revision);
+ await page.evaluate(()=>{IDBObjectStore.prototype.put=window.originalRestorePut});await page.locator('#normalRestoreRetry').click();await page.waitForSelector('#bStart');
+ const after=await page.evaluate(()=>structuredClone(normalActive.prepared));assert.equal(after.sync.format,3);assert.equal(after.primary.fence.epoch,before.primary.fence.epoch+1);assert(JSON.parse(after.primary.raw).cards.restoretest);assert(JSON.parse(after.primary.raw).cards.otherdevice);assert.equal(after.sync.restoreProof.revision,committed.state_revision);assert.equal(after.primary.fence.revision,advanced.state_revision);assert.equal((await api('/api/v1/me/state',null,seed.token)).state_revision,advanced.state_revision);assert.equal(await page.evaluate(async()=>await normalSourceRecoveryRaw(accountSlot(AUTH))===undefined),true);
+ const saved=await page.evaluate(async()=>{const p=normalActive.prepared;return (await normalValidateBackupRestoreIntent(await normalRestoreArchive(accountSlot(AUTH),p.sync.restoreProof.batch_id),accountSlot(AUTH),p.candidate.record.id)).data.primary.raw});assert.equal(saved,before.primary.raw);
+ await page.locator('#btnSettings').click();const [download]=await Promise.all([page.waitForEvent('download'),page.locator('#bExportPrevious').click()]);
+ const exported=JSON.parse(fs.readFileSync(await download.path(),'utf8'));assert.deepEqual(exported.cards,JSON.parse(before.primary.raw).cards);
+ assert(await page.evaluate(async()=>{const p=normalActive.prepared,slot=accountSlot(AUTH),key=[slot,p.sync.restoreProof.batch_id],db=await normalDurableOpen();const original=await new Promise((resolve,reject)=>{const tx=db.transaction('sourceRecoveryBackups','readonly'),r=tx.objectStore('sourceRecoveryBackups').get(key);tx.oncomplete=()=>resolve(r.result);tx.onabort=()=>reject(tx.error)});await new Promise((resolve,reject)=>{const tx=db.transaction('sourceRecoveryBackups','readwrite');tx.objectStore('sourceRecoveryBackups').put({...original,payload:original.payload+' '},key);tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error)});let rejected=false;try{await normalMigrationReadPrepared(slot)}catch(_){rejected=true}await new Promise((resolve,reject)=>{const tx=db.transaction('sourceRecoveryBackups','readwrite');tx.objectStore('sourceRecoveryBackups').put(original,key);tx.oncomplete=resolve;tx.onabort=()=>reject(tx.error)});db.close();return rejected}));
+ await page.locator('[data-new="5"]').click();await page.locator('#bSave').click();await wait(page,()=>normalActive&&!normalActive.pending&&!localSaveFailed);assert(await page.evaluate(()=>normalSyncActive(normalActive,true)));assert.equal((await api('/api/v1/me/state',null,seed.token)).state.settings.newPerDay,5);
+ const second=await page.evaluate(()=>structuredClone(S));second.cards.secondrestore={pos:4};await page.locator('#btnSettings').click();await page.locator('#bImport').setInputFiles({name:'again.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify(second))});
+ await wait(page,()=>normalActive?.prepared.sync.format===3&&S.restoreEpoch===2&&!normalActive.syncing);assert((await api('/api/v1/me/state',null,seed.token)).state.cards.secondrestore);
+ const archives=await page.evaluate(()=>normalTransitionExportRecords(accountSlot(AUTH)));assert.equal(archives.sourceRecoveryBackups.filter(x=>x.kind==='backupRestore').length,2);
+ await page.locator('#btnSettings').click();await page.locator('#bCheckpoint').click();await wait(page,()=>normalActive?.prepared.sync.format===3&&S.restoreEpoch===3&&!normalActive.syncing);
+ const mixed=await page.evaluate(()=>normalTransitionExportRecords(accountSlot(AUTH)));assert.equal(mixed.sourceRecoveryBackups.filter(x=>x.kind==='historyCheckpoint').length,1);assert.equal(mixed.sourceRecoveryBackups.filter(x=>x.kind==='backupRestore').length,2);
+ console.log('PASS normal backup restore handles quota, lost response, atomic failure and corrupt backup while continued edits synchronize');
+ }finally{await browser.close()}})().catch(e=>{console.error(e);process.exit(1)});

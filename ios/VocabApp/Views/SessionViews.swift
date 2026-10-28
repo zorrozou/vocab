@@ -13,6 +13,14 @@ struct SessionView: View {
             .map(\.word).filter { seen.insert($0).inserted }
     }
 
+    private var needsAcceptance: Bool {
+        guard !learnedTodayWords.isEmpty else { return false }
+        let today = DayUtil.today()
+        if app.S.quizProgressDay == nil && app.S.quizDay == today { return false }
+        let completed = app.S.quizProgressDay == today ? Set(app.S.quizCompleted ?? []) : []
+        return learnedTodayWords.contains { !completed.contains($0) }
+    }
+
     var body: some View {
         Group {
             if app.session.idx < app.session.queue.count {
@@ -27,7 +35,7 @@ struct SessionView: View {
                     ProbeQuizView(item: w, reverse: reverse)
                         .id("probe-" + w.word)
                 }
-            } else if app.S.quizDay != DayUtil.today() && !learnedTodayWords.isEmpty {
+            } else if needsAcceptance {
                 AcceptanceQuizView(words: learnedTodayWords)
             } else {
                 DoneView()
@@ -51,9 +59,15 @@ struct LearnCardView: View {
     @State private var acted = false
     @State private var detail: NewWord?
     @State private var detailError = ""
+    @State private var trioLoading = false
+    @State private var trioError = ""
     @State private var sideTasks: [Task<Void, Never>] = []   // 异步补句/织入任务，翻页即取消
 
     private var currentItem: NewWord { detail ?? item }
+    private var hasMeaning: Bool {
+        (currentItem.senses ?? []).contains { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty } ||
+        !(currentItem.sense ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -80,12 +94,15 @@ struct LearnCardView: View {
         }
         // 交互区：钉死在底部拇指区，不随内容长度浮动
         .safeAreaInset(edge: .bottom) {
-            HStack(spacing: 10) {
-                ShadowHoldButton(target: shadowTarget(),
-                                 onBusy: { shadowMsg = $0 },
-                                 onResult: handleShadow)
-                PrimaryButton(title: "不熟悉", color: Theme.warn) { act(rating: 1) }
-                PrimaryButton(title: "学会了 →", color: Theme.ok) { act(rating: 3) }
+            VStack(spacing: 6) {
+                HStack(spacing: 10) {
+                    ShadowHoldButton(target: shadowTarget(),
+                                     onBusy: { shadowMsg = $0 },
+                                     onResult: handleShadow)
+                    PrimaryButton(title: "不熟悉", color: Theme.warn) { act(rating: 1) }.disabled(!hasMeaning || acted)
+                    PrimaryButton(title: "学会了 →", color: Theme.ok) { act(rating: 3) }.disabled(!hasMeaning || acted)
+                }
+                if !hasMeaning { Button("稍后再学") { deferWord() }.disabled(acted) }
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -99,14 +116,14 @@ struct LearnCardView: View {
 
     private var sensesView: some View {
         VStack(alignment: .leading, spacing: 6) {
-            let senses = currentItem.senses ?? []
+            let senses = (currentItem.senses ?? []).filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             ForEach(Array(senses.enumerated()), id: \.offset) { _, s in
                 HStack(alignment: .top, spacing: 6) {
                     Text(s.pos ?? "·").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.accentLight)
                     Text(s.text).font(.system(size: 15)).foregroundStyle(Theme.text)
                 }
             }
-            if senses.isEmpty, let sense = currentItem.sense, !sense.isEmpty {
+            if senses.isEmpty, let sense = currentItem.sense, !sense.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 Text(sense).font(.system(size: 15)).foregroundStyle(Theme.text)
             } else if senses.isEmpty && detailError.isEmpty {
                 HStack { Text("正在加载词义…"); ProgressView().scaleEffect(0.7) }
@@ -142,12 +159,15 @@ struct LearnCardView: View {
                             sentence: SentenceItem(tier: nil, text: w.text, zh: w.zh),
                             kind: "weave", recallNote: "（复习词：\(w.weak)）") { _ in weave = nil }
             }
-            if personal == nil && sentences.isEmpty {
+            if personal == nil && trioLoading {
                 HStack {
                     TagLabel(text: "例句", color: Theme.muted)
-                    Text("生成中…").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                    Text("正在补充例句…").font(.system(size: 14)).foregroundStyle(Theme.muted)
                     ProgressView().scaleEffect(0.7)
                 }
+            } else if personal == nil && !trioError.isEmpty {
+                Text(trioError).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                Button("重新加载例句") { loadTrio() }.font(.system(size: 14, weight: .semibold))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -183,7 +203,7 @@ struct LearnCardView: View {
 
     private func setup() {
         personal = app.personalFor(item.word)
-        if currentItem.senses?.isEmpty != false { loadDetail() }
+        if !hasMeaning { loadDetail() }
         if let s = currentItem.sentences, !s.isEmpty {
             sentences = s
         } else if let st = currentItem.static, !st.isEmpty {
@@ -194,36 +214,8 @@ struct LearnCardView: View {
         if let p = personal { app.logSentenceExposures(p.text, source: "personal", played: true) }
         sentences.forEach { app.logSentenceExposures($0.text, source: "trio", played: true) }
         app.audio.playSequence(word: item.word, sentences: texts, voice: app.S.settings.voice)
-        // 例句不足三条且非个性化：按需补三句套装
-        if personal == nil && sentences.count < 3 {
-            let t = Task {
-                let weak = StudyEngine.recentWeakWords(app.S, today: DayUtil.today()).prefix(15).joined(separator: ",")
-                do {
-                    let r = try await APIClient.shared.trio(word: item.word, weak: weak, cap: app.S.pointer + 10)
-                    guard !Task.isCancelled else { return }   // 卡片已翻走，不补句也不开播
-                    if !r.sentences.isEmpty {
-                        await MainActor.run {
-                            guard !Task.isCancelled else { return }
-                            if personal == nil {
-                                let had = sentences.isEmpty
-                                sentences = r.sentences
-                                r.sentences.forEach { app.logSentenceExposures($0.text, source: "trio", played: true) }
-                                if had {
-                                    app.audio.playSequence(word: item.word,
-                                                           sentences: r.sentences.map { $0.text },
-                                                           voice: app.S.settings.voice)
-                                }
-                            }
-                        }
-                    } else {
-                        Logger.app.warning("学习卡 trio 空返回: \(item.word, privacy: .public)")
-                    }
-                } catch {
-                    Logger.app.error("学习卡 trio 失败 \(item.word, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                }
-            }
-            sideTasks.append(t)
-        }
+        // 例句不足三条且非个性化：按需补三句套装。
+        if personal == nil && sentences.count < 3 { loadTrio() }
         // 巩固句：40% 概率织入近期薄弱词
         if personal == nil {
             let t = Task {
@@ -239,13 +231,44 @@ struct LearnCardView: View {
         }
     }
 
+    private func loadTrio() {
+        guard !trioLoading else { return }
+        trioLoading = true
+        trioError = ""
+        let t = Task {
+            let weak = StudyEngine.recentWeakWords(app.S, today: DayUtil.today()).prefix(15).joined(separator: ",")
+            do {
+                let r = try await APIClient.shared.trio(word: item.word, weak: weak, cap: app.S.pointer + 10)
+                guard !Task.isCancelled else { return }
+                trioLoading = false
+                guard !r.sentences.isEmpty else { trioError = "例句暂不可用。"; return }
+                if personal == nil {
+                    let had = !sentences.isEmpty
+                    sentences = r.sentences
+                    r.sentences.forEach { app.logSentenceExposures($0.text, source: "trio", played: true) }
+                    if !had {
+                        app.audio.playSequence(word: item.word, sentences: r.sentences.map { $0.text }, voice: app.S.settings.voice)
+                    }
+                    if r.sentences.count < 3 { trioError = "部分例句暂不可用。" }
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                trioLoading = false
+                trioError = "例句加载失败，请检查网络后重试。"
+            }
+        }
+        sideTasks.append(t)
+    }
+
     private func loadDetail() {
         detailError = ""
         let t = Task {
             do {
                 let full = try await APIClient.shared.lexiconWord(item.word)
                 guard !Task.isCancelled else { return }
+                guard full.word.caseInsensitiveCompare(item.word) == .orderedSame else { throw APIError(message: "词条不匹配") }
                 detail = full
+                if !hasMeaning { detailError = "词义暂不可用，请重试或稍后再学。" }
                 let hadSentences = !sentences.isEmpty
                 if let fresh = full.sentences, !fresh.isEmpty {
                     sentences = fresh
@@ -274,13 +297,29 @@ struct LearnCardView: View {
         app.recordShadow(word: item.word, result: res)
     }
 
-    private func act(rating: Int) {
+    private func deferWord() {
         guard !acted else { return }
         acted = true
+        if app.S.cards[item.word] == nil && !app.S.pendingNew.contains(where: { $0.word == item.word }) {
+            app.S.pendingNew.append(NewWord(word: item.word, pos: item.pos))
+        }
+        app.session.idx += 1
+        app.save()
+    }
+
+    private func act(rating: Int) {
+        guard !acted, hasMeaning else { return }
+        acted = true
+        let owner = app.auth, sessionID = app.session.id, index = app.session.idx, generation = app.routeGeneration
         Task {
             await app.learn(word: item.word, pos: item.pos, rating: rating, fromPending: item.fromPending == true)
-            app.session.learnedToday += 1
-            app.session.idx += 1
+            guard app.auth == owner else { return }
+            if app.session.id == sessionID {
+                app.session.learnedToday += 1
+                if app.routeGeneration == generation && app.route == .session && app.session.idx == index {
+                    app.session.idx += 1
+                }
+            }
             app.save()
         }
     }
@@ -482,10 +521,13 @@ struct ProbeQuizView: View {
     }
 
     private func loadQuiz() async {
+        let owner = app.auth, sessionID = app.session.id, index = app.session.idx, generation = app.routeGeneration
         let pos = item.pos > 0 ? item.pos : app.S.pointer
-        if let q = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991,
-                                                    mode: reverse ? "reverse" : "forward"),
-           q.options.count >= 4 {
+        let result = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991,
+                                                       mode: reverse ? "reverse" : "forward")
+        guard !Task.isCancelled, app.auth == owner, app.session.id == sessionID,
+              app.session.idx == index, app.routeGeneration == generation, app.route == .session else { return }
+        if let q = result, q.options.count >= 4 {
             quiz = q
             loading = false
         } else {
@@ -585,7 +627,7 @@ struct AnswerCardView: View {
                         PrimaryButton(title: "熟练", color: Theme.ok) { rate(4) }
                     }
                 } else {
-                    PrimaryButton(title: "继续 →") { onNext() }
+                    PrimaryButton(title: "继续 →") { app.commitUndoReview(); onNext() }
                     Text("已记为「忘记」，降级并明天再见")
                         .font(.system(size: 12)).foregroundStyle(Theme.muted)
                     // 手滑误点救星：撤销这次「忘记」，回到本题重来
@@ -631,8 +673,10 @@ struct AnswerCardView: View {
     private func setup() async {
         // 答错的「忘记」评分最先落账（对齐 web）：否则手快翻页会丢 Again、不降级
         if !quizOk {
-            await app.review(word: word, rating: 1)
+            // 与撤销快照一起开始计数；任务被撤销或页面关闭后不能再次累加。
             app.session.reviewedToday += 1
+            await app.review(word: word, rating: 1, allowUndo: true)
+            guard !Task.isCancelled else { return }
             app.save()
         }
         personal = app.personalFor(word)
@@ -678,11 +722,17 @@ struct AnswerCardView: View {
     private func rate(_ r: Int) {
         guard !rated else { return }
         rated = true
+        let owner = app.auth, sessionID = app.session.id, index = app.session.idx, generation = app.routeGeneration
         Task {
             await app.review(word: word, rating: r)
-            app.session.reviewedToday += 1
+            guard app.auth == owner else { return }
+            if app.session.id == sessionID {
+                app.session.reviewedToday += 1
+                if app.routeGeneration == generation && app.route == .session && app.session.idx == index {
+                    onNext()
+                }
+            }
             app.save()
-            onNext()
         }
     }
 }
@@ -722,7 +772,10 @@ struct AcceptanceQuizView: View {
                 if !loading, let quiz {
                     QuizOptionsView(options: quiz.options) { ok in answer(ok: ok) }
                 } else if !loading {
-                    Text("出题失败，自动跳过…").foregroundStyle(Theme.muted)
+                    Text("题目加载失败，验收尚未完成。请重试或稍后再做。")
+                        .foregroundStyle(Theme.muted)
+                    PrimaryButton(title: "重试本题") { Task { await load() } }
+                    GhostButton(title: "稍后再做") { app.markDayDone(); app.route = .home }
                 }
                 Text("答对 → 明天复习见 · 答错 → 进入薄弱词，今晚就定制例句")
                     .font(.system(size: 12)).foregroundStyle(Theme.muted)
@@ -731,46 +784,55 @@ struct AcceptanceQuizView: View {
             .padding(.vertical, 10)
             .background(.regularMaterial)
         }
-        .task { await load() }
-        .onAppear { app.audio.play(words[min(i, words.count - 1)], voice: app.S.settings.voice) }
+        .task {
+            if app.S.quizProgressDay == DayUtil.today() {
+                let completed = Set(app.S.quizCompleted ?? [])
+                i = words.firstIndex { !completed.contains($0) } ?? 0
+            }
+            app.audio.play(words[i], voice: app.S.settings.voice)
+            await load()
+        }
     }
 
     private func load() async {
         loading = true
-        let w = words[i]
+        let owner = app.auth, sessionID = app.session.id, index = i, generation = app.routeGeneration
+        let w = words[index]
         let pos = app.S.cards[w]?.pos ?? app.S.pointer
-        quiz = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991)
-        if quiz?.options.count != 4 { quiz = nil }
+        let result = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991)
+        guard !Task.isCancelled, app.auth == owner, app.session.id == sessionID, i == index,
+              app.routeGeneration == generation, app.route == .session else { return }
+        quiz = result?.options.count == 4 ? result : nil
         loading = false
-        if quiz == nil {
-            // 出题失败自动跳过（与 web 一致），避免卡在死页面
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            advance()
-        }
     }
 
     private func answer(ok: Bool) {
         guard !answering else { return }
         answering = true
         let w = words[i]
+        let owner = app.auth, sessionID = app.session.id, index = i, generation = app.routeGeneration
         Task {
-            // 验收是客观实测，水平观测权重 1.0（强于复习的 0.2/0.3）
-            await app.review(word: w, rating: ok ? 3 : 1, trackWeight: 1.0)
+            // Completion is persisted with the review before the request suspends.
+            await app.review(word: w, rating: ok ? 3 : 1, trackWeight: 1.0, acceptance: true)
+            guard app.auth == owner else { return }
             app.save()
-            await MainActor.run { advance() }
+            guard app.session.id == sessionID, app.routeGeneration == generation,
+                  app.route == .session, i == index else { return }
+            if words.allSatisfy({ (app.S.quizCompleted ?? []).contains($0) }) {
+                app.markDayDone()
+            } else {
+                advance()
+            }
         }
     }
 
     private func advance() {
         answering = false
-        if i + 1 < words.count {
-            i += 1
+        let completed = Set(app.S.quizCompleted ?? [])
+        if let next = words.indices.first(where: { !completed.contains(words[$0]) }) {
+            i = next
             app.audio.play(words[i], voice: app.S.settings.voice)
             Task { await load() }
-        } else {
-            // 验收测试真正跑完才标记 quizDay（markDayDone 不管这个字段）
-            app.S.quizDay = DayUtil.today()
-            app.markDayDone()
         }
     }
 }
@@ -782,6 +844,12 @@ struct DoneView: View {
     @State private var genStatus = "正在为你的薄弱词定制例句…"
     @State private var genRows: [PersonalizedOut.Row] = []
     @State private var marked = false
+    private var dailyPlan: StudyEngine.DailyPlanSummary {
+        StudyEngine.dailyPlanSummary(app.S, day: DayUtil.today(), now: Date())
+    }
+    private var remainingCapacity: Int {
+        StudyEngine.remainingDailyCapacity(app.S.log, day: DayUtil.today(), cap: app.S.settings.dailyCap)
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -792,6 +860,8 @@ struct DoneView: View {
                         Text("今日完成 🎉").font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
                         HStack(spacing: 0) {
                             StatCell(number: "\(app.session.reviewedToday)", label: "复习")
+                                .accessibilityElement(children: .combine)
+                                .accessibilityIdentifier("session-reviewed")
                             StatCell(number: "\(app.session.learnedToday)", label: "新词")
                             StatCell(number: "\(app.S.streak)", label: "连续天数")
                         }
@@ -810,7 +880,7 @@ struct DoneView: View {
                                 Text(note).font(.system(size: 12)).foregroundStyle(Theme.muted)
                             }
                         }
-                        if app.dueLaterTodayCount() > 0 && app.dueNowCount() == 0 {
+                        if remainingCapacity > 0 && app.dueLaterTodayCount() > 0 && dailyPlan.dueAvailable == 0 {
                             Text("⏰ 今天晚些时候还有 \(app.dueLaterTodayCount()) 个词到期，记得回来")
                                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
                         }
@@ -842,13 +912,19 @@ struct DoneView: View {
         // 底部行动区钉死拇指区
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
-                if app.dueNowCount() > 0 {
-                    PrimaryButton(title: "还有 \(app.dueNowCount()) 词已到期，继续复习 →") {
+                if dailyPlan.duePlanned > 0 {
+                    PrimaryButton(title: "继续复习 \(dailyPlan.duePlanned) 词 →") {
+                        let generation = app.routeGeneration, owner = app.auth
                         Task {
-                            if await app.buildQueue() { app.route = .session }
+                            let ready = await app.buildQueue()
+                            guard app.routeGeneration == generation, app.auth == owner else { return }
+                            if ready { app.route = .session }
                             else { genStatus = "任务加载失败，请返回主页检查网络后重试" }
                         }
                     }
+                } else if dailyPlan.dueAvailable > 0 && remainingCapacity == 0 {
+                    Text("今日已达上限，还有 \(dailyPlan.dueAvailable) 词到期；可在设置中调整上限。")
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
                 }
                 GhostButton(title: "返回主页", color: Theme.muted) { app.route = .home }
             }
@@ -882,6 +958,7 @@ struct SessionHeader: View {
                 Spacer()
                 Button("退出") {
                     app.audio.stop()
+                    app.commitUndoReview()
                     app.route = .home
                 }
                 .foregroundStyle(Theme.muted)

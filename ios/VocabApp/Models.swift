@@ -12,6 +12,67 @@ struct FsrsState: Codable, Equatable {
     var scheduled_days: Double?
     var step: Int?            // Learning/Relearning 当前步数；可选兼容旧存档
     var lastReview: String?   // 上次复习时间，避免依赖会被裁剪的日志推导
+
+    private enum CodingKeys: String, CodingKey {
+        case state, stability, difficulty, due, scheduled_days, step, lastReview
+        case legacyLastReview = "last_review"
+    }
+
+    init(state: Int, stability: Double, difficulty: Double, due: String?,
+         scheduled_days: Double?, step: Int?, lastReview: String?) {
+        self.state = state; self.stability = stability; self.difficulty = difficulty
+        self.due = due; self.scheduled_days = scheduled_days; self.step = step
+        self.lastReview = lastReview
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        state = try c.decode(Int.self, forKey: .state)
+        stability = try c.decode(Double.self, forKey: .stability)
+        difficulty = try c.decode(Double.self, forKey: .difficulty)
+        due = try c.decodeIfPresent(String.self, forKey: .due)
+        scheduled_days = try c.decodeIfPresent(Double.self, forKey: .scheduled_days)
+        step = try c.decodeIfPresent(Int.self, forKey: .step)
+        lastReview = try c.decodeIfPresent(String.self, forKey: .lastReview)
+            ?? c.decodeIfPresent(String.self, forKey: .legacyLastReview)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(state, forKey: .state)
+        try c.encode(stability, forKey: .stability)
+        try c.encode(difficulty, forKey: .difficulty)
+        try c.encodeIfPresent(due, forKey: .due)
+        try c.encodeIfPresent(scheduled_days, forKey: .scheduled_days)
+        try c.encodeIfPresent(step, forKey: .step)
+        try c.encodeIfPresent(lastReview, forKey: .lastReview)
+    }
+}
+
+struct FsrsSchedulerBackups: Decodable {
+    var versions: [String: FsrsSchedulerConfig]
+}
+
+struct FsrsSchedulerConfig: Codable, Equatable {
+    var library: String
+    var parameters: [Double]
+    var desired_retention: Double
+    var learning_steps: [Double]
+    var relearning_steps: [Double]
+    var maximum_interval: Int
+}
+
+struct PendingFsrsEvent: Codable, Equatable {
+    var id: String
+    var rating: Int
+    var at: String
+    var schedulerKey: String? = nil // 应用该次评分时的参数版本
+}
+
+struct PendingFsrs: Codable, Equatable {
+    var base: APIClient.FsrsIn
+    var events: [PendingFsrsEvent]
+    var schedulerKey: String? = nil
 }
 
 struct CardState: Codable, Equatable {
@@ -20,7 +81,11 @@ struct CardState: Codable, Equatable {
     var lt: Int?              // lapse today 计数（旧逻辑保留）
     var pos: Int?             // 词在学习序列中的位置
     var fsrs: FsrsState?
-    var easyStreak: Int?      // 连续"熟练"次数（毕业判定用；rating 1 归零）
+    var easyStreak: Int?      // 连续“熟练”次数；其他评分清零，不改变 FSRS 间隔
+    var pendingFsrs: PendingFsrs? = nil // 离线评分在服务器可用时按原时间重放
+    var appliedFsrs: [String]? = nil   // 已应用事件 ID，避免旧设备恢复已处理的队列
+    var fsrsHistory: PendingFsrs? = nil // 可重放的共同起点与完整评分历史
+    var fsrsReplayVersions: [String: String]? = nil // 已按对应参数重放的事件
 }
 
 struct LogEntry: Codable, Equatable {
@@ -34,6 +99,7 @@ struct LogEntry: Codable, Equatable {
     var sentenceId: String? = nil
     var played: Bool? = nil   // 是否实际播放/朗读
     var score: Int? = nil     // 跟读完整度等百分制得分
+    var eventId: String? = UUID().uuidString.lowercased() // 新记录唯一标识，旧存档可缺省
 }
 
 struct Sense: Codable, Equatable {
@@ -96,6 +162,24 @@ struct PersonalizedSentence: Codable, Equatable {
     var zh: String?
 }
 
+struct PersonalVersion: Codable, Equatable {
+    var counter: Int
+    var device: String
+    var deleted: Bool
+}
+
+struct PersonalJob: Codable, Equatable {
+    var id: String
+    var date: String
+    var weakKey: String
+    var weakWords: [String]
+    var learnedMaxPos: Int
+    var replace: Bool
+    var owner: String
+    var status: String
+    var personalVersions: [String: PersonalVersion]? = nil
+}
+
 /// 水平追踪状态（自适应水平追踪 v1.2/v1.3）：后验本体沿用 S.posterior
 struct TrackState: Codable, Equatable {
     var evalDay: String?      // 今日位置重估是否已生效（每日最多一次）
@@ -127,6 +211,46 @@ struct KnowledgeStat: Codable, Equatable {
     var pos: Int?
 }
 
+struct KnowledgeEvent: Codable, Equatable {
+    var device: String
+    var at: String
+    var ok: Bool
+    var pos: Int
+}
+
+struct KnowledgeEvidence: Codable, Equatable {
+    var baseId: String
+    var base: KnowledgeStat
+    var events: [String: KnowledgeEvent]
+}
+
+struct PosteriorEvent: Codable, Equatable {
+    var kind: String
+    var device: String
+    var at: String
+    var day: String
+    var parents: [String]
+    var rank: Int? = nil
+    var resp: Double? = nil
+    var weight: Double? = nil
+    var guess: Double? = nil
+}
+
+struct PosteriorHistory: Codable, Equatable {
+    var algorithm: String = "bayes-grid-1"
+    var baseId: String
+    var base: [Double]?
+    var baseCount: Int
+    var events: [String: PosteriorEvent] = [:]
+}
+
+struct StreakEvidence: Codable, Equatable {
+    var baseId: String
+    var baseDay: String?
+    var baseStreak: Int
+    var days: [String]
+}
+
 struct Settings: Codable, Equatable {
     var newPerDay: Int = 10
     var dailyCap: Int = 100
@@ -145,6 +269,17 @@ struct Settings: Codable, Equatable {
     }
 }
 
+struct SettingVersion: Codable, Equatable {
+    var counter: Int
+    var device: String
+}
+
+struct PlacementVersion: Codable, Equatable {
+    var counter: Int
+    var device: String
+    var id: String
+}
+
 struct LearningState: Codable, Equatable {
     var v: Int = 1
     var calibrated: Bool = false
@@ -152,25 +287,38 @@ struct LearningState: Codable, Equatable {
     var pointer: Int = 1
     var probeCount: Int = 0
     var posterior: [Double]?
+    var posteriorHistory: PosteriorHistory?
     var pendingNew: [NewWord] = []
     var cards: [String: CardState] = [:]
     var log: [LogEntry] = []
     var personalized: [String: PersonalizedSentence] = [:]
+    var rejectedPersonalized: [String: [String]]?
+    var personalVersions: [String: PersonalVersion]?
     var streak: Int = 0
     var lastDay: String?
+    var streakEvidence: StreakEvidence?
     var settings: Settings = .init()
+    var settingsVersions: [String: SettingVersion]?
     // 运行期扩展字段（web 里动态添加，这里显式声明以免同步丢失）
     var quizDay: String?
+    var quizProgressDay: String?
+    var quizCompleted: [String]?
     var weaveDay: String?
     var weaveCount: Int = 0
     var wrongStreak: Int = 0
     var personalizedDay: String?
     var personalizedWeak: String?
+    var personalJobs: [PersonalJob]? // 保留请求参数，便于断网和重启后幂等恢复
     var track: TrackState?          // 自适应水平追踪状态（v1.2 新增，可选兼容旧存档）
     var evalReport: EvalReport?     // 独立留出校验报告（v1.4；不参与学习调度）
     var placementResetAt: Double?   // 显式重新定级时间戳，防止同步合并撤销重测
+    var placementVersion: PlacementVersion? // 逻辑版本；不依赖设备时钟排序
+    var restoreEpoch: Int?          // 服务端恢复后的版本；旧设备不可覆盖恢复结果
+    var fsrsSchedulers: [String: FsrsSchedulerConfig]? // 随备份携带可验证的参数快照
     var bandStats: [String: KnowledgeStat]?   // 各词汇量档位先验（v2.0 词级模型）
+    var bandEvidence: [String: KnowledgeEvidence]? // 与定级词级事件关联的分档证据
     var knowledge: [String: KnowledgeStat]?   // 每词 a/b 证据（v2.0 词级模型）
+    var knowledgeEvidence: [String: KnowledgeEvidence]? // 可合并的词级证据事件及共同基线
 
     init() {}
 
@@ -184,33 +332,108 @@ struct LearningState: Codable, Equatable {
         pointer = try c.decodeIfPresent(Int.self, forKey: .pointer) ?? 1
         probeCount = try c.decodeIfPresent(Int.self, forKey: .probeCount) ?? 0
         posterior = try c.decodeIfPresent([Double].self, forKey: .posterior)
+        posteriorHistory = try c.decodeIfPresent(PosteriorHistory.self, forKey: .posteriorHistory)
         pendingNew = try c.decodeIfPresent([NewWord].self, forKey: .pendingNew) ?? []
         cards = try c.decodeIfPresent([String: CardState].self, forKey: .cards) ?? [:]
         log = try c.decodeIfPresent([LogEntry].self, forKey: .log) ?? []
         personalized = try c.decodeIfPresent([String: PersonalizedSentence].self, forKey: .personalized) ?? [:]
+        rejectedPersonalized = try c.decodeIfPresent([String: [String]].self, forKey: .rejectedPersonalized)
+        personalVersions = try c.decodeIfPresent([String: PersonalVersion].self, forKey: .personalVersions)
         streak = try c.decodeIfPresent(Int.self, forKey: .streak) ?? 0
         lastDay = try c.decodeIfPresent(String.self, forKey: .lastDay)
+        streakEvidence = try c.decodeIfPresent(StreakEvidence.self, forKey: .streakEvidence)
         settings = try c.decodeIfPresent(Settings.self, forKey: .settings) ?? Settings()
+        settingsVersions = try c.decodeIfPresent([String: SettingVersion].self, forKey: .settingsVersions)
         quizDay = try c.decodeIfPresent(String.self, forKey: .quizDay)
+        quizProgressDay = try c.decodeIfPresent(String.self, forKey: .quizProgressDay)
+        quizCompleted = try c.decodeIfPresent([String].self, forKey: .quizCompleted)
         weaveDay = try c.decodeIfPresent(String.self, forKey: .weaveDay)
         weaveCount = try c.decodeIfPresent(Int.self, forKey: .weaveCount) ?? 0
         wrongStreak = try c.decodeIfPresent(Int.self, forKey: .wrongStreak) ?? 0
         personalizedDay = try c.decodeIfPresent(String.self, forKey: .personalizedDay)
         personalizedWeak = try c.decodeIfPresent(String.self, forKey: .personalizedWeak)
+        personalJobs = try c.decodeIfPresent([PersonalJob].self, forKey: .personalJobs)
         track = try c.decodeIfPresent(TrackState.self, forKey: .track)
         evalReport = try c.decodeIfPresent(EvalReport.self, forKey: .evalReport)
         placementResetAt = try c.decodeIfPresent(Double.self, forKey: .placementResetAt)
+        placementVersion = try c.decodeIfPresent(PlacementVersion.self, forKey: .placementVersion)
+        restoreEpoch = try c.decodeIfPresent(Int.self, forKey: .restoreEpoch)
+        fsrsSchedulers = try c.decodeIfPresent([String: FsrsSchedulerConfig].self, forKey: .fsrsSchedulers)
         bandStats = try c.decodeIfPresent([String: KnowledgeStat].self, forKey: .bandStats)
+        bandEvidence = try c.decodeIfPresent([String: KnowledgeEvidence].self, forKey: .bandEvidence)
         knowledge = try c.decodeIfPresent([String: KnowledgeStat].self, forKey: .knowledge)
+        knowledgeEvidence = try c.decodeIfPresent([String: KnowledgeEvidence].self, forKey: .knowledgeEvidence)
     }
 }
 
 // MARK: - API DTO
 
+/// 用户名使用服务端的 ASCII 大小写不敏感规则；文件名不含路径字符。
+enum LocalAccountSlot {
+    static func validAccountID(_ value: String) -> Bool {
+        value.utf8.count == 32 && value.utf8.allSatisfy { (48...57).contains($0) || (97...102).contains($0) }
+    }
+
+    static func name(userId: Int, username: String, accountId: String? = nil) -> String {
+        if let accountId { return "a\(accountId)" }
+        let encoded = username.lowercased().utf8.map { String(format: "%02x", $0) }.joined()
+        return "u\(userId)_\(encoded)"
+    }
+
+    static func loadVerified(state: URL, owner: URL, expected: String?) -> LearningState? {
+        if let expected {
+            guard let stored = try? String(contentsOf: owner, encoding: .utf8),
+                  stored.lowercased() == expected.lowercased() else { return nil }
+        }
+        guard let data = try? Data(contentsOf: state),
+              let result = try? JSONDecoder().decode(LearningState.self, from: data) else { return nil }
+        return result
+    }
+
+    static func migrateClocks(_ defaults: UserDefaults, from legacy: String, to slot: String) {
+        let newWrite = "vocab_write_\(slot)"
+        guard defaults.object(forKey: newWrite) == nil else { return }
+        let oldWrite = "vocab_write_\(legacy)", oldSync = "vocab_sync_\(legacy)"
+        if defaults.object(forKey: oldWrite) == nil || defaults.object(forKey: oldSync) == nil {
+            // 没有可靠水位时先补传旧档，不能把它当作已同步而用远端覆盖。
+            defaults.set(max(1, Date().timeIntervalSince1970, defaults.double(forKey: oldWrite)), forKey: newWrite)
+            defaults.set(0.0, forKey: "vocab_sync_\(slot)")
+        } else {
+            defaults.set(defaults.double(forKey: oldWrite), forKey: newWrite)
+            defaults.set(defaults.double(forKey: oldSync), forKey: "vocab_sync_\(slot)")
+        }
+    }
+
+    /// 在覆盖无署名或其他账号署名的文件前，原样保留一份不可覆盖的副本。
+    static func preserveUnverified(state: URL, owner: URL, expected: String, slot: String, force: Bool = false) throws -> URL? {
+        let files = FileManager.default
+        guard files.fileExists(atPath: state.path) else { return nil }
+        let stored = try? String(contentsOf: owner, encoding: .utf8)
+        if !force, stored?.lowercased() == expected.lowercased() { return nil }
+        var destinationSlot = slot, category = "unverified"
+        if let stored, stored.lowercased() != expected.lowercased() {
+            // 可识别的旧署名归还给该用户名；未知署名不展示给当前账号。
+            let digits = slot.dropFirst().prefix { $0.isNumber }
+            let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_")
+            if slot.hasPrefix("u"), let uid = Int(digits), !stored.isEmpty,
+               stored.unicodeScalars.allSatisfy({ allowed.contains($0) }) {
+                destinationSlot = name(userId: uid, username: stored)
+            } else {
+                category = "other-owner"
+            }
+        }
+        let name = "\(category)-\(destinationSlot)-\(UUID().uuidString.lowercased()).json"
+        let destination = state.deletingLastPathComponent().appendingPathComponent(name)
+        try files.copyItem(at: state, to: destination)
+        return destination
+    }
+}
+
 struct AuthUser: Codable, Equatable {
     var id: Int
     var username: String
     var nickname: String
+    var account_id: String?
 }
 
 struct AuthResponse: Codable {
@@ -221,6 +444,23 @@ struct AuthResponse: Codable {
 struct StateResponse: Codable {
     var state: LearningState?
     var updated_at: Double?
+    // Revisions are decimal strings on the wire: they can exceed the range
+    // of integers that JavaScript represents exactly. Older servers omit both.
+    var state_revision: String?
+    var sync_generation: String?
+    // Local-only marker: the legacy endpoint could not return this state.
+    var fromLargeSnapshot = false
+    private enum CodingKeys: String, CodingKey { case state, updated_at, state_revision, sync_generation }
+}
+
+struct StateBackupEntry: Codable, Identifiable {
+    var id: Int
+    var created_at: Double
+    var reason: String
+}
+
+struct StateBackupList: Codable {
+    var backups: [StateBackupEntry]
 }
 
 struct QuizOption: Codable, Equatable {
@@ -250,6 +490,13 @@ struct PlacementSet: Codable {
 struct LexiconAtResponse: Codable {
     var from: Int
     var words: [NewWord]
+    var nextPos: Int?
+    var exhausted: Bool?
+
+    enum CodingKeys: String, CodingKey {
+        case from, words, exhausted
+        case nextPos = "next_pos"
+    }
 }
 
 struct TrioResponse: Codable {
@@ -274,6 +521,16 @@ struct PersonalizeResponse: Codable {
     var queued: Bool
     var date: String
     var background: Bool?
+    var job_id: String?
+    var status: String?
+}
+
+struct PersonalJobResponse: Codable {
+    var job_id: String
+    var date: String
+    var status: String
+    var error: String?
+    var sentences: [PersonalizedOut.Row]
 }
 
 struct PersonalizedOut: Codable {
@@ -296,6 +553,15 @@ struct FsrsResponse: Codable {
     var scheduled_days: Double?
     var step: Int?
     var lastReview: String?
+    var schedulerKey: String? = nil
+    var schedulerConfig: FsrsSchedulerConfig? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case state, stability, difficulty, due, scheduled_days, step
+        case lastReview = "last_review"
+        case schedulerKey = "scheduler_key"
+        case schedulerConfig = "scheduler_config"
+    }
 }
 
 // MARK: - 日期工具（"今天"用设备本地日期——UTC 日期会让 UTC+8 用户上午被错判成"昨天"，
@@ -321,6 +587,7 @@ enum DayUtil {
     }()
 
     static func today() -> String { dayFmt.string(from: Date()) }
+    static func localDay(_ date: Date) -> String { dayFmt.string(from: date) }
 
     static func addDays(_ d: String, _ n: Int) -> String {
         guard let base = dayFmt.date(from: d) else { return d }
@@ -331,6 +598,13 @@ enum DayUtil {
     /// 解析各种 ISO8601（web 的 ".000Z" / 服务端的 "+00:00" 带 6 位小数 / 不带小数）
     static func parseISO(_ s: String?) -> Date? {
         guard let s, !s.isEmpty else { return nil }
+        // JavaScript Date interprets a date-only ISO value at UTC midnight.
+        // Older Web cards use this format, so keep the same due instant on iOS.
+        if s.range(of: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"#, options: .regularExpression) != nil {
+            guard let date = isoPlain.date(from: s + "T00:00:00Z"),
+                  String(isoPlain.string(from: date).prefix(10)) == s else { return nil }
+            return date
+        }
         if let d = isoFrac.date(from: s) { return d }
         if let d = isoPlain.date(from: s) { return d }
         // 服务端可能带 6 位微秒，截断到 3 位再试

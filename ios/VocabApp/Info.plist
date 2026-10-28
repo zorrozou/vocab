@@ -20,23 +20,12 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
-	<key>NSAppTransportSecurity</key>
-	<dict>
-		<key>NSExceptionDomains</key>
-		<dict>
-			<key>175.27.210.206</key>
-			<dict>
-				<key>NSExceptionAllowsInsecureHTTPLoads</key>
-				<true/>
-				<key>NSIncludesSubdomains</key>
-				<true/>
-			</dict>
-		</dict>
-	</dict>
+	<key>VocabAPIBaseURL</key>
+	<string>$(VOCAB_API_BASE_URL)</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>跟读评分需要用麦克风采集你的朗读</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
-	<string>跟读评分需要识别你的朗读内容（支持本机识别的设备上不会上传）</string>
+	<string>跟读需要使用本机语音识别；本机识别不可用时不会自动切换网络识别</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIRequiresFullScreen</key>

@@ -6,41 +6,9 @@ struct StatsView: View {
 
     private var mastered: Int { app.S.cards.values.filter { StudyEngine.isMastered($0) }.count }
 
-    /// 保持率分桶（R = (1+0.9805·t/S)^-0.1542，t=距上次复习天数）
-    private var retentionBuckets: [(String, Int)] {
-        var buckets = [("≥95%", 0), ("90~95%", 0), ("80~90%", 0), ("60~80%", 0), ("<60%", 0)]
-        let today = DayUtil.today()
-        for (w, c) in app.S.cards {
-            guard let f = c.fsrs, f.stability > 0,
-                  let last = app.S.log.reversed().first(where: { $0.word == w }),
-                  let lastD = DayUtil.parseISO(last.d + "T12:00:00Z"),
-                  let todayD = DayUtil.parseISO(today + "T12:00:00Z") else { continue }
-            let t = max(0, todayD.timeIntervalSince(lastD) / 86400)
-            let r = StudyEngine.retrievability(c, elapsedDays: t)
-            if r >= 0.95 { buckets[0].1 += 1 }
-            else if r >= 0.9 { buckets[1].1 += 1 }
-            else if r >= 0.8 { buckets[2].1 += 1 }
-            else if r >= 0.6 { buckets[3].1 += 1 }
-            else { buckets[4].1 += 1 }
-        }
-        return buckets
-    }
-
     /// 未来 14 天负载（今天含过期累积）
     private var loads14: [(String, Int)] {
-        let day0 = DayUtil.today()
-        var loads = (0..<14).map { i -> (String, Int) in
-            let d = DayUtil.addDays(day0, i)
-            let n = app.S.cards.values.filter {
-                !StudyEngine.isMastered($0) && ($0.due?.prefix(10) ?? "") == d
-            }.count
-            return (d, n)
-        }
-        let overdue = app.S.cards.values.filter {
-            !StudyEngine.isMastered($0) && String($0.due?.prefix(10) ?? "") < day0 && !($0.due ?? "").isEmpty
-        }.count
-        loads[0].1 += overdue
-        return loads
+        StudyEngine.forecastDueDates(app.S.cards, day: DayUtil.today())
     }
 
     private var stubborn: [(String, Int)] {
@@ -66,9 +34,10 @@ struct StatsView: View {
                     }
                     Text("记忆保持率分布（FSRS）").font(.system(size: 16, weight: .bold))
                         .foregroundStyle(Theme.text).frame(maxWidth: .infinity, alignment: .leading)
-                    let buckets = retentionBuckets
+                    let retention = StudyEngine.retentionSummary(app.S.cards, log: app.S.log, now: Date())
+                    let buckets = Array(zip(["≥95%", "90~95%", "80~90%", "60~80%", "<60%"], retention.counts))
                     let total = max(1, buckets.map(\.1).reduce(0, +))
-                    ForEach(Array(buckets.enumerated()), id: \.offset) { _, b in
+                    ForEach(Array(buckets.enumerated()), id: \.offset) { index, b in
                         HStack(spacing: 8) {
                             Text(b.0).font(.system(size: 11)).foregroundStyle(Theme.muted).frame(width: 52, alignment: .leading)
                             GeometryReader { g in
@@ -81,7 +50,13 @@ struct StatsView: View {
                             .frame(height: 10)
                             Text("\(b.1)").font(.system(size: 11)).foregroundStyle(Theme.text).frame(width: 30, alignment: .trailing)
                         }
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel("\(b.0)：\(b.1)词")
+                        .accessibilityIdentifier("retention-bin-\(index)")
                     }
+                    Text("按默认曲线估算；\(retention.approximate) 词使用日期近似，\(retention.unknown) 词缺少可用信息或评分待同步，未计入分布。")
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .accessibilityIdentifier("retention-summary")
                     Text("未来 14 天负载预测").font(.system(size: 16, weight: .bold))
                         .foregroundStyle(Theme.text).frame(maxWidth: .infinity, alignment: .leading)
                     let loads = loads14
@@ -95,6 +70,9 @@ struct StatsView: View {
                                 Text(String(l.0.suffix(5))).font(.system(size: 8)).foregroundStyle(Theme.muted)
                             }
                             .frame(maxWidth: .infinity)
+                            .accessibilityElement(children: .ignore)
+                            .accessibilityLabel("\(l.0)，\(l.1)词")
+                            .accessibilityIdentifier("forecast-\(l.0)")
                         }
                     }
                     .frame(height: 84)

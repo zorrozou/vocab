@@ -11,10 +11,11 @@ Web 版（http://175.27.210.206/vocab/）的原生 iOS 客户端。调度、例�
 - 自动连播：单词 → 停顿（=下一句时长，留跟读时间）→ 例句们，全部走服务端 edge-tts 缓存
 - **🎤 跟读评分**：SFSpeechRecognizer 设备端识别（不上传），完整度 + 置信度双子分
 - 当日验收测试：新词学完 4 选 1 验收，答错进薄弱词当晚定制例句
-- 完成后自动个性化：薄弱词 → 后台生成复习例句（轮询取回 + 音频预热）
-- FSRS-6 调度：服务端 py-fsrs 计算（断网自动退本地阶梯兜底，与 Web 一致）
+- 完成后自动个性化：薄弱词 → 持久化后台任务；应用回到主页或前台时恢复待处理任务，部分失败可重新提交
+- FSRS-6 调度：服务端 py-fsrs 计算；断网评分保存在本地待处理队列，暂用阶梯估计到期时间，连接恢复后按原时间重放，与 Web 一致。不同设备对同一张卡产生无法安全合并的分叉时，同步会提示失败并保留本地进度。
 - 多用户：注册/登录/游客/切换，token 存 Keychain，进度本地 JSON + 服务器防抖 2s 同步（**与 Web 端 state 完全同构，两端可随时互换继续学**）
 - 统计：记忆保持率分桶、未来 14 天负载、顽固词；设置：新词数/上限/嗓音
+- 备份：设置页可导出或选择备份恢复；账号菜单可重新加载服务器进度并导出服务器恢复前备份。恢复前会保留本机旧档，旧设备不会自动覆盖恢复后的服务器状态。
 
 ## 跑起来（需要 Xcode）
 
@@ -57,9 +58,9 @@ VocabApp/
 关键设计：
 
 - **state 同构**：`LearningState` 字段与 Web 端 `vocab_v1` 一一对应（含运行期扩展字段 quizDay/weaveDay/weaveCount/wrongStreak/personalizedDay/personalizedWeak），UTC 日期口径一致，跨端同步无损
-- **调度单一事实源**：FSRS 一律走服务端 `/api/v1/fsrs/review`，App 不内置第二套算法（离线才走阶梯兜底）
+- **调度单一事实源**：FSRS 一律走服务端 `/api/v1/fsrs/review`；离线只用阶梯给出临时到期时间，待处理评分重放成功后以 FSRS 结果替换。
 - **日期字符串原样保留**：due 等时间不做 Date 往返，避免格式漂移
-- **HTTP 明文**：Info.plist 已对 175.27.210.206 加 ATS 例外（HTTPS 上线后可移除）
+- **服务地址**：Release 只接受 HTTPS，默认 `https://zorrozou.online/vocab`，可用构建设置 `VOCAB_API_BASE_URL` 覆盖；Debug 单独保留原 IP 的 HTTP 测试例外。该域名的证书在 2026-10-27 检查时已过期，必须先续期才能正常连接。
 
 ## 已知边界 / TODO
 
@@ -67,3 +68,7 @@ VocabApp/
 - M2：离线模式（`/api/v1/lexicon/download` 整包起包 + 本地调度）、本地通知提醒
 - 当前无单元测试（调度逻辑与 Web 对拍验证过；Xcode 就位后补 StudyEngine 单测）
 - 首次 Xcode 构建如遇小问题（签名/版本警告类），按提示处理或找我修
+
+### 隔离的模拟器界面回归
+
+在安装了 Xcode、iOS 模拟器运行时和服务端依赖的环境中，先启动 `python tests/ui_stub_server.py`。该服务复制词库到临时目录并使用替身生成服务，不读写项目用户库。确认目标模拟器已启动后，在另一个终端执行 `tests/run_ios_ui_regression.sh <模拟器 UDID> guest` 或 `tests/run_ios_ui_regression.sh <模拟器 UDID> account` 或 `tests/run_ios_ui_regression.sh <模拟器 UDID> offline` 或 `tests/run_ios_ui_regression.sh <模拟器 UDID> recovery`。离线用例模拟评分和状态上传服务不可用，并在恢复后核对重放结果；它不模拟设备网络切换。脚本使用临时 Xcode 项目和独立应用标识，测试仅连接本机隔离服务；运行结束会卸载该测试应用。
