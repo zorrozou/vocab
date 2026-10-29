@@ -907,7 +907,33 @@ def _history_replay_verified(card, events):
         proof.get(event_id) == pair[1].get("schedulerKey") for event_id, pair in events.items())
 
 
-def _merge_histories(old_card, new_card, selected):
+def _legacy_at_history_origin(base, fsrs, last_study_day=None):
+    """Verify the clients' date-only legacy fallback without ignoring real forks."""
+    if not fsrs:
+        return False
+    actual = _fsrs_state_key(fsrs)
+    expected = _history_base_key(base)
+    if expected == actual:
+        return True
+    # Old cards did not store lastReview. Both clients build their first
+    # replay base from the last learn/review log day at 08:00 UTC. Only accept
+    # that exact convention, with every other scheduling field unchanged.
+    # Never replace an explicit timestamp, guess a missing log, or write the
+    # approximation back into the legacy card as if it were an actual time.
+    if actual[-1] is not None or expected[:-1] != actual[:-1] or not last_study_day:
+        return False
+    from datetime import date, datetime, timezone
+    try:
+        day = date.fromisoformat(last_study_day)
+        if day.isoformat() != last_study_day:
+            return False
+        fallback = datetime(day.year, day.month, day.day, 8, tzinfo=timezone.utc)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return expected[-1] == fallback
+
+
+def _merge_histories(old_card, new_card, selected, *, old_last_study_day=None, new_last_study_day=None):
     """共享起点的分叉合并成可重放队列；不能证明安全的分叉返回冲突。"""
     oh, nh = old_card.get("fsrsHistory"), new_card.get("fsrsHistory")
     if not oh and not nh:
@@ -939,12 +965,9 @@ def _merge_histories(old_card, new_card, selected):
         other_fsrs = legacy.get("fsrs") or {}
         current_fsrs = history_card.get("fsrs") or {}
         base = history.get("base") or {}
-        as_base = {"state": other_fsrs.get("state"), "stability": other_fsrs.get("stability"),
-                   "difficulty": other_fsrs.get("difficulty"), "due": other_fsrs.get("due"),
-                   "step": other_fsrs.get("step"),
-                   "last_review": other_fsrs.get("lastReview") or other_fsrs.get("last_review")}
-        at_origin = (not other_fsrs and (not legacy.get("stage") or bool(pending)) if base.get("is_new") else bool(other_fsrs) and
-                     _history_base_key(base) == _history_base_key(as_base))
+        legacy_day = new_last_study_day if oh else old_last_study_day
+        at_origin = (not other_fsrs and (not legacy.get("stage") or bool(pending)) if base.get("is_new") else
+                     _legacy_at_history_origin(base, other_fsrs, legacy_day))
         if not at_origin and _fsrs_state_key(other_fsrs) != _fsrs_state_key(current_fsrs):
             raise HTTPException(409, "旧客户端的卡片已分叉且无法重算，请保留两端进度")
         known = set(history_card.get("appliedFsrs") or []) | set(own)
@@ -1029,9 +1052,10 @@ def _merge_histories(old_card, new_card, selected):
     return result
 
 
-def _merge_card_replay(old_card, new_card, selected):
+def _merge_card_replay(old_card, new_card, selected, *, old_last_study_day=None, new_last_study_day=None):
     """保留待重放评分；分叉无法安全合并时拒绝写入，不能悄悄丢掉评分。"""
-    merged = _merge_histories(old_card, new_card, selected)
+    merged = _merge_histories(old_card, new_card, selected,
+                             old_last_study_day=old_last_study_day, new_last_study_day=new_last_study_day)
     if merged is not None:
         return merged
     old_applied = set(old_card.get("appliedFsrs") or [])
@@ -1202,7 +1226,7 @@ def merge_learning_states(old, new):
                 cards[w] = oc
             else:
                 cards[w] = nc
-            cards[w] = _merge_card_replay(oc, nc, cards[w])
+            cards[w] = _merge_card_replay(oc, nc, cards[w], old_last_study_day=oa[0], new_last_study_day=na[0])
     out["cards"] = cards
     # v2.0 字段：不能像整包替换一样把 bandStats/knowledge 清空或覆盖
     knowledge, knowledge_evidence = merge_knowledge_evidence(old, new)

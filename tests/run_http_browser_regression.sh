@@ -39,6 +39,7 @@ scenarios=(
   server/test_state_revision_http.py
   server/test_daily_study_http.py
   server/test_study_evidence_http.py
+  server/test_fsrs_legacy_origin_http.py
   server/test_streak_write_validation_http.py
   server/test_state_changes_http.py
   server/test_delta_upload_http.py
