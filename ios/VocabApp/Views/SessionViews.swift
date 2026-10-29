@@ -420,9 +420,13 @@ struct ReviewQuizView: View {
         let pos = card?.pos ?? app.S.pointer
         // 成熟卡（稳定度≥14 天）走反向回想；其余正向再认
         let mature = (card?.fsrs?.stability ?? 0) >= 14
-        if let q = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991,
-                                                    mode: mature ? "reverse" : "forward"),
-           q.options.count >= 4 {
+        let owner = app.auth, sessionID = app.session.id, generation = app.routeGeneration
+        let result = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991,
+                                                    mode: mature ? "reverse" : "forward", word: word)
+        guard !Task.isCancelled, app.auth == owner, app.session.id == sessionID,
+              app.routeGeneration == generation, app.route == .session else { return }
+        if let q = result, q.options.count >= 4 {
+            app.S.cards[word]?.pos = q.pos
             quiz = q
             phase = .quizzing
         } else {
@@ -508,7 +512,9 @@ struct ProbeQuizView: View {
             Group {
                 if let quiz {
                     QuizOptionsView(options: quiz.options) { ok in
-                        app.answerProbe(item, ok: ok, reverse: reverse)
+                        var observed = item
+                        observed.pos = quiz.pos
+                        app.answerProbe(observed, ok: ok, reverse: reverse)
                         app.session.idx += 1
                         app.save()
                     }
@@ -525,7 +531,7 @@ struct ProbeQuizView: View {
         let owner = app.auth, sessionID = app.session.id, index = app.session.idx, generation = app.routeGeneration
         let pos = item.pos > 0 ? item.pos : app.S.pointer
         let result = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991,
-                                                       mode: reverse ? "reverse" : "forward")
+                                                       mode: reverse ? "reverse" : "forward", word: item.word)
         guard !Task.isCancelled, app.auth == owner, app.session.id == sessionID,
               app.session.idx == index, app.routeGeneration == generation, app.route == .session else { return }
         if let q = result, q.options.count >= 4 {
@@ -804,10 +810,11 @@ struct AcceptanceQuizView: View {
         let owner = app.auth, sessionID = app.session.id, index = i, generation = app.routeGeneration
         let w = words[index]
         let pos = app.S.cards[w]?.pos ?? app.S.pointer
-        let result = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991)
+        let result = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991, word: w)
         guard !Task.isCancelled, app.auth == owner, app.session.id == sessionID, i == index,
               app.routeGeneration == generation, app.route == .session else { return }
         quiz = result?.options.count == 4 ? result : nil
+        if let quiz { app.S.cards[w]?.pos = quiz.pos }
         loading = false
     }
 

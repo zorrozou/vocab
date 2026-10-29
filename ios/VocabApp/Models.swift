@@ -522,6 +522,11 @@ struct Quiz: Codable {
     var options: [QuizOption]
     var mode: String?      // "reverse"=反向回想（给中文选英文）；nil=正向再认
     var prompt: String?    // 反向模式的题干（中文词义）
+
+    func matches(word expected: String) -> Bool {
+        word.caseInsensitiveCompare(expected) == .orderedSame && pos > 0 && options.count == 4 &&
+            options.filter(\.ok).count == 1 && options.allSatisfy { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    }
 }
 
 struct PlacementItem: Codable {

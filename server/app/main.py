@@ -785,10 +785,17 @@ def gloss_of(wid):
 
 
 @app.get("/api/v1/quiz")
-def quiz(pos: int = Query(ge=1), seed: int = 0, mode: str = Query(default="forward")):
+def quiz(pos: int = Query(ge=1), seed: int = 0, mode: str = Query(default="forward"), word: str = ""):
     """4 选 1：正确词义 + 3 个同词性、邻近词频（±200 位）的干扰项。
     mode=reverse：反向回想——给中文词义选英文单词（更难，用于稳定度≥14 天的成熟卡）"""
     import random as _r
+    # Saved positions can be stale after a lexicon update. An explicit word
+    # always owns the question; never silently fall back to another word.
+    if word:
+        wid = WORD2ID.get(word.strip().lower())
+        if wid is None:
+            raise HTTPException(status_code=404, detail="词条不存在")
+        pos = POS_OF[wid]
     if pos > len(seq):
         return {"options": []}
     wid = seq[pos - 1]["id"]

@@ -689,8 +689,10 @@ function commitUndoReview() {
   save();
 }
 
-async function review(word, rating, trackWeight, allowUndo = false) {
+async function review(word, rating, trackWeight, allowUndo = false, acceptance = false) {
   const c = S.cards[word]; if (!c) return;
+  const day = today();
+  if (acceptance && S.quizProgressDay === day && (S.quizCompleted || []).includes(word)) return;
   const preStab = c.fsrs ? c.fsrs.stability : (LEGACY_STAB[c.stage] || 0);   // v1.3：成熟度用答前稳定度判断
   const lastReview = lastReviewDate(word);   // 在写今日日志前取上一次记录
   // 手滑误点「忘记」可撤销：评分前快照卡片与日志长度
@@ -728,6 +730,13 @@ async function review(word, rating, trackWeight, allowUndo = false) {
         S.track = tr;
       }
     }
+  }
+  if (acceptance) {
+    // Persist the answer and completion in the same save before FSRS can suspend.
+    if (S.quizProgressDay !== day) { S.quizProgressDay = day; S.quizCompleted = []; }
+    if (!S.quizCompleted.includes(word)) S.quizCompleted.push(word);
+    const learned = S.log.filter(x => x.d === day && x.kind === "learn").map(x => x.word);
+    if (learned.every(w => S.quizCompleted.includes(w))) S.quizDay = day;
   }
   await scheduleFsrs(c, body, rating);
 }
@@ -1311,16 +1320,32 @@ function step() {
   else showReview(item);
 }
 
+// A stored rank is only a hint. Reject old-server or malformed responses
+// that cannot prove they belong to this word before recording any evidence.
+async function wordQuiz(word, pos, mode = "forward") {
+  try {
+    const response = await fetch(`${API}/api/v1/quiz?pos=${pos || 1}&word=${encodeURIComponent(word)}&seed=${Date.now() % 99991}&mode=${mode}`);
+    if (!response.ok) return null;
+    const quiz = await response.json();
+    if (typeof quiz?.word !== "string" || quiz.word.toLowerCase() !== word.toLowerCase() ||
+        !Number.isSafeInteger(quiz.pos) || quiz.pos < 1 || !Array.isArray(quiz.options) || quiz.options.length !== 4 ||
+        quiz.options.filter(o => o?.ok === true).length !== 1 ||
+        quiz.options.some(o => typeof o?.text !== "string" || !o.text.trim() || typeof o.ok !== "boolean")) return null;
+    return quiz;
+  } catch (_) { return null; }
+}
+
 /* ---- v1.3 探测题：与复习测验同形态（4选1），用户无感知；答错进明日新词候选 ---- */
 async function showProbe(item) {
   const current = sessionViewGuard(item);
   const w = item.detail, pos = w.pos || S.pointer;
   let quiz = null;
-  try { quiz = await fetch(`${API}/api/v1/quiz?pos=${pos}&seed=${Date.now() % 99991}&mode=${w.reverse ? "reverse" : "forward"}`).then(r => r.json()); } catch (e) {}
+  quiz = await wordQuiz(w.word, pos, w.reverse ? "reverse" : "forward");
   if (!current()) return;
   if (!quiz || !quiz.options || quiz.options.length < 4) {   // 出题失败直接跳过，不影响主流程
     session.idx++; save(); return step();
   }
+  w.pos = quiz.pos;
   const isRev = w.reverse && quiz.mode === "reverse" && quiz.prompt;
   $("#app").innerHTML = `<div class="card center">
     <h2>复习 ${session.idx + 1}/${session.queue.length}</h2>
@@ -1373,7 +1398,7 @@ async function quizRound(words, i) {
   const w = words[i];
   const pos = S.cards[w] ? S.cards[w].pos : 1200;
   let q = null;
-  try { q = await fetch(`${API}/api/v1/quiz?pos=${pos}&seed=${Date.now() % 99991}`).then(r => r.json()); } catch (e) {}
+  q = await wordQuiz(w, pos);
   if (!current() || session !== currentSession) return;
   if (!q || !q.options || q.options.length !== 4) {
     $("#app").innerHTML = `<div class="card center"><h2>验收题暂不可用</h2>
@@ -1383,6 +1408,7 @@ async function quizRound(words, i) {
     $("#bQuizLater").onclick = () => doneDay();
     return;
   }
+  if (S.cards[w]) S.cards[w].pos = q.pos;
   $("#app").innerHTML = `<div class="card center">
     <h2>验收测试 ${i + 1}/${words.length} · 今天学的还记得吗？</h2>
     <div><span class="big">${escapeHTML(w)}</span><button class="playw" aria-label="朗读单词" data-t="${escapeHTML(w)}">▶</button></div>
@@ -1401,10 +1427,8 @@ async function quizRound(words, i) {
       if (q.options[+x.dataset.i].ok) x.classList.add("right");
     });
     if (!ok) b.classList.add("wrong");
-    await review(w, ok ? 3 : 1, 1.0);   // 验收是客观实测：权重 1.0（强于复习的 0.2/0.3）
+    await review(w, ok ? 3 : 1, 1.0, false, true);   // 验收是客观实测：权重 1.0（强于复习的 0.2/0.3）
     if (S !== state || session !== currentSession) return;
-    if (S.quizProgressDay !== today()) { S.quizProgressDay = today(); S.quizCompleted = []; }
-    if (!S.quizCompleted.includes(w)) S.quizCompleted.push(w);
     save();
     setTimeout(() => { if (answerCurrent() && session === currentSession) quizRound(words, i + 1); }, 650);
   });
@@ -1673,9 +1697,10 @@ async function showReview(item) {
   // 成熟卡（稳定度≥14 天）走反向回想（给中文选英文）；其余正向再认（与 App 一致）
   const mature = c.fsrs && c.fsrs.stability >= 14;
   let quiz = null;
-  try { quiz = await fetch(`${API}/api/v1/quiz?pos=${c.pos}&seed=${Date.now() % 99991}&mode=${mature ? "reverse" : "forward"}`).then(r => r.json()); } catch (e) {}
+  quiz = await wordQuiz(word, c.pos, mature ? "reverse" : "forward");
   if (!current()) return;
   if (!quiz || !quiz.options || quiz.options.length < 4) return showReviewClassic(item);
+  c.pos = quiz.pos;
   const isRev = quiz.mode === "reverse" && quiz.prompt;
   $("#app").innerHTML = `<div class="card center">
     <h2>复习 ${session.idx + 1}/${session.queue.length} · ${escapeHTML(stageLabel(c))}</h2>

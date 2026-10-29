@@ -163,7 +163,8 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
             fixture['fsrs_failures'] += 1
             return JSONResponse({'detail': 'test fixture: FSRS unavailable'}, status_code=503)
         if request.url.path == '/api/v1/quiz' and fixture['fixed_quiz']:
-            return JSONResponse({'word':'apple','pos':main.POS_OF[main.WORD2ID['apple']], 'mode':'forward',
+            target = request.query_params.get('word', 'apple')
+            return JSONResponse({'word':target,'pos':main.POS_OF.get(main.WORD2ID.get(target), 1), 'mode':'forward',
                 'options':[{'text':'correct fixture answer','ok':True}, {'text':'wrong one','ok':False},
                            {'text':'wrong two','ok':False}, {'text':'wrong three','ok':False}]})
         response = await call_next(request)

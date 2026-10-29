@@ -1929,8 +1929,14 @@ actor APIClient {
         try await get("/api/v1/placement/set", ["seed": seed])
     }
 
-    func quiz(pos: Int, seed: Int, mode: String = "forward") async throws -> Quiz {
-        try await get("/api/v1/quiz", ["pos": "\(pos)", "seed": "\(seed)", "mode": mode])
+    func quiz(pos: Int, seed: Int, mode: String = "forward", word: String? = nil) async throws -> Quiz {
+        var query = ["pos": "\(max(1, pos))", "seed": "\(seed)", "mode": mode]
+        if let word { query["word"] = word }
+        let result: Quiz = try await get("/api/v1/quiz", query)
+        if let word, !result.matches(word: word) {
+            throw APIError(message: "题目与当前单词不一致，请重试")
+        }
+        return result
     }
 
     func trio(word: String, weak: String, cap: Int) async throws -> TrioResponse {

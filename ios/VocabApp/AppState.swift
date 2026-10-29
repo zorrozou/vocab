@@ -1225,6 +1225,7 @@ final class AppState {
 
     func review(word: String, rating: Int, trackWeight: Double? = nil, allowUndo: Bool = false, acceptance: Bool = false) async {
         guard var c = S.cards[word] else { return }
+        if acceptance, S.quizProgressDay == DayUtil.today(), (S.quizCompleted ?? []).contains(word) { return }
         let preStab = c.fsrs?.stability ?? Double(c.stage.flatMap { StudyEngine.ladderInterval[$0] } ?? 0)   // v1.3：成熟度用答前稳定度
         let lastReview = lastReviewDate(word)   // 在写今日日志前取上一次记录
         let today = DayUtil.today()

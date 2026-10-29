@@ -55,6 +55,10 @@ scenarios=(
   server/test_snapshot_limits_http.py
   tests/web_study_e2e.cjs
   tests/web_daily_budget_e2e.cjs
+  tests/web_daily_budget_sync_e2e.cjs
+  tests/quiz_word_identity_http.py
+  tests/web_quiz_identity_e2e.cjs
+  tests/web_acceptance_atomic_e2e.cjs
   tests/web_today_plan_check.cjs
   tests/web_today_plan_e2e.cjs
   tests/web_fsrs_check.cjs
