@@ -43,6 +43,19 @@ async function api(path, body) {
       } finally { largeLocalAppend = real; }
     });
     assert(!race.failed && race.contains && race.same, JSON.stringify(race));
+    const switched = await page.evaluate(async () => {
+      const real = largeLocalAppend;
+      let release, started;
+      const gate = new Promise(r => release = r), seen = new Promise(r => started = r);
+      largeLocalAppend = async (...args) => { started(); await gate; return real(...args); };
+      try {
+        S.log = Array.from({length:1205}, (_, i) => ({d:'2020-01-01',word:'example',kind:'learn',rating:3,eventId:i.toString(16).padStart(8,'0')}));
+        const before = JSON.stringify(S), first = save(); await seen;
+        largeActive = null; S = JSON.parse(before); release(); await first;
+        return S.log.length;
+      } finally { largeLocalAppend = real; }
+    });
+    assert.equal(switched, 1205, 'old session must not trim a newly selected state');
     console.log('PASS large-state save failure retains the full log and recovery persists the trimmed state');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

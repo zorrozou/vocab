@@ -6804,7 +6804,7 @@ function queueNormalSave(active, snapshot, originalRaw, trimmedLog) {
       active.conflict = true; throw new Error("同步期间本机进度已变化，请先导出本页面进度");
     }
     active.prepared = await normalPrimarySave(active.lease, active.prepared, snapshot);
-    if (JSON.stringify(S) === originalRaw) S.log = trimmedLog;
+    if (normalActive === active && normalSessionCurrent(active) && JSON.stringify(S) === originalRaw) S.log = trimmedLog;
   }).catch(error => { active.error = error; }).then(() => {
     active.pending--;
     if (normalActive !== active) return;
@@ -6880,13 +6880,13 @@ function queueLargeSave(active, snapshot, originalRaw, trimmedLog) {
       await largeLocalFlush(active.lease); await largeLocalAppend(active.lease, nextRaw);
     }
     if (rebased) {
-      if (active.pending !== 1 || JSON.stringify(S) !== originalRaw) {
+      if (!largeSessionCurrent(active) || active.pending !== 1 || JSON.stringify(S) !== originalRaw) {
         active.conflict = true;
         throw new Error("合并期间本机进度再次变化，请先导出本页面进度");
       }
       S = JSON.parse(nextRaw);
       active.conflict = false;
-    } else if (JSON.stringify(S) === originalRaw) S.log = trimmedLog;
+    } else if (largeActive === active && largeSessionCurrent(active) && JSON.stringify(S) === originalRaw) S.log = trimmedLog;
   }).catch(error => { active.error = error; }).then(() => {
     active.pending--;
     if (largeActive !== active) return;
