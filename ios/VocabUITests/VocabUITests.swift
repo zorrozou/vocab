@@ -1600,6 +1600,29 @@ final class VocabUITests: XCTestCase {
         XCTAssertEqual(Set(cards.keys), Set(["banana", "cherry"]))
     }
 
+    @MainActor func testStaticSentenceSwapFailureKeepsSentence() async throws {
+        continueAfterFailure = false
+        let seed = try await fixtureRequest("/api/v1/__ui_fixture/static-swap-case", method: "POST")
+        let username = try XCTUnwrap(seed["username"] as? String)
+        let password = try XCTUnwrap(seed["password"] as? String)
+        let app = XCUIApplication()
+        app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
+        app.launch()
+        XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
+        let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
+        XCTAssertTrue(user.waitForExistence(timeout: 20)); user.tap(); user.typeText(username)
+        XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
+        app.buttons["登录"].tap()
+        XCTAssertTrue(app.buttons["start-today"].waitForExistence(timeout: 30)); app.buttons["start-today"].tap()
+        XCTAssertTrue(app.buttons["quiz-option-0"].waitForExistence(timeout: 30)); app.buttons["quiz-option-0"].tap()
+        let sentence = app.staticTexts["An apple is here."]
+        XCTAssertTrue(sentence.waitForExistence(timeout: 30))
+        let swap = app.buttons.matching(identifier: "swap-static-apple").firstMatch
+        XCTAssertTrue(swap.waitForExistence(timeout: 10)); swap.tap()
+        XCTAssertTrue(app.staticTexts["暂时无法换句，请稍后重试。"].waitForExistence(timeout: 20))
+        XCTAssertTrue(sentence.exists, "the original sentence should remain visible on failure")
+    }
+
     @MainActor func testPersonalSentenceRejection() async throws {
         continueAfterFailure = false
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/personal-case", method: "POST")

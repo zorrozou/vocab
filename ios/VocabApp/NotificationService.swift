@@ -6,6 +6,23 @@ enum ReminderStatus: Equatable {
     case disabled, checking, scheduled, denied, failed, invalidTime
 }
 
+/// The system's nominally synchronous cancellation can block on its daemon.
+/// Keep that IPC off the main thread, and wait for earlier cancellations before
+/// adding a new request so an old cancellation cannot remove a newer reminder.
+final class NotificationCancellationQueue {
+    private let queue = DispatchQueue(label: "vocab.notification-cancellation")
+
+    func cancel(_ operation: @escaping () -> Void) {
+        queue.async(execute: operation)
+    }
+
+    func waitForPending() async {
+        await withCheckedContinuation { continuation in
+            queue.async { continuation.resume() }
+        }
+    }
+}
+
 /// Serializes notification changes across permission prompts and async writes.
 /// A newer setting always wins, including when the account changes mid-request.
 @MainActor
@@ -69,12 +86,14 @@ final class ReminderCoordinator {
 @MainActor
 enum NotificationService {
     private static let identifier = "dailyReviewReminder"
+    private static let cancellations = NotificationCancellationQueue()
     private static let coordinator = ReminderCoordinator(
         requestPermission: {
             (try? await UNUserNotificationCenter.current()
                 .requestAuthorization(options: [.alert, .sound])) ?? false
         },
         schedule: { hour in
+            await cancellations.waitForPending()
             let content = UNMutableNotificationContent()
             content.title = "词航"
             content.body = "今天的学习时间到了，打开词航查看学习计划。"
@@ -87,8 +106,11 @@ enum NotificationService {
                 UNNotificationRequest(identifier: identifier, content: content, trigger: trigger))
         },
         cancel: {
-            UNUserNotificationCenter.current()
-                .removePendingNotificationRequests(withIdentifiers: [identifier])
+            let id = identifier
+            cancellations.cancel {
+                UNUserNotificationCenter.current()
+                    .removePendingNotificationRequests(withIdentifiers: [id])
+            }
         }
     )
 

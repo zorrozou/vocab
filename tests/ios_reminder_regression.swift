@@ -14,6 +14,18 @@ struct Settings { var notifyEnabled = false; var notifyHour = 21 }
     }
 
     @MainActor static func main() async {
+        let cancellationQueue = NotificationCancellationQueue()
+        let blockedCancellation = DispatchSemaphore(value: 0)
+        let startedCancellation = DispatchSemaphore(value: 0)
+        cancellationQueue.cancel { startedCancellation.signal(); blockedCancellation.wait() }
+        precondition(startedCancellation.wait(timeout: .now() + 1) == .success)
+        var barrierPassed = false
+        let barrier = Task { await cancellationQueue.waitForPending(); barrierPassed = true }
+        try? await Task.sleep(nanoseconds: 20_000_000)
+        precondition(!barrierPassed, "a pending cancellation must finish before a new schedule")
+        blockedCancellation.signal()
+        await barrier.value
+        precondition(barrierPassed, "cancellation barrier must eventually finish")
         var permissionGate: CheckedContinuation<Bool, Never>?
         var pending: Int?
         var cancelCount = 0
