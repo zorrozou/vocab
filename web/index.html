@@ -5541,6 +5541,15 @@ async function largeLocalFlush(lease, duringPush = false) {
   } finally { lease.flushing = false; }
 }
 function deltaSlotMatchesMemory(slot) { return localStorage.getItem(slot) === JSON.stringify(S); }
+// The current page can have an unfinished in-memory edit during an async
+// operation. Defer sync in that case; only another storage value (or an
+// unknown baseline) is evidence that this page's stored slot went stale.
+function deltaMemoryReady(slot) {
+  if (deltaSlotMatchesMemory(slot)) return true;
+  if (!observedSlotValues.has(slot)) blockConcurrentSlotChange(slot);
+  else observedSlotIsCurrent(slot);
+  return false;
+}
 function deltaHex(bytes) { return Array.from(bytes, b => b.toString(16).padStart(2, "0")).join(""); }
 function deltaID() { return deltaHex(crypto.getRandomValues(new Uint8Array(16))); }
 function deltaStable(value) {
@@ -5828,7 +5837,7 @@ async function deltaInstallPull(record, owner, token, slot, stillCurrent) {
   validateDeltaHead(head, record.generation, pull.revision, record.epoch);
   if (!stillCurrent() || !deltaSession(owner, token, slot) || localSaveFailed) return false;
   const current = JSON.stringify(S);
-  if (!deltaSlotMatchesMemory(slot)) { blockConcurrentSlotChange(slot); return false; }
+  if (!deltaMemoryReady(slot)) return false;
   if (current !== pull.previous && current !== pull.target) throw new Error("本机进度已变化，请先导出并处理未完成下载");
   if (current === pull.previous) {
     try { writeSlotAndMain(slot, target); markSlotSynced(slot); }
@@ -6983,7 +6992,7 @@ async function pushState(expectedOwner = AUTH && AUTH.userId, snapshot = S, expe
   if (localStorage.getItem(awaitingServerSlot(expectedSlot))) { handleSyncError(new Error("服务器进度尚未确认，请先重试读取")); return false; }
   if (localSaveFailed) { handleSyncError(new Error("本机保存失败，请先导出进度并释放空间")); return false; }
   if (deltaBlockedSlots.has(expectedSlot) || localStorage.getItem(deltaRecoveryBlock(expectedSlot))) { handleSyncError(new Error("本机存档需要恢复，请先导出并核对服务器进度")); return false; }
-  if (!localSaveFailed && !deltaSlotMatchesMemory(expectedSlot)) { blockConcurrentSlotChange(expectedSlot); return false; }
+  if (!localSaveFailed && !deltaMemoryReady(expectedSlot)) return false;
   const token = AUTH.token, payload = JSON.stringify(snapshot);
   const frozen = JSON.parse(payload);
   if (!deltaSupported()) {
@@ -6997,7 +7006,7 @@ async function pushState(expectedOwner = AUTH && AUTH.userId, snapshot = S, expe
       if (!deltaSession(expectedOwner, token, expectedSlot)) return false;
       if (localStorage.getItem(awaitingServerSlot(expectedSlot))) { handleSyncError(new Error("服务器进度尚未确认，请先重试读取")); return false; }
       if (localSaveFailed) { handleSyncError(new Error("本机保存失败，请先导出进度并释放空间")); return false; }
-      if (!localSaveFailed && !deltaSlotMatchesMemory(expectedSlot)) { blockConcurrentSlotChange(expectedSlot); return false; }
+      if (!localSaveFailed && !deltaMemoryReady(expectedSlot)) return false;
       try {
         const result = await tryDeltaPush(expectedOwner, token, expectedSlot, payload);
         if (result !== null) return result;
@@ -7058,7 +7067,7 @@ async function syncFromServer(stillCurrent = () => true) {
   const owner = AUTH && AUTH.userId, slot = accountSlot(AUTH), token = AUTH && AUTH.token;
   if (localStorage.getItem(awaitingServerSlot(slot))) return false;
   if (deltaBlockedSlots.has(slot) || localStorage.getItem(deltaRecoveryBlock(slot))) { handleSyncError(new Error("本机存档需要恢复，请先导出并核对服务器进度")); return false; }
-  if (!deltaSlotMatchesMemory(slot)) { blockConcurrentSlotChange(slot); return false; }
+  if (!deltaMemoryReady(slot)) return false;
   let pendingUpload = false;
   try {
     const resumed = await deltaPull(owner, token, slot, stillCurrent, true);
