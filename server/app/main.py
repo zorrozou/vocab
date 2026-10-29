@@ -717,6 +717,23 @@ def lexicon_probes():
 
 
 # ---------- 例句反馈：用户标记差句 → 隐藏并重生 ----------
+@app.get("/api/v1/sentence/alternatives")
+def sentence_alternatives(word: str = Query(min_length=1, max_length=40),
+                          tier: int = Query(ge=1, le=3), request: Request = None):
+    """Read existing alternatives without changing the shared lexicon."""
+    check_rate(request, "sentence")
+    wid = WORD2ID.get(word.strip().lower())
+    if not wid:
+        return {"word": word, "sentences": []}
+    rows = _lx.execute(
+        """SELECT text, tier, translation FROM sentence
+           WHERE targetWordId=? AND tier=? AND (genMethod LIKE 'llm-%' OR genMethod='tatoeba')
+             AND COALESCE(flag,'') != 'reported' AND text IS NOT NULL AND trim(text) != ''
+           ORDER BY CASE genMethod WHEN 'tatoeba' THEN 0 WHEN 'llm-tier-v1' THEN 1 ELSE 2 END, id DESC
+           LIMIT 30""", (wid, tier)).fetchall()
+    return {"word": word, "sentences": [{"text": r["text"], "tier": r["tier"], "zh": r["translation"] or ""} for r in rows]}
+
+
 @app.post("/api/v1/sentence/report")
 def sentence_report(word: str = Query(min_length=1, max_length=40),
                     text: str = Query(min_length=1, max_length=300),

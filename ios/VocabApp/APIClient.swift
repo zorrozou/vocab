@@ -1938,6 +1938,10 @@ actor APIClient {
                       ["word": word, "weak": weak, "cap": "\(cap)"])
     }
 
+    func alternatives(word: String, tier: Int) async throws -> TrioResponse {
+        try await get("/api/v1/sentence/alternatives", ["word": word, "tier": "\(tier)"])
+    }
+
     func weave(word: String, weak: String, cap: Int, device: String, expectedToken: String? = nil, enforceSession: Bool = false) async throws -> WeaveResponse {
         try requireToken(expectedToken, enforceSession: enforceSession)
         return try await get("/api/v1/sentence/weave",

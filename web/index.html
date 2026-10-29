@@ -1422,7 +1422,7 @@ function sentenceBlock(word, personal, sents) {
   let html = "";
   if (personal) html += `<div class="sent base-sentence"><span class="tag p">个性化</span>${escapeHTML(personal.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(personal.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(personal.text)}" data-w="${escapeHTML(word)}" data-kind="personal" title="换一句">↻</button>${personal.zh ? `<div class="zh">${escapeHTML(personal.zh)}</div>` : ""}</div>`;
   list.forEach(s => {
-    html += `<div class="sent base-sentence"><span class="tag s">${TIER[s.tier] || "例句"}</span>${escapeHTML(s.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(s.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(s.text)}" data-w="${escapeHTML(word)}" data-kind="static" title="换一句">↻</button>${s.zh ? `<div class="zh">${escapeHTML(s.zh)}</div>` : ""}</div>`;
+    html += `<div class="sent base-sentence"><span class="tag s">${TIER[s.tier] || "例句"}</span>${escapeHTML(s.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(s.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(s.text)}" data-w="${escapeHTML(word)}" data-tier="${[1,2,3].includes(s.tier) ? s.tier : 1}" data-kind="static" title="换一句">↻</button>${s.zh ? `<div class="zh">${escapeHTML(s.zh)}</div>` : ""}</div>`;
   });
   if (!html) html = `<div class="sent base-sentence" id="pendingSent"><span class="tag s">例句</span><span class="muted">生成中…</span></div>`;
   if (personal) logSentenceExposures(personal.text, "personal", false);
@@ -1588,16 +1588,14 @@ function bindPlays() {
       }
       try {
         if (kind === "static") {
-          // 触发补档并重取该词条
-          await fetch(`${API}/api/v1/sentence/trio?word=${encodeURIComponent(w)}&cap=${S.pointer + 10}`).then(r => r.json());
-          const pos = (S.cards[w] && S.cards[w].pos) || S.pointer;
-          const r2 = await fetch(`${API}/api/v1/lexicon/at?pos=${pos}&n=20`).then(r => r.json());
-          const wd = r2.words.find(x => x.word === w);
+          const response = await fetch(`${API}/api/v1/sentence/alternatives?word=${encodeURIComponent(w)}&tier=${encodeURIComponent(b.dataset.tier || "1")}`);
+          if (!response.ok) throw new Error("alternative request failed");
+          const result = await response.json();
           const displayed = new Set([...document.querySelectorAll("#app .sent .plays:not(.bad)")].map(x => x.dataset.t));
-          const fresh = wd && (wd.sentences || []).find(x => x.text !== text && !displayed.has(x.text));
+          const fresh = Array.isArray(result.sentences) && result.sentences.find(x => x.text !== text && !displayed.has(x.text));
           if (fresh && sentEl) {
             const TIER = { 1: "基础", 2: "进阶", 3: "挑战" };
-            sentEl.outerHTML = `<div class="sent base-sentence"><span class="tag s">${TIER[fresh.tier] || "例句"}</span>${escapeHTML(fresh.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(fresh.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(fresh.text)}" data-w="${escapeHTML(w)}" data-kind="static" title="换一句">↻</button>${fresh.zh ? `<div class="zh">${escapeHTML(fresh.zh)}</div>` : ""}</div>`;
+            sentEl.outerHTML = `<div class="sent base-sentence"><span class="tag s">${TIER[fresh.tier] || "例句"}</span>${escapeHTML(fresh.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(fresh.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(fresh.text)}" data-w="${escapeHTML(w)}" data-tier="${[1,2,3].includes(fresh.tier) ? fresh.tier : 1}" data-kind="static" title="换一句">↻</button>${fresh.zh ? `<div class="zh">${escapeHTML(fresh.zh)}</div>` : ""}</div>`;
             bindPlays();
           } else if (sentEl && sentEl.isConnected) {
             sentEl.style.opacity = "";

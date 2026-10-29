@@ -67,6 +67,7 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
     fixture['scheduler_enrichment_failure'] = False
     fixture['scheduler_enrichment_padding'] = 0
     fixture['static_swap_case'] = False
+    fixture['static_swap_online'] = False
     original_scheduler_enrichment = auth.enrich_fsrs_schedulers
     def injected_scheduler_enrichment(state, account_id):
         if fixture['scheduler_enrichment_failure']: raise RuntimeError('fixture scheduler enrichment failure')
@@ -88,8 +89,10 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
             return JSONResponse({'word':'apple', 'pos':1, 'senses':[{'pos':'n', 'text':'苹果'}], 'sentences':[
                 {'tier':1,'text':'An apple is here.','zh':'苹果在这里。'},
                 {'tier':2,'text':'The apple fell today.','zh':'苹果今天落下。'}]})
-        if fixture['static_swap_case'] and request.url.path == '/api/v1/sentence/report':
+        if fixture['static_swap_case'] and not fixture['static_swap_online'] and request.url.path == '/api/v1/sentence/report':
             return JSONResponse({'detail':'injected report failure'}, status_code=503)
+        if fixture['static_swap_case'] and fixture['static_swap_online'] and request.url.path == '/api/v1/sentence/alternatives':
+            return JSONResponse({'word':'apple','sentences':[{'tier':1,'text':'A different apple sentence.','zh':'另一条例句。'}]})
         if request.method == 'POST' and request.url.path == '/api/v1/me/state/experimental-large-checkpoint' and fixture['checkpoint_write_failure']:
             return JSONResponse({'detail':'injected checkpoint failure'}, status_code=503)
         if request.method == 'POST' and request.url.path.startswith('/api/v1/me/state/delta-stages/') and request.url.path.endswith('/experimental-large-restore') and fixture['large_restore_write_failure']:
@@ -734,8 +737,13 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
     @main.app.post('/api/v1/__ui_fixture/static-swap-case')
     def seed_static_swap_case():
         account = seed_offline_case()
-        fixture.update(fsrs_offline=False, fixed_quiz=True, static_swap_case=True)
+        fixture.update(fsrs_offline=False, fixed_quiz=True, static_swap_case=True, static_swap_online=False)
         return account
+
+    @main.app.post('/api/v1/__ui_fixture/static-swap-online')
+    def static_swap_online():
+        fixture['static_swap_online'] = True
+        return {'ok': True}
 
     @main.app.post('/api/v1/__ui_fixture/budget-case')
     def seed_budget_case(body: dict):

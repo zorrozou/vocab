@@ -256,7 +256,7 @@ struct SentenceRow: View {
                     swapping = true
                     swapError = false
                     Task {
-                        let fresh = await app.swapSentence(word: word, oldText: sentence.text, kind: kind, displayedSentences: displayedSentences)
+                        let fresh = await app.swapSentence(word: word, oldText: sentence.text, kind: kind, tier: sentence.tier ?? 1, displayedSentences: displayedSentences)
                         await MainActor.run {
                             if kind == "static" && fresh == nil { swapError = true }
                             else { onSwap(fresh) }

@@ -1756,18 +1756,15 @@ final class AppState {
 
     // MARK: ↻ 换一句
 
-    func swapSentence(word: String, oldText: String, kind: String, displayedSentences: [String] = []) async -> SentenceItem? {
+    func swapSentence(word: String, oldText: String, kind: String, tier: Int = 1, displayedSentences: [String] = []) async -> SentenceItem? {
         let slot = slotKey, token = auth?.token
         do {
             if kind == "static" {
                 try await api.report(word: word, text: oldText, device: deviceId(), expectedToken: token, enforceSession: true)
-                _ = try? await api.trio(word: word, weak: "", cap: S.pointer + 10)
+                let r = try await api.alternatives(word: word, tier: (1...3).contains(tier) ? tier : 1)
                 guard slotKey == slot else { return nil }
-                let pos = S.cards[word]?.pos ?? S.pointer
-                let r = try await api.lexiconAt(pos: pos, n: 20)
-                guard slotKey == slot else { return nil }
-                if let wd = r.words.first(where: { $0.word == word }),
-                   let fresh = (wd.sentences ?? []).firstAlternative(excluding: displayedSentences + [oldText]) {
+                if r.word.lowercased() == word.lowercased(),
+                   let fresh = r.sentences.firstAlternative(excluding: displayedSentences + [oldText]) {
                     return fresh
                 }
                 return nil

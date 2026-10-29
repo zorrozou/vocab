@@ -1621,6 +1621,10 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(swap.waitForExistence(timeout: 10)); swap.tap()
         XCTAssertTrue(app.staticTexts["暂时无法换句，请稍后重试。"].waitForExistence(timeout: 20))
         XCTAssertTrue(sentence.exists, "the original sentence should remain visible on failure")
+        _ = try await fixtureRequest("/api/v1/__ui_fixture/static-swap-online", method: "POST")
+        swap.tap()
+        XCTAssertTrue(app.staticTexts["A different apple sentence."].waitForExistence(timeout: 20))
+        XCTAssertFalse(sentence.exists, "an available alternative should replace the original")
     }
 
     @MainActor func testPersonalSentenceRejection() async throws {

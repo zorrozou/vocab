@@ -50,7 +50,7 @@ const assert = require('assert');
         if (++calls === 1) await trioGate;
         await route.fulfill({json: {sentences: [{tier:1,text:'Final first'}, {tier:2,text:'Final second'}, {tier:3,text:'Final third'}]}});
       });
-      await page.route('**/api/v1/lexicon/at?**', route => route.fulfill({json: {words:[{word:'apple', sentences:[{tier:1,text:'Swap replacement'}]}]}}));
+      await page.route('**/api/v1/sentence/alternatives?**', route => route.fulfill({json: {word:'apple', sentences:[{tier:1,text:'Swap replacement'}]}}));
       await page.goto(process.env.VOCAB_TEST_BASE || 'http://127.0.0.1:18765/');
       await page.locator('#wGuest').click();
       await page.evaluate(async () => {
@@ -74,7 +74,7 @@ const assert = require('assert');
       let reportFails = false;
       await page.route('**/api/v1/sentence/report?**', route => route.fulfill(reportFails ? {status:503, body:'offline'} : {json:{ok:true}}));
       await page.route('**/api/v1/sentence/trio?**', route => route.fulfill({json:{sentences:[]}}));
-      await page.route('**/api/v1/lexicon/at?**', route => route.fulfill({json:{words:[{word:'apple',sentences:[{tier:1,text:'Original'}, {tier:2,text:'Already visible'}]}]}}));
+      await page.route('**/api/v1/sentence/alternatives?**', route => route.fulfill({json:{word:'apple',sentences:[{tier:1,text:'Original'}, {tier:1,text:'Already visible'}]}}));
       await page.goto(process.env.VOCAB_TEST_BASE || 'http://127.0.0.1:18765/');
       await page.locator('#wGuest').click();
       await page.evaluate(async () => {
