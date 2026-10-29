@@ -1,7 +1,8 @@
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const html = fs.readFileSync('web/index.html','utf8');
 const source = html.slice(html.indexOf('const addDays = '), html.indexOf('const INTERVAL ='));
-const ctx = {}; vm.createContext(ctx); vm.runInContext(source + '\nthis.addDays = addDays; this.forecastDueDates = forecastDueDates;', ctx);
+const sourceHelpers=html.slice(html.indexOf('function provisionalSchedule('),html.indexOf('// 服务端调度是无状态计算'))+html.slice(html.indexOf('const isMastered ='),html.indexOf('/* ---------------- 定级'));
+const ctx = {}; vm.createContext(ctx); vm.runInContext(sourceHelpers + source + '\nthis.addDays = addDays; this.forecastDueDates = forecastDueDates;', ctx);
 assert.equal(ctx.addDays('2026-03-08', 1), '2026-03-09');
 assert.equal(ctx.addDays('2026-11-01', -1), '2026-10-31');
 assert.equal(ctx.addDays('2024-02-28', 1), '2024-02-29');

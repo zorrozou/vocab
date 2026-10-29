@@ -1168,7 +1168,6 @@ final class AppState {
 
     private func scheduleFsrs(word: String, body: APIClient.FsrsIn, rating: Int) async {
         guard var card = S.cards[word] else { return }
-        let owner = slotKey, originalAuth = auth
         if card.pendingFsrs == nil { card.pendingFsrs = PendingFsrs(base: body, events: []) }
         if card.fsrsHistory == nil { card.fsrsHistory = card.pendingFsrs; card.fsrsReplayVersions = [:] }
         let lastDate = (card.fsrsHistory?.events.last ?? card.pendingFsrs?.events.last)
@@ -1177,13 +1176,11 @@ final class AppState {
         let event = PendingFsrsEvent(id: UUID().uuidString.lowercased(), rating: rating, at: DayUtil.isoString(eventDate))
         card.pendingFsrs?.events.append(event)
         card.fsrsHistory?.events.append(event)
+        StudyEngine.applyProvisionalSchedule(&card, configurations: S.fsrsSchedulers ?? [:])
         S.cards[word] = card
         saveLocal() // 请求之前保存待处理评分，进程中断后可重试。
-        if !(await replayPendingFsrs(word: word)), slotKey == owner, auth == originalAuth, var current = S.cards[word],
-           current.pendingFsrs?.events.contains(where: { $0.id == event.id }) == true {
-            StudyEngine.ladderFallback(&current, rating: rating, today: DayUtil.today())
-            S.cards[word] = current
-        }
+        guard !localSaveFailed else { return }
+        _ = await replayPendingFsrs(word: word)
     }
 
     private func flushPendingFsrs() async {
@@ -1223,7 +1220,7 @@ final class AppState {
         StudyEngine.posteriorUpdate(&S, rank: pos, resp: known ? 1 : 0, weight: weight, guess: guess)
     }
 
-    func review(word: String, rating: Int, trackWeight: Double? = nil, allowUndo: Bool = false, acceptance: Bool = false) async {
+    func review(word: String, rating: Int, trackWeight: Double? = nil, allowUndo: Bool = false, acceptance: Bool = false, verifiedPos: Int? = nil) async {
         guard var c = S.cards[word] else { return }
         if acceptance, S.quizProgressDay == DayUtil.today(), (S.quizCompleted ?? []).contains(word) { return }
         let preStab = c.fsrs?.stability ?? Double(c.stage.flatMap { StudyEngine.ladderInterval[$0] } ?? 0)   // v1.3：成熟度用答前稳定度
@@ -1236,6 +1233,7 @@ final class AppState {
         } else {
             undoSnapshot = nil
         }
+        if let verifiedPos, verifiedPos > 0 { c.pos = verifiedPos }
         S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "review"))
         StudyEngine.recordKnowledge(&S, word: word, pos: c.pos ?? S.pointer, ok: rating != 1)
         let body = StudyEngine.fsrsBody(for: c, rating: rating, isNewCard: false, lastReview: lastReview)
@@ -1457,14 +1455,14 @@ final class AppState {
         let remaining = StudyEngine.remainingDailyCapacity(S.log, day: DayUtil.today(), cap: cap)
 
         let due = S.cards
-            .filter { (!completed.contains($0.key) || [1, 3].contains($0.value.fsrs?.state ?? 0)) && !StudyEngine.isMastered($0.value) && (DayUtil.parseISO($0.value.due) ?? .distantFuture) <= now }
-            .sorted { (DayUtil.parseISO($0.value.due) ?? .distantFuture) < (DayUtil.parseISO($1.value.due) ?? .distantFuture) }
+            .filter { (!completed.contains($0.key) || StudyEngine.needsSameDayReview($0.value, configurations: S.fsrsSchedulers ?? [:])) && !StudyEngine.isMastered($0.value) && (DayUtil.parseISO(StudyEngine.scheduledDue($0.value, configurations: S.fsrsSchedulers ?? [:])) ?? .distantFuture) <= now }
+            .sorted { (DayUtil.parseISO(StudyEngine.scheduledDue($0.value, configurations: S.fsrsSchedulers ?? [:])) ?? .distantFuture) < (DayUtil.parseISO(StudyEngine.scheduledDue($1.value, configurations: S.fsrsSchedulers ?? [:])) ?? .distantFuture) }
             .map { $0.key }
         // 提前巩固位：1~7 天前碰过、FSRS 未到期、未掌握，P=(1−R)×0.5，≤5 个
         let earlyPool = S.cards.filter { pair in
             let (w, c) = pair
             guard !completed.contains(w) else { return false }
-            guard !StudyEngine.isMastered(c), let dueD = DayUtil.parseISO(c.due), dueD > now else { return false }
+            guard c.pendingFsrs?.events.isEmpty != false, !StudyEngine.isMastered(c), let dueD = DayUtil.parseISO(c.due), dueD > now else { return false }
             guard let last = lastReviewDate(w) else { return false }
             guard let lastD = DayUtil.localNoon(last) else { return false }
             let elapsed = now.timeIntervalSince(lastD) / 86400
@@ -1622,7 +1620,7 @@ final class AppState {
         let eod = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now
         let completed = StudyEngine.completedDailyWords(S.log, day: DayUtil.today())
         return S.cards.filter { word, card in
-            guard (!onlyCompleted || completed.contains(word)), (!completed.contains(word) || [1, 3].contains(card.fsrs?.state ?? 0)), !StudyEngine.isMastered(card), let d = DayUtil.parseISO(card.due), d > now else { return false }
+            guard (!onlyCompleted || completed.contains(word)), (!completed.contains(word) || StudyEngine.needsSameDayReview(card, configurations: S.fsrsSchedulers ?? [:])), !StudyEngine.isMastered(card), let d = DayUtil.parseISO(StudyEngine.scheduledDue(card, configurations: S.fsrsSchedulers ?? [:])), d > now else { return false }
             return d < eod
         }.count
     }

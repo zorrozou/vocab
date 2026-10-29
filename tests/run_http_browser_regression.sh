@@ -175,6 +175,7 @@ scenarios=(
   tests/web_meaning_retry_e2e.cjs
   tests/web_manual_sync_e2e.cjs
   tests/web_offline_integration.cjs
+  tests/web_offline_schedule_e2e.cjs
 )
 for scenario in "${scenarios[@]}"; do
   fixture_nonce="$("$python_cmd" -c 'import uuid; print(uuid.uuid4().hex)')"

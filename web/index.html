@@ -150,15 +150,16 @@ const lvlOfPos = p => p <= 903 ? 1 : p <= 2652 ? 2 : p <= 4652 ? 3 : p <= 6152 ?
 const lvlName = w => LVL_NAME[w.level || lvlOfPos(w.pos || 1)];
 // 日期标签是日历日期，不是当地时间戳；UTC 日期运算避免 UTC+14 和夏令时偏移。
 const addDays = (d, n) => { const t = new Date(d + "T00:00:00Z"); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
-function forecastDueDates(cards, day0, days = 14) {
+function forecastDueDates(cards, day0, days = 14, configurations = {}) {
   const result = Array.from({length: days}, (_, i) => ({d: addDays(day0, i), n: 0}));
   const byDay = new Map(result.map((entry, index) => [entry.d, index]));
   for (const card of Object.values(cards)) {
     if (isMastered(card)) continue;
-    if (typeof card?.due !== "string" || !card.due) continue;
-    const instant = new Date(card.due);
+    const due = scheduledDue(card, configurations);
+    if (typeof due !== "string" || !due) continue;
+    const instant = new Date(due);
     if (!Number.isFinite(instant.getTime())) continue;
-    if (/^\d{4}-\d{2}-\d{2}$/.test(card.due) && instant.toISOString().slice(0, 10) !== card.due) continue;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(due) && instant.toISOString().slice(0, 10) !== due) continue;
     const pad = n => String(n).padStart(2, "0");
     const localDay = `${instant.getFullYear()}-${pad(instant.getMonth() + 1)}-${pad(instant.getDate())}`;
     const index = localDay < day0 ? 0 : byDay.get(localDay);
@@ -541,12 +542,42 @@ async function fsrsCall(body, active = () => true) {
   } catch (e) { return null; }
 }
 const fsrsDue = d => !d ? null : (d.length === 10 ? d + "T12:00:00Z" : d);
-function ladderFallback(c, rating) {  // 端点不可用时的本地兜底
-  const INTERVAL = { 1: 1, 2: 6, 3: 8, 4: 15, 5: 45 };
-  if (rating === 1) { c.stage = Math.max(1, (c.stage || 1) - 1); c.due = tomorrow(); c.lt = 0; return; }
-  const mult = rating === 2 ? 0.6 : rating === 4 ? 1.5 : 1;
-  c.stage = Math.min(5, (c.stage || 1) + 1);
-  c.due = addDays(today(), Math.max(1, Math.round(INTERVAL[c.stage] * mult)));
+// Offline scheduling preserves learning steps, but does not invent stability.
+// Review intervals are temporarily limited to one day until server replay.
+function provisionalSchedule(c, configurations = {}) {
+  const pending = c.pendingFsrs;
+  if (!pending?.events?.length || !pending.base) return null;
+  let state = pending.base.is_new ? 1 : pending.base.state;
+  let step = state === 2 ? null : (pending.base.step ?? 0), due;
+  for (const event of pending.events) {
+    const at = Date.parse(event.at);
+    if (!Number.isFinite(at) || ![1, 2, 3, 4].includes(event.rating) || ![1, 2, 3].includes(state)) return null;
+    const config = configurations[event.schedulerKey || pending.schedulerKey];
+    const validSteps = (value, fallback) => Array.isArray(value) && value.every(x => Number.isFinite(x) && x >= 0 && x <= 31536000) ? value : fallback;
+    const learning = validSteps(config?.learning_steps, [60, 600]);
+    const relearning = validSteps(config?.relearning_steps, [600]);
+    let seconds = 86400;
+    if (state === 2) {
+      if (event.rating === 1 && relearning.length) { state = 3; step = 0; seconds = relearning[0]; }
+    } else {
+      const steps = state === 1 ? learning : relearning;
+      if (!Number.isInteger(step) || step < 0) return null;
+      if (!steps.length || (step >= steps.length && event.rating !== 1) || event.rating === 4) { state = 2; step = null; }
+      else if (event.rating === 1) { step = 0; seconds = steps[0]; }
+      else if (event.rating === 2) {
+        seconds = step === 0 ? (steps.length === 1 ? steps[0] * 1.5 : (steps[0] + steps[1]) / 2) : steps[step];
+      } else if (step + 1 === steps.length) { state = 2; step = null; }
+      else { step++; seconds = steps[step]; }
+    }
+    due = new Date(at + seconds * 1000).toISOString();
+  }
+  return {state, step, due};
+}
+function scheduledDue(c, configurations = {}) { return provisionalSchedule(c, configurations)?.due || c.due; }
+function needsSameDayReview(c, configurations = {}) { return [1, 3].includes(provisionalSchedule(c, configurations)?.state ?? c.fsrs?.state); }
+function applyProvisionalSchedule(c, configurations = {}) {
+  const plan = provisionalSchedule(c, configurations);
+  if (plan) c.due = plan.due;
 }
 
 // 服务端调度是无状态计算：保存起点及发生时间，重试时禁用随机间隔，
@@ -603,9 +634,10 @@ async function scheduleFsrs(c, body, rating) {
     rating, at: new Date(eventTime).toISOString() };
   c.pendingFsrs.events.push(event);
   c.fsrsHistory.events.push(event);
-  await save(); // 请求之前持久化，应用中断后仍可重试。
+  applyProvisionalSchedule(c, S.fsrsSchedulers || {});
+  await save(); // 待处理评分和临时到期时间一起持久化，应用中断后仍可重试。
   if (localSaveFailed || S !== state || AUTH !== owner) return;
-  if (!(await replayPendingFsrs(c)) && S === state && AUTH === owner && c.pendingFsrs?.events.some(e => e.id === event.id)) ladderFallback(c, rating);
+  await replayPendingFsrs(c);
 }
 
 async function flushPendingFsrs() {
@@ -689,7 +721,7 @@ function commitUndoReview() {
   save();
 }
 
-async function review(word, rating, trackWeight, allowUndo = false, acceptance = false) {
+async function review(word, rating, trackWeight, allowUndo = false, acceptance = false, verifiedPos = null) {
   const c = S.cards[word]; if (!c) return;
   const day = today();
   if (acceptance && S.quizProgressDay === day && (S.quizCompleted || []).includes(word)) return;
@@ -700,6 +732,7 @@ async function review(word, rating, trackWeight, allowUndo = false, acceptance =
     knowledge: structuredClone(S.knowledge), knowledgeEvidence: structuredClone(S.knowledgeEvidence), posterior: structuredClone(S.posterior), posteriorHistory: structuredClone(S.posteriorHistory),
     probeCount: S.probeCount, track: structuredClone(S.track) };
   else undoSnapshot = null;
+  if (Number.isSafeInteger(verifiedPos) && verifiedPos > 0) c.pos = verifiedPos;
   S.log.push({ eventId: (crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")), d: today(), word, rating, kind: "review" });
   recordKnowledge(word, c.pos || S.pointer, rating !== 1);
   const body = c.fsrs
@@ -741,7 +774,7 @@ async function review(word, rating, trackWeight, allowUndo = false, acceptance =
   await scheduleFsrs(c, body, rating);
 }
 
-const isMastered = c => !c.pendingFsrs?.events?.some(event => event.rating === 1) &&
+const isMastered = c => !c.pendingFsrs?.events?.length &&
   ![1, 3].includes(c.fsrs?.state) &&
   (c.stage === 6 || (c.fsrs && c.fsrs.stability >= 180));
 
@@ -991,13 +1024,13 @@ async function buildQueue(stillOnPage = () => true) {
   const completed = new Set(S.log.filter(l => l.d === today() && ["learn", "review", "probe"].includes(l.kind)).map(l => l.word));
   const remaining = Math.max(0, S.settings.dailyCap - completed.size);
   const due = Object.entries(S.cards)
-    .filter(([w, c]) => (!completed.has(w) || [1, 3].includes(c.fsrs?.state)) && !isMastered(c) && c.due && new Date(c.due) <= new Date())
-    .sort((a, b) => a[1].due < b[1].due ? -1 : 1)
+    .filter(([w, c]) => (!completed.has(w) || needsSameDayReview(c, S.fsrsSchedulers)) && !isMastered(c) && scheduledDue(c, S.fsrsSchedulers) && new Date(scheduledDue(c, S.fsrsSchedulers)) <= new Date())
+    .sort((a, b) => new Date(scheduledDue(a[1], S.fsrsSchedulers)) - new Date(scheduledDue(b[1], S.fsrsSchedulers)) || a[0].localeCompare(b[0]))
     .map(([w]) => w);
   // 提前巩固位：刚学会（≤7天）、FSRS 未到期、未掌握的词，按 P=(1−R)×0.5 概率抽取（≤5个）
   const nowD = new Date();
   const earlyPool = Object.entries(S.cards).filter(([w, c]) => {
-    if (completed.has(w) || isMastered(c) || new Date(c.due) <= nowD) return false;
+    if (completed.has(w) || c.pendingFsrs?.events?.length || isMastered(c) || new Date(c.due) <= nowD) return false;
     const last = lastReviewDate(w);
     if (!last) return false;
     const elapsed = (nowD - new Date(last + "T12:00:00")) / 86400000;
@@ -1099,7 +1132,7 @@ function prefetchDay(news, reviewWords) {
 function dailyPlanSummary(state, day = today(), now = new Date()) {
   const completed = new Set(state.log.filter(x => x.d === day && ["learn", "review", "probe"].includes(x.kind)).map(x => x.word));
   const remaining = Math.max(0, state.settings.dailyCap - completed.size);
-  const due = Object.entries(state.cards).filter(([word, card]) => (!completed.has(word) || [1, 3].includes(card.fsrs?.state)) && !isMastered(card) && card.due && new Date(card.due) <= now);
+  const due = Object.entries(state.cards).filter(([word, card]) => (!completed.has(word) || needsSameDayReview(card, state.fsrsSchedulers)) && !isMastered(card) && scheduledDue(card, state.fsrsSchedulers) && new Date(scheduledDue(card, state.fsrsSchedulers)) <= now);
   const dueAvailable = due.length;
   const repeatPlanned = due.filter(([word]) => completed.has(word)).length;
   const learned = new Set(state.log.filter(x => x.d === day && x.kind === "learn").map(x => x.word)).size;
@@ -1408,7 +1441,6 @@ async function quizRound(words, i) {
     $("#bQuizLater").onclick = () => doneDay();
     return;
   }
-  if (S.cards[w]) S.cards[w].pos = q.pos;
   $("#app").innerHTML = `<div class="card center">
     <h2>验收测试 ${i + 1}/${words.length} · 今天学的还记得吗？</h2>
     <div><span class="big">${escapeHTML(w)}</span><button class="playw" aria-label="朗读单词" data-t="${escapeHTML(w)}">▶</button></div>
@@ -1427,7 +1459,7 @@ async function quizRound(words, i) {
       if (q.options[+x.dataset.i].ok) x.classList.add("right");
     });
     if (!ok) b.classList.add("wrong");
-    await review(w, ok ? 3 : 1, 1.0, false, true);   // 验收是客观实测：权重 1.0（强于复习的 0.2/0.3）
+    await review(w, ok ? 3 : 1, 1.0, false, true, q.pos);   // 验收是客观实测：权重 1.0（强于复习的 0.2/0.3）
     if (S !== state || session !== currentSession) return;
     save();
     setTimeout(() => { if (answerCurrent() && session === currentSession) quizRound(words, i + 1); }, 650);
@@ -1677,7 +1709,7 @@ function bindPlays() {
 }
 
 /* ---- 复习卡：先 4 选 1 测试，再出答案卡 ---- */
-const stageLabel = c => c.fsrs ? (isMastered(c) ? "已掌握" : `稳定≈${Math.round(c.fsrs.stability)}天`) : (c.stage === 6 ? "已掌握" : c.stage === 5 ? "长期池" : "D" + c.stage);
+const stageLabel = c => c.pendingFsrs?.events?.length ? "临时安排 · 待同步" : c.fsrs ? (isMastered(c) ? "已掌握" : `稳定≈${Math.round(c.fsrs.stability)}天`) : (c.stage === 6 ? "已掌握" : c.stage === 5 ? "长期池" : "D" + c.stage);
 
 // An async review must not redraw a page the user has already left.
 function viewGuard() {
@@ -1700,7 +1732,7 @@ async function showReview(item) {
   quiz = await wordQuiz(word, c.pos, mature ? "reverse" : "forward");
   if (!current()) return;
   if (!quiz || !quiz.options || quiz.options.length < 4) return showReviewClassic(item);
-  c.pos = quiz.pos;
+  item.quizPos = quiz.pos;
   const isRev = quiz.mode === "reverse" && quiz.prompt;
   $("#app").innerHTML = `<div class="card center">
     <h2>复习 ${session.idx + 1}/${session.queue.length} · ${escapeHTML(stageLabel(c))}</h2>
@@ -1731,7 +1763,7 @@ async function answerCard(item, quizOk, wrongRecorded = false) {
   const word = item.word;
   const c = S.cards[word];
   if (!quizOk && !wrongRecorded) {
-    await review(word, 1, undefined, true);
+    await review(word, 1, undefined, true, false, item.quizPos);
     if (S !== state || session !== currentSession) return;
     currentSession.reviewedToday++; save();
     if (!current()) return;
@@ -1769,7 +1801,7 @@ async function answerCard(item, quizOk, wrongRecorded = false) {
     if (rated) return;
     rated = true;
     document.querySelectorAll("#r2,#r3,#r4").forEach(b => b.disabled = true);
-    await review(word, r);
+    await review(word, r, undefined, false, false, item.quizPos);
     if (S !== state || session !== currentSession) return;
     currentSession.reviewedToday++;
     if (!actionCurrent()) { save(); return; }
@@ -1869,7 +1901,7 @@ function doneDay() {
   const completed = new Set(S.log.filter(x => x.d === today() && ["learn", "review", "probe"].includes(x.kind)).map(x => x.word));
   const remaining = Math.max(0, S.settings.dailyCap - completed.size);
   const plan = dailyPlanSummary(S, today(), now);
-  const laterN = Object.entries(S.cards).filter(([word, c]) => (remaining > 0 || completed.has(word)) && (!completed.has(word) || [1, 3].includes(c.fsrs?.state)) && !isMastered(c) && c.due && new Date(c.due) > now && new Date(c.due) < eod).length;
+  const laterN = Object.entries(S.cards).filter(([word, c]) => (remaining > 0 || completed.has(word)) && (!completed.has(word) || needsSameDayReview(c, S.fsrsSchedulers)) && !isMastered(c) && scheduledDue(c, S.fsrsSchedulers) && new Date(scheduledDue(c, S.fsrsSchedulers)) > now && new Date(scheduledDue(c, S.fsrsSchedulers)) < eod).length;
   if (plan.duePlanned > 0 || plan.newPlanned > 0) {
     $("#laterRow").innerHTML = `<div class="row"><button class="act ghost" id="bMore">继续今日任务（复习 ${plan.duePlanned} · 新词 ${plan.newPlanned}）→</button></div>`;
     $("#bMore").onclick = async () => {
@@ -2041,7 +2073,7 @@ function showStats() {
   const words = Object.entries(S.cards);
   const retention = retentionSummary(S.cards, S.log);
   const buckets = Object.fromEntries(["≥95%", "90~95%", "80~90%", "60~80%", "<60%"].map((key, i) => [key, retention.counts[i]]));
-  const loads = forecastDueDates(S.cards, today());
+  const loads = forecastDueDates(S.cards, today(), 14, S.fsrsSchedulers);
   const maxL = Math.max(1, ...loads.map(x => x.n));
   const lapseCount = {};
   S.log.filter(l => ["learn", "review"].includes(l.kind) && l.rating <= 2).forEach(l => lapseCount[l.word] = (lapseCount[l.word] || 0) + 1);

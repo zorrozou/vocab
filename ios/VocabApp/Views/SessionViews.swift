@@ -341,6 +341,7 @@ struct ReviewQuizView: View {
 
     private var stageLabel: String {
         guard let c = card else { return "" }
+        if c.pendingFsrs?.events.isEmpty == false { return "临时安排 · 待同步" }
         if StudyEngine.isMastered(c) { return "已掌握" }
         if let f = c.fsrs { return "稳定≈\(Int(f.stability))天" }
         if let s = c.stage { return s == 5 ? "长期池" : "D\(s)" }
@@ -362,7 +363,7 @@ struct ReviewQuizView: View {
             case .flipping:
                 flipCard
             case .answering(let ok):
-                AnswerCardView(word: word, quizOk: ok, onNext: next, onUndo: {
+                AnswerCardView(word: word, quizOk: ok, verifiedPos: quiz?.pos, onNext: next, onUndo: {
                     app.undoReview()
                     // 撤销后直接回到本题选项；不能改成 loading——.task 不会再次执行，会永久卡住
                     phase = quiz == nil ? .loading : .quizzing
@@ -426,7 +427,6 @@ struct ReviewQuizView: View {
         guard !Task.isCancelled, app.auth == owner, app.session.id == sessionID,
               app.routeGeneration == generation, app.route == .session else { return }
         if let q = result, q.options.count >= 4 {
-            app.S.cards[word]?.pos = q.pos
             quiz = q
             phase = .quizzing
         } else {
@@ -549,6 +549,7 @@ struct AnswerCardView: View {
     @Environment(AppState.self) private var app
     let word: String
     let quizOk: Bool
+    let verifiedPos: Int?
     let onNext: () -> Void
     let onUndo: () -> Void
 
@@ -686,7 +687,7 @@ struct AnswerCardView: View {
         if !quizOk {
             // 与撤销快照一起开始计数；任务被撤销或页面关闭后不能再次累加。
             app.session.reviewedToday += 1
-            await app.review(word: word, rating: 1, allowUndo: true)
+            await app.review(word: word, rating: 1, allowUndo: true, verifiedPos: verifiedPos)
             guard !Task.isCancelled else { return }
             app.save()
         }
@@ -735,7 +736,7 @@ struct AnswerCardView: View {
         rated = true
         let owner = app.auth, sessionID = app.session.id, index = app.session.idx, generation = app.routeGeneration
         Task {
-            await app.review(word: word, rating: r)
+            await app.review(word: word, rating: r, verifiedPos: verifiedPos)
             guard app.auth == owner else { return }
             if app.session.id == sessionID {
                 app.session.reviewedToday += 1
@@ -814,7 +815,6 @@ struct AcceptanceQuizView: View {
         guard !Task.isCancelled, app.auth == owner, app.session.id == sessionID, i == index,
               app.routeGeneration == generation, app.route == .session else { return }
         quiz = result?.options.count == 4 ? result : nil
-        if let quiz { app.S.cards[w]?.pos = quiz.pos }
         loading = false
     }
 
@@ -825,7 +825,7 @@ struct AcceptanceQuizView: View {
         let owner = app.auth, sessionID = app.session.id, index = i, generation = app.routeGeneration
         Task {
             // Completion is persisted with the review before the request suspends.
-            await app.review(word: w, rating: ok ? 3 : 1, trackWeight: 1.0, acceptance: true)
+            await app.review(word: w, rating: ok ? 3 : 1, trackWeight: 1.0, acceptance: true, verifiedPos: quiz?.pos)
             guard app.auth == owner else { return }
             app.save()
             guard app.session.id == sessionID, app.routeGeneration == generation,

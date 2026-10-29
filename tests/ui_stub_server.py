@@ -791,8 +791,18 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
             'fsrs': {'state':3, 'stability':1, 'difficulty':5, 'due':'2020-01-02T00:00:00Z', 'step':0, 'lastReview':'2020-01-01T00:00:00Z'}}
         state['log'] = [{'d':day, 'word':'apple', 'kind':'review', 'rating':1, 'eventId':uuid.uuid4().hex}]
         state['settings'] = {'newPerDay':1, 'dailyCap':1}
+        if body.get('offline'):
+            from datetime import datetime, timedelta, timezone
+            at = (datetime.now(timezone.utc)-timedelta(minutes=11)).isoformat()
+            base = {'is_new':False, 'state':2, 'stability':200, 'difficulty':5, 'due':at,
+                    'last_review':(datetime.now(timezone.utc)-timedelta(days=3)).isoformat()}
+            state['cards']['apple'] = {'pos':main.POS_OF[main.WORD2ID['apple']], 'stage':6, 'due':'2030-01-01T00:00:00Z',
+                'fsrs':{'state':2,'stability':200,'difficulty':5,'due':at,'lastReview':base['last_review']}}
+            # Establish the actual server baseline before adding an offline event.
+            put_state(state, token)
+            state['cards']['apple']['pendingFsrs'] = {'base':base,'events':[{'id':uuid.uuid4().hex,'rating':1,'at':at}]}
         put_state(state, token)
-        fixture.update(fsrs_offline=False, fixed_quiz=True, personal_offline=False)
+        fixture.update(fsrs_offline=bool(body.get('offline')), fixed_quiz=True, personal_offline=False)
         return account
 
     @main.app.post('/api/v1/__ui_fixture/queue-case')

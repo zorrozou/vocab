@@ -1409,20 +1409,34 @@ final class VocabUITests: XCTestCase {
     }
 
     @MainActor func testSameDayRelearningAtDailyCapacity() async throws {
+        try await checkSameDayRelearning(offline: false)
+    }
+
+    @MainActor func testOfflineRelearningAtDailyCapacity() async throws {
+        try await checkSameDayRelearning(offline: true)
+    }
+
+    @MainActor private func checkSameDayRelearning(offline: Bool) async throws {
         continueAfterFailure = false
         let formatter = DateFormatter(); formatter.locale = Locale(identifier:"en_US_POSIX")
         formatter.calendar = Calendar(identifier:.gregorian); formatter.timeZone = .current; formatter.dateFormat = "yyyy-MM-dd"
-        let seed = try await fixtureRequest("/api/v1/__ui_fixture/same-day-relearning-case", method:"POST", body:["day":formatter.string(from:Date())])
+        let seed = try await fixtureRequest("/api/v1/__ui_fixture/same-day-relearning-case", method:"POST", body:["day":formatter.string(from:Date()), "offline":offline])
         let username = try XCTUnwrap(seed["username"] as? String), password = try XCTUnwrap(seed["password"] as? String)
         let app = XCUIApplication(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30)); app.buttons["登录"].tap()
         let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
         XCTAssertTrue(user.waitForExistence(timeout:20)); user.tap(); user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout:20)); pass.tap(); pass.typeText(password); app.buttons["登录"].tap()
-        XCTAssertTrue(app.staticTexts["1 / 1"].waitForExistence(timeout:30))
+        XCTAssertTrue(app.buttons["start-today"].waitForExistence(timeout:30), app.debugDescription)
+        XCTAssertTrue(app.descendants(matching: .any)["预计今日进度，已完成 1，共 1 词"].exists, app.debugDescription)
         app.buttons["start-today"].tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label BEGINSWITH %@", "复习 1/1")).firstMatch.waitForExistence(timeout:30))
         XCTAssertTrue(app.staticTexts["apple"].exists, "due relearning must remain available after the distinct-word cap is reached")
+        if offline {
+            XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@", "临时安排")).firstMatch.exists)
+            let status = try await fixtureRequest("/api/v1/__ui_fixture/fsrs-status")
+            XCTAssertGreaterThan(status["failures"] as? Int ?? 0, 0)
+        }
     }
 
     @MainActor func testMasteredWordsExcludedAndNewTargetReserved() async throws {

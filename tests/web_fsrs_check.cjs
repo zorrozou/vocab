@@ -3,6 +3,7 @@ const vm = require('vm');
 const assert = require('assert');
 const html = fs.readFileSync('web/index.html', 'utf8');
 const fsrsCall = html.slice(html.indexOf('async function fsrsCall('), html.indexOf('const fsrsDue ='));
+const provisional=html.slice(html.indexOf('function provisionalSchedule('),html.indexOf('// 服务端调度是无状态计算'));
 const replay = html.slice(html.indexOf('async function replayPendingFsrs('), html.indexOf('/* 该词上一次学习'));
 const learn = html.slice(html.indexOf('async function learn('), html.indexOf('let undoSnapshot'));
 let request, online = true;
@@ -20,12 +21,12 @@ const context = { AUTH: null, localSaveFailed:false,
     due: '2026-10-26T00:00:00Z', last_review: '2026-10-24T00:00:00Z'}}},
     log: [], pendingNew: [], pointer: 1, calibrated: false},
   lastReviewDate: () => null, recordKnowledge: () => {}, tomorrow: () => '',
-  LEGACY_STAB: {}, fsrsDue: x => x, ladderFallback: () => { throw Error('unexpected fallback'); },
+  LEGACY_STAB: {}, fsrsDue: x => x,
   today: () => '2026-10-27', addDays: () => '', Date, Number, Math,
   crypto: require('crypto').webcrypto, Uint8Array, structuredClone, save: () => {}, window: {addEventListener: () => {}}
 };
 vm.createContext(context);
-vm.runInContext(fsrsCall + '\n' + replay + '\n' + learn, context);
+vm.runInContext(provisional + '\n' + fsrsCall + '\n' + replay + '\n' + learn, context);
 (async () => {
   await context.learn('apple', 1, 3);
   assert.equal(request.last_review, '2026-10-24T00:00:00Z');
@@ -34,7 +35,6 @@ vm.runInContext(fsrsCall + '\n' + replay + '\n' + learn, context);
   await context.learn('apple', 1, 3);
   assert.equal(request.last_review, timestamp);
   online = false;
-  context.ladderFallback = c => { c.due = '2026-10-28'; };
   await context.learn('apple', 1, 1);
   await context.learn('apple', 1, 3);
   const pending = JSON.parse(JSON.stringify(context.S.cards.apple.pendingFsrs));

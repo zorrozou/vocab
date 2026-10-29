@@ -8,7 +8,7 @@ struct StatsView: View {
 
     /// 未来 14 天负载（今天含过期累积）
     private var loads14: [(String, Int)] {
-        StudyEngine.forecastDueDates(app.S.cards, day: DayUtil.today())
+        StudyEngine.forecastDueDates(app.S.cards, day: DayUtil.today(), configurations: app.S.fsrsSchedulers ?? [:])
     }
 
     private var stubborn: [(String, Int)] {

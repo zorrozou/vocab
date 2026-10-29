@@ -12,7 +12,7 @@ Web 版（https://175.27.210.206/vocab/）的原生 iOS 客户端。调度、例
 - **🎤 跟读评分**：SFSpeechRecognizer 设备端识别（不上传），完整度 + 置信度双子分
 - 当日验收测试：新词学完 4 选 1 验收，答错进薄弱词当晚定制例句
 - 完成后自动个性化：薄弱词 → 持久化后台任务；应用回到主页或前台时恢复待处理任务，部分失败可重新提交
-- FSRS-6 调度：服务端 py-fsrs 计算；断网评分保存在本地待处理队列，暂用阶梯估计到期时间，连接恢复后按原时间重放，与 Web 一致。不同设备对同一张卡产生无法安全合并的分叉时，同步会提示失败并保留本地进度。
+- FSRS-6 调度：服务端 py-fsrs 计算；断网评分保存在本地待处理队列，保留分钟级学习／重学步骤，长期复习暂排 24 小时复查，连接恢复后按原时间重放，与 Web 一致。不同设备对同一张卡产生无法安全合并的分叉时，同步会提示失败并保留本地进度。
 - 多用户：注册/登录/游客/切换，token 存 Keychain，进度本地 JSON + 服务器防抖 2s 同步（**与 Web 端 state 完全同构，两端可随时互换继续学**）
 - 统计：记忆保持率分桶、未来 14 天负载、顽固词；设置：新词数/上限/嗓音
 - 备份：设置页可导出或选择备份恢复；账号菜单可重新加载服务器进度并导出服务器恢复前备份。恢复前会保留本机旧档，旧设备不会自动覆盖恢复后的服务器状态。
@@ -43,7 +43,7 @@ VocabApp/
 ├── APIClient.swift       # 全部服务端端点（actor）
 ├── AudioService.swift    # TTS 下载 + 自动连播链（AVAudioPlayer 定时调度）
 ├── SpeechService.swift   # 跟读识别评分（SFSpeechRecognizer 设备端）
-├── StudyEngine.swift     # 纯逻辑：FSRS 请求构造/阶梯兜底/掌握判定/定级贝叶斯/薄弱词/保持率
+├── StudyEngine.swift     # 纯逻辑：FSRS 请求构造/离线临时安排/掌握判定/定级贝叶斯/薄弱词/保持率
 ├── AppState.swift        # 编排层：状态持久化与同步、队列构建、学/复习写卡、个性化、织入、换句
 └── Views/
     ├── AuthViews.swift   # 欢迎/登录/注册/用户菜单
@@ -58,7 +58,7 @@ VocabApp/
 关键设计：
 
 - **state 同构**：`LearningState` 字段与 Web 端 `vocab_v1` 对应（含运行期扩展字段 quizDay/weaveDay/weaveCount/wrongStreak/personalizedDay/personalizedWeak）；学习日按设备本机日历，调度时间保留时区。跨时区使用时两台设备的「今天」可能不同。
-- **调度单一事实源**：FSRS 一律走服务端 `/api/v1/fsrs/review`；离线只用阶梯给出临时到期时间，待处理评分重放成功后以 FSRS 结果替换。
+- **调度单一事实源**：FSRS 一律走服务端 `/api/v1/fsrs/review`；离线只计算学习步骤和临时到期时间，不改写正式稳定度／难度，待处理评分重放成功后以 FSRS 结果替换。
 - **日期字符串原样保留**：due 等时间不做 Date 往返，避免格式漂移
 - **服务地址**：Release 默认使用 `https://175.27.210.206/vocab`，只接受 HTTPS；可通过构建设置 `VOCAB_API_BASE_URL` 指定其他 HTTPS 地址。IP 证书需保持自动续期。
 
@@ -88,3 +88,7 @@ xcrun swiftc ios/VocabApp/Models.swift tests/ios_quiz_feedback_regression.swift 
 ```
 
 应用图标的矢量源为 `app-icon.svg`。修改后，在具有 Playwright 和 Chrome 的环境中从仓库根目录运行 `node ios/render_app_icon.cjs`，更新资源目录中的 1024 像素 PNG。发布构建应包含 `Assets.car` 和实际 AppIcon，而非系统占位图标。
+
+离线学习步骤回归：`python tests/provisional_schedule_fixtures.py > /tmp/vocab-provisional-cases.json` 生成官方 py-fsrs 对照，然后运行 `node tests/web_provisional_schedule_check.cjs /tmp/vocab-provisional-cases.json`。Swift 同步对照见 `tests/ios_provisional_schedule_regression.swift`；`offline-relearning` UI 场景验证已达每日不同词上限时，旧存档里的待处理遗忘评分仍可按分钟间隔重学。
+
+精简 Web 评分起点兼容回归：`swiftc ios/VocabApp/Config.swift ios/VocabApp/Models.swift ios/VocabApp/StudyEngine.swift ios/VocabApp/APIClient.swift tests/ios_fsrs_base_decoding.swift -o /tmp/vocab-fsrs-base-check && /tmp/vocab-fsrs-base-check`。离线步骤的 Swift 对照用同一组生产源文件，将测试文件替换为 `tests/ios_provisional_schedule_regression.swift`，执行时传入生成的 JSON。

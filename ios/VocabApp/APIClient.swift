@@ -2030,6 +2030,25 @@ actor APIClient {
     }
 }
 
+extension APIClient.FsrsIn {
+    // Web stores the compact API request as the replay base. Swift's synthesized
+    // decoder does not apply property defaults for missing non-optional keys.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        is_new = try c.decodeIfPresent(Bool.self, forKey: .is_new) ?? false
+        state = try c.decodeIfPresent(Int.self, forKey: .state) ?? 1
+        stability = try c.decodeIfPresent(Double.self, forKey: .stability) ?? 0
+        difficulty = try c.decodeIfPresent(Double.self, forKey: .difficulty) ?? 0
+        due = try c.decodeIfPresent(String.self, forKey: .due)
+        rating = try c.decodeIfPresent(Int.self, forKey: .rating) ?? 3
+        step = try c.decodeIfPresent(Int.self, forKey: .step)
+        last_review = try c.decodeIfPresent(String.self, forKey: .last_review)
+        now = try c.decodeIfPresent(String.self, forKey: .now)
+        deterministic = try c.decodeIfPresent(Bool.self, forKey: .deterministic)
+        scheduler_key = try c.decodeIfPresent(String.self, forKey: .scheduler_key)
+    }
+}
+
 /// Serialize every baseline, upload and explicit reset for an account across
 /// suspension points. APIClient actors are reentrant, so actor isolation alone
 /// does not make a read/modify/network/write sequence exclusive.

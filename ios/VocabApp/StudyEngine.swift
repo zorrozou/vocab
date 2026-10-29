@@ -121,8 +121,8 @@ enum StudyEngine {
         let completed = completedDailyWords(s.log, day: day)
         let remaining = max(0, s.settings.dailyCap - completed.count)
         let dueCards = s.cards.filter { word, card in
-            !isMastered(card) && (!completed.contains(word) || [1, 3].contains(card.fsrs?.state ?? 0)) &&
-                (DayUtil.parseISO(card.due) ?? .distantFuture) <= now
+            !isMastered(card) && (!completed.contains(word) || needsSameDayReview(card, configurations: s.fsrsSchedulers ?? [:])) &&
+                (DayUtil.parseISO(scheduledDue(card, configurations: s.fsrsSchedulers ?? [:])) ?? .distantFuture) <= now
         }
         let repeats = dueCards.filter { completed.contains($0.key) }.count
         let due = dueCards.count
@@ -134,13 +134,13 @@ enum StudyEngine {
 
     /// Group actual due instants by the device's calendar day; old date-only
     /// values are parsed at UTC midnight, as they are in Web's review queue.
-    static func forecastDueDates(_ cards: [String: CardState], day: String, days: Int = 14) -> [(String, Int)] {
+    static func forecastDueDates(_ cards: [String: CardState], day: String, days: Int = 14, configurations: [String: FsrsSchedulerConfig] = [:]) -> [(String, Int)] {
         guard days > 0 else { return [] }
         var result = (0..<days).map { (DayUtil.addDays(day, $0), 0) }
         let indices = Dictionary(uniqueKeysWithValues: result.enumerated().map { ($0.element.0, $0.offset) })
         for card in cards.values {
             if isMastered(card) { continue }
-            guard let due = DayUtil.parseISO(card.due) else { continue }
+            guard let due = DayUtil.parseISO(scheduledDue(card, configurations: configurations)) else { continue }
             let localDay = DayUtil.localDay(due)
             if localDay < day { result[0].1 += 1 }
             else if let index = indices[localDay] { result[index].1 += 1 }
@@ -297,7 +297,7 @@ enum StudyEngine {
     }
 
     static func isMastered(_ c: CardState) -> Bool {
-        if c.pendingFsrs?.events.contains(where: { $0.rating == 1 }) == true { return false }
+        if c.pendingFsrs?.events.isEmpty == false { return false }
         if [1, 3].contains(c.fsrs?.state ?? 0) { return false }
         return c.stage == 6 || (c.fsrs.map { $0.stability >= 180 } ?? false)
     }
@@ -363,18 +363,60 @@ enum StudyEngine {
         return result
     }
 
-    /// 端点不可用时的本地阶梯兜底（与 web ladderFallback 一致）
-    static func ladderFallback(_ c: inout CardState, rating: Int, today: String) {
-        if rating == 1 {
-            c.stage = max(1, (c.stage ?? 1) - 1)
-            c.due = DayUtil.addDays(today, 1) + "T12:00:00Z"
-            c.lt = 0
-            return
+    struct ProvisionalSchedule {
+        let state: Int
+        let step: Int?
+        let due: String
+    }
+
+    /// Preserve short learning steps offline; long-term intervals use a
+    /// conservative one-day check until authoritative server replay succeeds.
+    /// Original FSRS stability, difficulty and replay base are never modified.
+    static func provisionalSchedule(_ c: CardState, configurations: [String: FsrsSchedulerConfig] = [:]) -> ProvisionalSchedule? {
+        guard let pending = c.pendingFsrs, !pending.events.isEmpty else { return nil }
+        var state = pending.base.is_new ? 1 : pending.base.state
+        var step: Int? = state == 2 ? nil : (pending.base.step ?? 0)
+        var due: Date?
+        for event in pending.events {
+            guard let at = DayUtil.parseISO(event.at), (1...4).contains(event.rating), (1...3).contains(state) else { return nil }
+            let config = (event.schedulerKey ?? pending.schedulerKey).flatMap { configurations[$0] }
+            func validSteps(_ value: [Double]?, fallback: [Double]) -> [Double] {
+                guard let value, value.allSatisfy({ $0.isFinite && $0 >= 0 && $0 <= 31_536_000 }) else { return fallback }
+                return value
+            }
+            let learning = validSteps(config?.learning_steps, fallback: [60, 600])
+            let relearning = validSteps(config?.relearning_steps, fallback: [600])
+            var seconds = 86_400.0
+            if state == 2 {
+                if event.rating == 1, !relearning.isEmpty { state = 3; step = 0; seconds = relearning[0] }
+            } else {
+                let steps = state == 1 ? learning : relearning
+                let index = step ?? 0
+                guard index >= 0 else { return nil }
+                if steps.isEmpty || (index >= steps.count && event.rating != 1) || event.rating == 4 {
+                    state = 2; step = nil
+                } else if event.rating == 1 { step = 0; seconds = steps[0] }
+                else if event.rating == 2 {
+                    seconds = index == 0 ? (steps.count == 1 ? steps[0] * 1.5 : (steps[0] + steps[1]) / 2) : steps[index]
+                } else if index + 1 == steps.count { state = 2; step = nil }
+                else { step = index + 1; seconds = steps[index + 1] }
+            }
+            due = at.addingTimeInterval(seconds)
         }
-        let mult: Double = rating == 2 ? 0.6 : (rating == 4 ? 1.5 : 1)
-        c.stage = min(5, (c.stage ?? 1) + 1)
-        let days = max(1, Int((Double(ladderInterval[c.stage!] ?? 1) * mult).rounded()))
-        c.due = DayUtil.addDays(today, days) + "T12:00:00Z"
+        guard let due else { return nil }
+        return ProvisionalSchedule(state: state, step: step, due: DayUtil.isoString(due))
+    }
+
+    static func scheduledDue(_ c: CardState, configurations: [String: FsrsSchedulerConfig] = [:]) -> String? {
+        provisionalSchedule(c, configurations: configurations)?.due ?? c.due
+    }
+
+    static func needsSameDayReview(_ c: CardState, configurations: [String: FsrsSchedulerConfig] = [:]) -> Bool {
+        [1, 3].contains(provisionalSchedule(c, configurations: configurations)?.state ?? c.fsrs?.state ?? 0)
+    }
+
+    static func applyProvisionalSchedule(_ c: inout CardState, configurations: [String: FsrsSchedulerConfig] = [:]) {
+        if let plan = provisionalSchedule(c, configurations: configurations) { c.due = plan.due }
     }
 
     // MARK: 记忆保持率（FSRS-6 遗忘曲线幂律近似）

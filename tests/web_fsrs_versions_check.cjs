@@ -1,6 +1,7 @@
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const html = fs.readFileSync('web/index.html','utf8');
 const fsrsCall = html.slice(html.indexOf('let fsrsReplayWarning ='), html.indexOf('const fsrsDue ='));
+const provisional=html.slice(html.indexOf('function provisionalSchedule('),html.indexOf('// 服务端调度是无状态计算'));
 const replay = html.slice(html.indexOf('async function replayPendingFsrs('), html.indexOf('/* 该词上一次学习'));
 const requests = [];
 const ctx = { AUTH: null, localSaveFailed:false, S:{}, API:'', authHeaders:()=>({}), structuredClone, Date, Math, Number, Map, Set, Uint8Array,
@@ -10,7 +11,7 @@ const ctx = { AUTH: null, localSaveFailed:false, S:{}, API:'', authHeaders:()=>(
     return {ok:true,json:async()=>({state:2,stability:5,difficulty:4,due:'2026-10-28T00:00:00Z',last_review:body.now,scheduler_key:body.scheduler_key || 'new-version'})};
   }
 };
-vm.createContext(ctx); vm.runInContext(fsrsCall + '\n' + replay, ctx);
+vm.createContext(ctx); vm.runInContext(provisional + '\n' + fsrsCall + '\n' + replay, ctx);
 (async()=>{
   const old = {id:'old',rating:3,at:'2026-10-20T00:00:00Z',schedulerKey:'old-version'};
   const card = {fsrsHistory:{base:{is_new:true},events:[old],schedulerKey:'old-version'},appliedFsrs:['old']};
