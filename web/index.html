@@ -1420,11 +1420,11 @@ function sentenceBlock(word, personal, sents) {
   const TIER = { 1: "基础", 2: "进阶", 3: "挑战" };
   const list = Array.isArray(sents) ? sents : (sents ? [{ tier: 1, text: sents }] : []);
   let html = "";
-  if (personal) html += `<div class="sent"><span class="tag p">个性化</span>${escapeHTML(personal.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(personal.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(personal.text)}" data-w="${escapeHTML(word)}" data-kind="personal" title="换一句">↻</button>${personal.zh ? `<div class="zh">${escapeHTML(personal.zh)}</div>` : ""}</div>`;
+  if (personal) html += `<div class="sent base-sentence"><span class="tag p">个性化</span>${escapeHTML(personal.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(personal.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(personal.text)}" data-w="${escapeHTML(word)}" data-kind="personal" title="换一句">↻</button>${personal.zh ? `<div class="zh">${escapeHTML(personal.zh)}</div>` : ""}</div>`;
   list.forEach(s => {
-    html += `<div class="sent"><span class="tag s">${TIER[s.tier] || "例句"}</span>${escapeHTML(s.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(s.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(s.text)}" data-w="${escapeHTML(word)}" data-kind="static" title="换一句">↻</button>${s.zh ? `<div class="zh">${escapeHTML(s.zh)}</div>` : ""}</div>`;
+    html += `<div class="sent base-sentence"><span class="tag s">${TIER[s.tier] || "例句"}</span>${escapeHTML(s.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(s.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(s.text)}" data-w="${escapeHTML(word)}" data-kind="static" title="换一句">↻</button>${s.zh ? `<div class="zh">${escapeHTML(s.zh)}</div>` : ""}</div>`;
   });
-  if (!html) html = `<div class="sent" id="pendingSent"><span class="tag s">例句</span><span class="muted">生成中…</span></div>`;
+  if (!html) html = `<div class="sent base-sentence" id="pendingSent"><span class="tag s">例句</span><span class="muted">生成中…</span></div>`;
   if (personal) logSentenceExposures(personal.text, "personal", false);
   list.forEach(s => logSentenceExposures(s.text, "trio", false));
   return { html, has: !!(personal || list.length), first: personal ? personal.text : (list[0] ? list[0].text : ""),
@@ -1517,7 +1517,7 @@ async function showLearn(item) {
       if (!Array.isArray(r.sentences) || !r.sentences.length) throw new Error("暂无可用例句");
       w.sentences = r.sentences;
       const newSb = sentenceBlock(w.word, personalSentence(w.word), r.sentences);
-      document.querySelectorAll("#app .sent").forEach(e => e.remove());
+      document.querySelectorAll("#app .base-sentence").forEach(e => e.remove());
       const anchor = document.querySelector("#app .sense");
       if (anchor) anchor.insertAdjacentHTML("afterend", newSb.html);
       bindPlays();
