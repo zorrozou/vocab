@@ -15,6 +15,7 @@ Web 版（https://175.27.210.206/vocab/）的原生 iOS 客户端。调度、例
 - 当日验收测试：新词学完 4 选 1 验收，答错进薄弱词当晚定制例句
 - 完成后自动个性化：薄弱词 → 持久化后台任务；应用回到主页或前台时恢复待处理任务，部分失败可重新提交
 - FSRS-6 调度：服务端 py-fsrs 计算；断网评分保存在本地待处理队列，保留分钟级学习／重学步骤，长期复习暂排 24 小时复查，连接恢复后按原时间重放，与 Web 一致。不同设备对同一张卡产生无法安全合并的分叉时，同步会提示失败并保留本地进度。
+- 普通存档下载中断后，「立即同步」会先验证服务器版本，保存下载前、下载目标和当前本机进度，再将未完成下载转换为可重试的服务器合并。后台例句等新修改不会被旧下载覆盖；重新启动后的自动同步也支持此恢复路径。服务器恢复／代次变化、备份保存失败和超过普通合并容量的情况仍保留原记录并拒绝覆盖。
 - 多用户：注册/登录/游客/切换，token 存 Keychain，进度本地 JSON + 服务器防抖 2s 同步（**与 Web 端 state 完全同构，两端可随时互换继续学**）
 - 统计：记忆保持率分桶、未来 14 天负载、顽固词；设置：新词数/上限/嗓音
 - 备份：设置页可导出或选择备份恢复；账号菜单可重新加载服务器进度并导出服务器恢复前备份。恢复前会保留本机旧档，旧设备不会自动覆盖恢复后的服务器状态。
@@ -95,5 +96,7 @@ xcrun swiftc ios/VocabApp/Models.swift tests/ios_quiz_feedback_regression.swift 
 离线学习步骤回归：`python tests/provisional_schedule_fixtures.py > /tmp/vocab-provisional-cases.json` 生成官方 py-fsrs 对照，然后运行 `node tests/web_provisional_schedule_check.cjs /tmp/vocab-provisional-cases.json`。Swift 同步对照见 `tests/ios_provisional_schedule_regression.swift`；`offline-relearning` UI 场景验证已达每日不同词上限时，旧存档里的待处理遗忘评分仍可按分钟间隔重学。
 
 精简 Web 评分起点兼容回归：`swiftc ios/VocabApp/Config.swift ios/VocabApp/Models.swift ios/VocabApp/StudyEngine.swift ios/VocabApp/APIClient.swift tests/ios_fsrs_base_decoding.swift -o /tmp/vocab-fsrs-base-check && /tmp/vocab-fsrs-base-check`。离线步骤的 Swift 对照用同一组生产源文件，将测试文件替换为 `tests/ios_provisional_schedule_regression.swift`，执行时传入生成的 JSON。
+
+未完成下载恢复回归：编译 `Models.swift`、`StudyEngine.swift`、`APIClient.swift` 与 `tests/iOSPendingPullRecoveryCheck.swift`（测试自带仅允许 loopback 的 Config）。分别在新启动的隔离 `tests/ui_stub_server.py` 上运行 `manual`、`automatic`、`installed`、`restart`、`restore`、`disk`、`conflict` 参数；每个场景使用新服务，避免连续快照触发真实限流。无参数运行前三个常见恢复场景。
 
 延迟水平证据回归使用同一组生产源文件编译 `tests/ios_delayed_evidence.swift`，在 `TZ=Asia/Shanghai`、`TZ=America/New_York` 和 `TZ=Pacific/Kiritimati` 下执行。`mastery-budget` UI 场景完整走过老词复习、两个新词和即时验收，检查只有老词延迟复习产生整体水平证据，全部评分及时间戳仍保存。

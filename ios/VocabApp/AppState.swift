@@ -754,7 +754,7 @@ final class AppState {
             self.syncFailed = false
         }
         do {
-            if try await delta.resumePull(account: account, token: token, install: install) {
+            if try await delta.resumePull(account: account, token: token, local: S, install: install) {
                 guard auth?.userId == owner, auth?.token == token, slotKey == slot, !localSaveFailed, undoSnapshot == nil else { return false }
                 return UserDefaults.standard.double(forKey: "vocab_write_\(slot)") <= UserDefaults.standard.double(forKey: lastSyncKey)
             }

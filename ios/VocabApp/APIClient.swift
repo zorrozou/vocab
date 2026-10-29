@@ -485,6 +485,34 @@ struct DeltaStateStore {
                                     revision: pull.revision, restore_epoch: record.restore_epoch,
                                     server: pull.server, local: local, pending: nil))
     }
+    /// An interrupted download may outlive newer local edits (including
+    /// background example generation). Archive all views before atomically
+    /// replacing it with a replayable guarded merge. Never install its stale
+    /// target over those edits or remove the account's synchronization fence.
+    func switchPullToMerge(target: Data) throws {
+        let original = try rawRecord()
+        guard let record = try load(), let pull = record.pull, record.pending == nil,
+              try rawRecord() == original else { throw invalid }
+        let value = try object(target)
+        guard try epoch(value) == record.restore_epoch else { throw invalid }
+        guard target.count <= 8 * 1024 * 1024,
+              try JSONEncoder().encode(record.server).count <= 8 * 1024 * 1024,
+              try JSONEncoder().encode(pull.server).count <= 8 * 1024 * 1024 else {
+            throw APIError(message: "大状态下载尚未完成，请先导出并核对两端进度")
+        }
+        let batch = StateDeltaBatch(generation: record.generation, base_revision: record.revision,
+            restore_epoch: record.restore_epoch, batch_id: UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased(), ops: [])
+        let replacement = StoredDeltaRecord(version: 1, account_id: accountID, generation: record.generation,
+            revision: record.revision, restore_epoch: record.restore_epoch, server: record.server, local: record.local,
+            pending: PendingStateDelta(batch: batch, target: target, merge: true))
+        try validate(replacement)
+        let archives = directory.deletingLastPathComponent()
+        guard try prepareArchive(to: archives) == original else { throw invalid }
+        let currentBackup = archives.appendingPathComponent("unverified-a\(accountID)-\(UUID().uuidString).json")
+        try target.write(to: currentBackup, options: .atomic)
+        guard try rawRecord() == original else { throw invalid }
+        try write(replacement)
+    }
     func switchPendingToMerge() throws {
         guard let record = try load(), let pending = record.pending, !pending.experimentalLarge else { throw invalid }
         let batch = StateDeltaBatch(generation: record.generation, base_revision: record.revision,
@@ -2186,14 +2214,27 @@ actor DeltaSyncCoordinator {
         try await api.verifySession(token)
         try store.finishPull()
     }
-    func resumePull(account: String, token: String,
+    func resumePull(account: String, token: String, local: LearningState? = nil,
                     install: @MainActor @Sendable (LearningState, LearningState) throws -> Void) async throws -> Bool {
         await acquire(account); defer { release(account) }
         try Task.checkCancellation()
         let store = DeltaStateStore(directory: directory, accountID: account)
         guard let pull = try store.load()?.pull else { return false }
+        if let local,
+           local != (try JSONDecoder().decode(LearningState.self, from: pull.previous)),
+           local != (try JSONDecoder().decode(LearningState.self, from: pull.target)) {
+            try await preparePullMerge(store: store, token: token, target: JSONEncoder().encode(local))
+            return false // The caller now replays the durable merge before downloading again.
+        }
         try await applyPull(pull, store: store, token: token, install: install)
         return true
+    }
+    private func preparePullMerge(store: DeltaStateStore, token: String, target: Data) async throws {
+        guard let record = try store.load(), let pull = record.pull else { return }
+        try await api.checkDeltaHead(revision: pull.revision, generation: record.generation, expectedToken: token)
+        try Task.checkCancellation()
+        try await api.verifySession(token)
+        try store.switchPullToMerge(target: target)
     }
     /// Stage a verified stored-state read and its exact previous/target views
     /// before touching the main slot. A crash leaves enough data to resume.
@@ -2494,7 +2535,10 @@ actor DeltaSyncCoordinator {
             try await api.verifySession(token)
             return
         }
-        guard record.pull == nil else { throw APIError(message: "存在未完成的下载，请先重新同步或导出") }
+        if record.pull != nil {
+            try await preparePullMerge(store: store, token: token, target: targetBytes)
+            record = try store.load()!
+        }
         while true {
             try Task.checkCancellation()
             try await api.verifySession(token)
