@@ -113,6 +113,14 @@ struct SentenceItem: Codable, Equatable {
     var zh: String?
 }
 
+extension Array where Element == SentenceItem {
+    // An async replacement may complete after another row was removed or refreshed.
+    mutating func replaceSentence(_ original: SentenceItem, with replacement: SentenceItem?) {
+        guard let index = firstIndex(of: original) else { return }
+        if let replacement { self[index] = replacement } else { remove(at: index) }
+    }
+}
+
 /// 待学新词（pendingNew 元素 / lexicon/at 返回元素同构）
 struct NewWord: Codable, Equatable {
     var word: String

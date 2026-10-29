@@ -1588,7 +1588,7 @@ function bindPlays() {
           const fresh = wd && (wd.sentences || []).find(x => x.text !== text);
           if (fresh && sentEl) {
             const TIER = { 1: "基础", 2: "进阶", 3: "挑战" };
-            sentEl.outerHTML = `<div class="sent"><span class="tag s">${TIER[fresh.tier] || "例句"}</span>${escapeHTML(fresh.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(fresh.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(fresh.text)}" data-w="${escapeHTML(w)}" data-kind="static" title="换一句">↻</button>${fresh.zh ? `<div class="zh">${escapeHTML(fresh.zh)}</div>` : ""}</div>`;
+            sentEl.outerHTML = `<div class="sent base-sentence"><span class="tag s">${TIER[fresh.tier] || "例句"}</span>${escapeHTML(fresh.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(fresh.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(fresh.text)}" data-w="${escapeHTML(w)}" data-kind="static" title="换一句">↻</button>${fresh.zh ? `<div class="zh">${escapeHTML(fresh.zh)}</div>` : ""}</div>`;
             bindPlays();
           } else if (sentEl) sentEl.remove();
         } else {
@@ -1603,7 +1603,7 @@ function bindPlays() {
           if (S !== state || deviceId() !== owner) return;
           const s = personalSentence(w);
           if (s && s.text !== text && sentEl) {
-            sentEl.outerHTML = `<div class="sent"><span class="tag p">个性化</span>${escapeHTML(s.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(s.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(s.text)}" data-w="${escapeHTML(w)}" data-kind="personal" title="换一句">↻</button>${s.zh ? `<div class="zh">${escapeHTML(s.zh)}</div>` : ""}</div>`;
+            sentEl.outerHTML = `<div class="sent${sentEl.classList.contains("base-sentence") ? " base-sentence" : ""}"><span class="tag p">个性化</span>${escapeHTML(s.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(s.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(s.text)}" data-w="${escapeHTML(w)}" data-kind="personal" title="换一句">↻</button>${s.zh ? `<div class="zh">${escapeHTML(s.zh)}</div>` : ""}</div>`;
             bindPlays();
           } else if (sentEl) sentEl.remove();
         }

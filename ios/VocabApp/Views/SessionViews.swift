@@ -151,7 +151,7 @@ struct LearnCardView: View {
             ForEach(Array(sentences.enumerated()), id: \.offset) { i, s in
                 SentenceRow(word: item.word, tag: tierLabel(s.tier), tagColor: Theme.accentLight,
                             sentence: s, kind: "static") { fresh in
-                    if let fresh { sentences[i] = fresh } else { sentences.remove(at: i) }
+                    sentences.replaceSentence(s, with: fresh)
                 }
             }
             if let w = weave {
@@ -660,7 +660,7 @@ struct AnswerCardView: View {
             ForEach(Array(sentences.enumerated()), id: \.offset) { i, s in
                 SentenceRow(word: word, tag: { switch s.tier { case 2: return "进阶"; case 3: return "挑战"; default: return "基础" } }(),
                             tagColor: Theme.accentLight, sentence: s, kind: "static") { fresh in
-                    if let fresh { sentences[i] = fresh } else { sentences.remove(at: i) }
+                    sentences.replaceSentence(s, with: fresh)
                 }
             }
             if personal == nil && sentences.isEmpty {
