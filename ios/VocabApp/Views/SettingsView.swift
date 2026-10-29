@@ -388,10 +388,11 @@ struct SettingsView: View {
                                 guard app.S.settings.notifyEnabled != v, app.markSettingChanged("notifyEnabled") else { return }
                                 app.S.settings.notifyEnabled = v
                                 app.save()
-                                Task { await NotificationService.apply(settings: app.S.settings) }
                             }
                         ))
                         .labelsHidden()
+                        .accessibilityLabel("每日提醒")
+                        .accessibilityIdentifier("setting-reminder-enabled")
                     }
                     if app.S.settings.notifyEnabled {
                         Text("提醒时间").font(.system(size: 13)).foregroundStyle(Theme.muted)
@@ -400,7 +401,6 @@ struct SettingsView: View {
                             ForEach([20, 21, 22], id: \.self) { h in
                                 Button {
                                     if app.S.settings.notifyHour != h && app.markSettingChanged("notifyHour") { app.S.settings.notifyHour = h; app.save() }
-                                    Task { await NotificationService.apply(settings: app.S.settings) }
                                 } label: {
                                     Text("\(h):00")
                                         .font(.system(size: 15, weight: app.S.settings.notifyHour == h ? .semibold : .regular))
@@ -414,6 +414,23 @@ struct SettingsView: View {
                         Text("纯本地通知，不联网。如果当天已完成学习，忽略提醒即可。")
                             .font(.system(size: 12)).foregroundStyle(Theme.muted)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                        switch NotificationService.status {
+                        case .denied:
+                            Text("系统通知权限未开启，请在系统设置中允许词航发送通知。")
+                                .font(.system(size: 12)).foregroundStyle(Theme.warn)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        case .failed:
+                            Text("提醒设置失败，请重试。")
+                                .font(.system(size: 12)).foregroundStyle(Theme.warn)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                            Button("重试设置提醒") { NotificationService.apply(settings: app.S.settings) }
+                        case .invalidTime:
+                            Text("提醒时间无效，请重新选择。")
+                                .font(.system(size: 12)).foregroundStyle(Theme.warn)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        case .disabled, .checking, .scheduled:
+                            EmptyView()
+                        }
                     }
                 }
             }

@@ -1915,4 +1915,28 @@ final class VocabUITests: XCTestCase {
         app.buttons["返回学习"].tap()
         XCTAssertTrue(learned.waitForExistence(timeout: 20)); XCTAssertTrue(learned.label.contains("3"))
     }
+    @MainActor func testReminderDeniedIsVisible() async throws {
+        continueAfterFailure = false
+        let seed = try await fixtureRequest("/api/v1/__ui_fixture/recovery-case", method: "POST")
+        let username = try XCTUnwrap(seed["username"] as? String)
+        let password = try XCTUnwrap(seed["password"] as? String)
+        let app = XCUIApplication()
+        app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
+        app.launch()
+        XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
+        let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
+        XCTAssertTrue(user.waitForExistence(timeout: 20)); user.tap(); user.typeText(username)
+        XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
+        app.buttons["登录"].tap()
+        XCTAssertTrue(app.buttons["settings-menu"].waitForExistence(timeout: 30)); app.buttons["settings-menu"].tap()
+        let toggle = app.switches["setting-reminder-enabled"]
+        for _ in 0..<8 where !toggle.isHittable { app.swipeUp() }
+        XCTAssertTrue(toggle.waitForExistence(timeout: 20)); toggle.tap()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let deny = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Don’t Allow", "Don't Allow", "不允许"])).firstMatch
+        XCTAssertTrue(deny.waitForExistence(timeout: 20), "Notification permission prompt did not appear")
+        deny.tap()
+        let warning = app.staticTexts["系统通知权限未开启，请在系统设置中允许词航发送通知。"]
+        XCTAssertTrue(warning.waitForExistence(timeout: 20), "Denied notification permission was not reported")
+    }
 }

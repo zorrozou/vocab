@@ -44,12 +44,15 @@ struct RootView: View {
             }
         }
         .task { await observeConnectivity() }
+        .onChange(of: app.S.settings, initial: true) { _, settings in
+            NotificationService.apply(settings: settings)
+        }
         // 回到前台：服务器有更新的存档就拉过来（多端同步补漏）+ 重排每日提醒
         .onChange(of: scenePhase) { _, phase in
             if phase == .active {
                 Task {
                     await app.pullIfNewer()
-                    await NotificationService.apply(settings: app.S.settings)
+                    NotificationService.apply(settings: app.S.settings)
                 }
             }
         }

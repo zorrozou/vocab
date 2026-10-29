@@ -81,4 +81,6 @@ TZ=Asia/Shanghai /tmp/vocab-local-noon-test 2026-10-29 2026-10-29T04:00:00Z
 TZ=America/New_York /tmp/vocab-local-noon-test 2026-03-08 2026-03-08T16:00:00Z
 TZ=America/New_York /tmp/vocab-local-noon-test 2026-11-01 2026-11-01T17:00:00Z
 TZ=Pacific/Kiritimati /tmp/vocab-local-noon-test 2026-10-29 2026-10-28T22:00:00Z
+xcrun swiftc ios/VocabApp/NotificationService.swift tests/ios_reminder_regression.swift -o /tmp/vocab-reminder-test
+/tmp/vocab-reminder-test
 ```
