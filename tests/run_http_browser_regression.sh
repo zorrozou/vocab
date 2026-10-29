@@ -28,6 +28,7 @@ scenarios=(
   server/test_guarded_checkpoint_receipt_http.py
   server/test_checkpoint_http.py
   server/test_guest_credentials_http.py
+  server/test_rate_http.py
   server/test_personal_http.py
   server/test_security_regression.py
   server/test_password_http.py
