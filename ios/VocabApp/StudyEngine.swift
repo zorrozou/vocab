@@ -79,6 +79,30 @@ enum StudyEngine {
         Set(log.filter { $0.d == day && ["learn", "review", "probe"].contains($0.kind) }.map(\.word))
     }
 
+    /// Recheck at the synchronous start of grading: a queue can outlive its day,
+    /// settings, or the progress pulled from another device.
+    static func studyAdmissionIssue(_ s: LearningState, word: String, kind: String, sessionDay: String?, day: String) -> String? {
+        if let sessionDay, sessionDay != day { return "日期已变化，进度已保留。请重新开始今天的任务。" }
+        if kind == "learn", s.cards[word] != nil { return "这个词的学习进度已更新，请重新加载今天的任务。" }
+        if kind == "probe", s.cards[word] != nil || s.log.contains(where:{ $0.d == day && $0.kind == "probe" && $0.word == word }) {
+            return "这个词已学习或探测过，请重新加载今天的任务。"
+        }
+        let completed = completedDailyWords(s.log, day: day)
+        if !completed.contains(word), completed.count >= s.settings.dailyCap {
+            return "今日已达单词上限，进度已保留。今天学过的词仍可按间隔复习。"
+        }
+        if kind == "learn" {
+            let learned = Set(s.log.filter { $0.d == day && $0.kind == "learn" }.map(\.word))
+            if !learned.contains(word), learned.count >= s.settings.newPerDay {
+                return "今日新词目标已完成，请重新加载剩余复习任务。"
+            }
+        }
+        if kind == "probe", s.log.filter({ $0.d == day && $0.kind == "probe" }).count >= 3 {
+            return "今日水平探测已完成，请重新加载学习任务。"
+        }
+        return nil
+    }
+
     struct DailyPlanSummary: Equatable {
         let completed: Int
         let dueAvailable: Int

@@ -1408,6 +1408,45 @@ final class VocabUITests: XCTestCase {
         XCTAssertEqual(Set(cards.keys), Set(["banana", "cherry"]))
     }
 
+    @MainActor func testQueueRejectsChangedDailyProgress() async throws {
+        continueAfterFailure = false
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier:"en_US_POSIX")
+        formatter.calendar = Calendar(identifier:.gregorian); formatter.timeZone = .current; formatter.dateFormat = "yyyy-MM-dd"
+        let day = formatter.string(from:Date())
+        let seed = try await fixtureRequest("/api/v1/__ui_fixture/queue-budget-case", method:"POST", body:["day":day])
+        let username = try XCTUnwrap(seed["username"] as? String), password = try XCTUnwrap(seed["password"] as? String)
+        let token = try XCTUnwrap(seed["token"] as? String)
+        let app = XCUIApplication(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
+        XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30)); app.buttons["登录"].tap()
+        let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
+        XCTAssertTrue(user.waitForExistence(timeout:20)); user.tap(); user.typeText(username)
+        XCTAssertTrue(pass.waitForExistence(timeout:20)); pass.tap(); pass.typeText(password); app.buttons["登录"].tap()
+        let start = app.buttons["start-today"]
+        XCTAssertTrue(start.waitForExistence(timeout:30)); start.tap()
+        var attempts = 0
+        for _ in 0..<100 {
+            attempts = try await fixtureRequest("/api/v1/__ui_fixture/queue-status")["attempts"] as? Int ?? 0
+            if attempts > 0 { break }
+            try await Task.sleep(for:.milliseconds(100))
+        }
+        XCTAssertGreaterThan(attempts, 0)
+        XCUIDevice.shared.press(.home)
+        let pulled = try await fixtureRequest("/api/v1/me/state", token:token)
+        var state = try XCTUnwrap(pulled["state"] as? [String:Any])
+        var log = state["log"] as? [[String:Any]] ?? []
+        log.append(["d":day,"word":"other-device","kind":"review","rating":3,"eventId":UUID().uuidString.lowercased()])
+        state["log"] = log
+        _ = try await fixtureRequest("/api/v1/me/state",method:"PUT",token:token,body:state)
+        app.activate()
+        XCTAssertTrue(app.descendants(matching:.any)["预计今日进度，已完成 3，共 3 词"].waitForExistence(timeout:30), app.debugDescription)
+        _ = try await fixtureRequest("/api/v1/__ui_fixture/queue-release",method:"POST")
+        let retry = app.buttons["重新加载"]
+        XCTAssertTrue(retry.waitForExistence(timeout:30), "stale queue opened a session")
+        retry.tap()
+        XCTAssertTrue(app.staticTexts["今日已达上限"].waitForExistence(timeout:30))
+        XCTAssertFalse(app.buttons["学会了 →"].exists)
+    }
+
     @MainActor func testSameDayRelearningAtDailyCapacity() async throws {
         try await checkSameDayRelearning(offline: false)
     }
@@ -1444,6 +1483,7 @@ final class VocabUITests: XCTestCase {
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/mastery-budget-case", method: "POST")
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
+        let token = try XCTUnwrap(seed["token"] as? String)
         let app = XCUIApplication()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
@@ -1463,6 +1503,18 @@ final class VocabUITests: XCTestCase {
         let remember = app.buttons["记得"]
         XCTAssertTrue(remember.waitForExistence(timeout: 20)); remember.tap()
         XCTAssertTrue(app.staticTexts["dog"].waitForExistence(timeout: 30), "the first reserved new word must be present")
+        XCTAssertTrue(app.buttons["学会了 →"].waitForExistence(timeout:30)); app.buttons["学会了 →"].tap()
+        XCTAssertTrue(app.staticTexts["cat"].waitForExistence(timeout:30), "a skipped-range random word replaced the reserved new word")
+        var reviewGuess: Double?
+        for _ in 0..<100 {
+            let response = try await fixtureRequest("/api/v1/me/state",token:token)
+            let state = response["state"] as? [String:Any], history = state?["posteriorHistory"] as? [String:Any]
+            let events = history?["events"] as? [String:[String:Any]] ?? [:]
+            reviewGuess = events.values.first(where:{ ($0["weight"] as? Double) == 0.15 })?["guess"] as? Double
+            if reviewGuess != nil { break }
+            try await Task.sleep(for:.milliseconds(100))
+        }
+        XCTAssertEqual(reviewGuess, 0.25, "mature four-choice answers still have a guessing component")
     }
 
     @MainActor func testDailyCapacityAndDoneScreen() async throws {

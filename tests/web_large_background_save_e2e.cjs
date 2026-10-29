@@ -4,7 +4,9 @@ const base=(process.env.VOCAB_TEST_BASE||'http://127.0.0.1:18765').replace(/\/$/
 const remoteWord=process.env.VOCAB_REBASE_SWIFT_TEST==='1'?'swift_large':'banana';
 async function api(path,method='GET',body,token){const r=await fetch(base+path,{method,headers:{'Content-Type':'application/json',...(token?{Authorization:`Bearer ${token}`}:{})},...(body===undefined?{}:{body:JSON.stringify(body)})});if(!r.ok)throw Error(`${path}: ${r.status} ${await r.text()}`);return r.json();}
 (async()=>{
+ const watchdog=setTimeout(()=>{console.error("large-state test did not finish within its deadline");process.exit(1);},180000);
  await api('/api/v1/__ui_fixture/experimental-large-deltas','POST',{enabled:true});const seed=await api('/api/v1/__ui_fixture/recovery-case','POST',{}),auth=await api('/api/v1/auth/login','POST',{username:seed.username,password:seed.password});
+ const learningState=await api('/api/v1/me/state','GET',undefined,seed.token);learningState.state.settings.newPerDay=10;await api('/api/v1/me/state','PUT',learningState.state,seed.token);
  await api('/api/v1/__ui_fixture/oversize-stored-state','POST',{token:seed.token,size:8*1024*1024+65536});
  const browser=await chromium.launch({headless:true,...(process.env.VOCAB_BROWSER?{executablePath:process.env.VOCAB_BROWSER}:{})});
  try{
@@ -69,5 +71,5 @@ async function api(path,method='GET',body,token){const r=await fetch(base+path,{
   const latest=await page.evaluate(async word=>{const saved=await largeReadVerifiedSnapshot(largeActive.slot),state=JSON.parse(saved.baseline.baseRaw);return {ok:!!state.cards[word]&&!!state.cards.kiwi.fsrs&&!state.cards.kiwi.pendingFsrs,revision:saved.revision,generation:saved.generation};},remoteWord);assert(latest.ok);
   if(process.env.VOCAB_REBASE_SWIFT_TEST==='1'){const verify=await run(process.env.VOCAB_IOS_STAGED_CHECK,['--verify-large-rebase',latest.revision,latest.generation],{env:{...process.env,VOCAB_FIXTURE_TOKEN:seed.token},timeout:120000,maxBuffer:1024*1024});assert(verify.stdout.includes('PASS Swift verifies rebased large-state changes'));}
   console.log('PASS delayed FSRS responses queue during sync and safely rebase after a disjoint commit race');
- }finally{await browser.close();}
+ }finally{clearTimeout(watchdog);await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1);});

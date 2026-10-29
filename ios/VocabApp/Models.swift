@@ -197,7 +197,7 @@ struct PersonalJob: Codable, Equatable {
 struct TrackState: Codable, Equatable {
     var evalDay: String?      // 今日位置重估是否已生效（每日最多一次）
     var lowSince: String?     // 游标持续超前于水平的起始日（连续 2 天触发减压）
-    var throttle: Bool?       // 减压阀：true 时新词 5 个/天
+    var throttle: Bool?       // 旧档兼容字段；不再自动降低新词目标
     var lastNote: String?     // 最近一次追踪动作的人话说明（完成页展示）
     // v1.3 新增（全可选，兼容旧存档）
     var diffuseDay: String?   // 置信度扩散每日一次

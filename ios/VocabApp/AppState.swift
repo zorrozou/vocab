@@ -5,10 +5,11 @@ import SwiftUI
 /// 会话内瞬态（不持久化）：今日队列与进度
 struct Session {
     let id = UUID()
+    var day = DayUtil.today()
     enum Item: Equatable {
         case review(word: String)
         case learn(word: NewWord)
-        case probe(word: NewWord, reverse: Bool)   // v1.4 水平探测题；reverse=true 检验回想而非再认
+        case probe(word: NewWord, reverse: Bool)   // v1.4 水平探测题；reverse=true 从中文选择英文
     }
     var queue: [Item] = []
     var idx = 0
@@ -19,6 +20,7 @@ struct Session {
 }
 
 struct ValidationSession {
+    let id = UUID()
     var words: [PlacementItem]
     var idx = 0
     var posterior: [Double]?
@@ -81,6 +83,7 @@ final class AppState {
     }
     private(set) var routeGeneration: UInt64 = 0
     var session = Session()
+    var studyNotice = ""
     var validation: ValidationSession?
     var placementSet: PlacementSet?
     var placementSession = UUID()   // 每次重新定级更换，强制清空已考集合与 CAT 位置
@@ -911,6 +914,7 @@ final class AppState {
     }
 
     func enterGuest() {
+        studyNotice = ""
         UserDefaults.standard.set(true, forKey: "vocab_guest")
         placementSet = nil   // 进游客也清空定级题缓存（与账号隔离）
         S = loadLocal(slot: "guest") ?? LearningState()
@@ -923,6 +927,7 @@ final class AppState {
     /// - 注册新账号：绝不并入当前内存进度（新账号 = 全新开始 + 定级）
     /// - 登录老账号且两端都空 → 才把当前（游客）进度并入
     func authed(_ r: AuthResponse, isRegistration: Bool = false) async {
+        studyNotice = ""
         pushTask?.cancel()   // 先取消旧账号延迟推送，防止旧状态写到新账号
         pushTask = nil
         let wasGuest = auth == nil && UserDefaults.standard.bool(forKey: "vocab_guest")
@@ -1031,13 +1036,12 @@ final class AppState {
         route = .validation
     }
 
-    func answerValidation(ok: Bool, countEvidence: Bool = true) {
+    func answerValidation(ok: Bool, countEvidence: Bool = true, verifiedPos: Int? = nil) {
         guard var v = validation, v.idx < v.words.count else { return }
         let w = v.words[v.idx]
-        let reverse = v.idx % 2 == 1
         if countEvidence {
-            v.posterior = StudyEngine.posteriorCalc(v.posterior, rank: w.pos, resp: ok ? 1 : 0,
-                                                    weight: 1.0, guess: reverse ? 0 : 0.25)
+            v.posterior = StudyEngine.posteriorCalc(v.posterior, rank: verifiedPos ?? w.pos, resp: ok ? 1 : 0,
+                                                    weight: 1.0, guess: 0.25)
             if ok { v.correct += 1 }
         } else {
             v.failed += 1
@@ -1196,7 +1200,16 @@ final class AppState {
         if changed { save() }
     }
 
+    private func admitStudy(word: String, kind: String) -> Bool {
+        guard let issue = StudyEngine.studyAdmissionIssue(S, word: word, kind: kind, sessionDay: session.day, day: DayUtil.today()) else { return true }
+        studyNotice = issue
+        session = Session()
+        route = .home
+        return false
+    }
+
     func learn(word: String, pos: Int, rating: Int, fromPending: Bool = false) async {
+        guard admitStudy(word: word, kind: "learn") else { return }
         let today = DayUtil.today()
         let lastReview = lastReviewDate(word)
         let c = S.cards[word] ?? CardState(stage: 1, due: DayUtil.addDays(today, 1) + "T12:00:00Z",
@@ -1223,6 +1236,7 @@ final class AppState {
     func review(word: String, rating: Int, trackWeight: Double? = nil, allowUndo: Bool = false, acceptance: Bool = false, verifiedPos: Int? = nil) async {
         guard var c = S.cards[word] else { return }
         if acceptance, S.quizProgressDay == DayUtil.today(), (S.quizCompleted ?? []).contains(word) { return }
+        guard admitStudy(word: word, kind: "review") else { return }
         let preStab = c.fsrs?.stability ?? Double(c.stage.flatMap { StudyEngine.ladderInterval[$0] } ?? 0)   // v1.3：成熟度用答前稳定度
         let lastReview = lastReviewDate(word)   // 在写今日日志前取上一次记录
         let today = DayUtil.today()
@@ -1251,7 +1265,7 @@ final class AppState {
         //  - 被动证据每日总权重封顶 1.5；验收测试（trackWeight 1.0）不受上限
         if let pos = S.cards[word]?.pos, S.calibrated {
             if let tw = trackWeight {
-                observeLevel(pos: pos, known: rating != 1, weight: tw, guess: preStab >= 14 ? 0 : 0.25)
+                observeLevel(pos: pos, known: rating != 1, weight: tw, guess: verifiedPos == nil ? 0 : 0.25)
             } else {
                 var tr = S.track ?? TrackState()
                 if tr.dayWDay != today { tr.dayW = 0; tr.dayWDay = today }
@@ -1260,7 +1274,7 @@ final class AppState {
                 if rating == 1 { w = preStab >= 21 ? 0.4 : 0.2; known = false }
                 else if Double(pos) > StudyEngine.postMean(S) { w = 0.15 }
                 if w > 0 && (tr.dayW ?? 0) + w <= 1.5 {
-                    observeLevel(pos: pos, known: known, weight: w, guess: preStab >= 14 ? 0 : 0.25)
+                    observeLevel(pos: pos, known: known, weight: w, guess: verifiedPos == nil ? 0 : 0.25)
                     tr.dayW = (tr.dayW ?? 0) + w
                     S.track = tr
                 }
@@ -1279,7 +1293,7 @@ final class AppState {
 
     /// 每天首次 buildQueue 时运行：T=后验均值。
     /// T 超前 pointer >500 且证据够硬(std<800) → pointer 跳到 T（中间词视为已会）；
-    /// pointer 超前 T >500 且连续 2 天 → 减压（新词 5 个/天，不后退——已发词 FSRS 在管）。
+    /// 新词数始终使用用户设置，不因水平估计降低。
     /// v1.3：评估前先做置信度扩散（每日一次）；级别变更须连续 3 天跨边界（滞回防抖）
     func trackLevelDaily() {
         guard S.calibrated, S.posterior != nil else { return }
@@ -1340,7 +1354,7 @@ final class AppState {
         var busy = Set(reviewWords)
         news.forEach { busy.insert($0.word) }
         let zones: [(Double, Double, Bool)] = [
-            (m + 0.5 * sd, m + 1.0 * sd, true),   // 上方近端：反向回想，检验是否真会而非眼熟
+            (m + 0.5 * sd, m + 1.0 * sd, true),   // 上方近端：从中文选英文，补充另一方向的证据
             (m + 1.5 * sd, m + 2.0 * sd, false),  // 上方远端：正向再认，探大幅进步
             (m - 1.0 * sd, m - 0.5 * sd, false),  // 下方：正向再认，高估回归检查
         ]
@@ -1366,14 +1380,17 @@ final class AppState {
         return out
     }
 
-    /// v1.4 探测作答：全额证据；正向猜测率 0.25，反向回想为 0；答错 → 进明日新词候选
-    func answerProbe(_ w: NewWord, ok: Bool, reverse: Bool) {
-        StudyEngine.posteriorUpdate(&S, rank: w.pos, resp: ok ? 1 : 0, weight: 1.0, guess: reverse ? 0 : 0.25)
+    /// v1.4 探测作答：全额证据；正反向均为四选一，猜测率 0.25；答错 → 进明日新词候选
+    @discardableResult
+    func answerProbe(_ w: NewWord, ok: Bool, reverse: Bool) -> Bool {
+        guard admitStudy(word: w.word, kind: "probe") else { return false }
+        StudyEngine.posteriorUpdate(&S, rank: w.pos, resp: ok ? 1 : 0, weight: 1.0, guess: 0.25)
         S.log.append(LogEntry(d: DayUtil.today(), word: w.word, rating: ok ? 4 : 1, kind: "probe", reverse: reverse))
         if !ok, S.cards[w.word] == nil, !S.pendingNew.contains(where: { $0.word == w.word }) {
             S.pendingNew.append(NewWord(word: w.word, pos: w.pos))
         }
         save()
+        return true
     }
 
     /// 例句曝光埋点：用于后续评估"薄弱词复现 → 3/7/30 天记忆效果"
@@ -1449,6 +1466,9 @@ final class AppState {
         guard active() else { return false }
         await refreshPersonalJobs()
         guard active() else { return false }
+        trackLevelDaily()
+        S.pendingNew = S.pendingNew.filter { S.cards[$0.word] == nil }
+        let planState = S, planDay = DayUtil.today()
         let now = Date()
         let cap = S.settings.dailyCap
         let completed = StudyEngine.completedDailyWords(S.log, day: DayUtil.today())
@@ -1472,13 +1492,11 @@ final class AppState {
         }.map { $0.key }
         // 新词：pendingNew 优先，然后按 pointer 顺序取
         // 先为用户设置的新词目标留位；词库不足时剩余容量交给复习。
-        trackLevelDaily()
         let newPerDay = S.settings.newPerDay
         let learnedToday = Set(S.log.filter { $0.kind == "learn" && $0.d == DayUtil.today() }.map(\.word)).count
         let nNew = min(max(0, newPerDay - learnedToday), remaining)
         var news: [NewWord] = []
         // 只清理已经入卡的旧待学项；本次选中但未学完的词必须留在 pendingNew。
-        S.pendingNew = S.pendingNew.filter { S.cards[$0.word] == nil }
         for w in S.pendingNew where news.count < nNew {
             if !completed.contains(w.word) && !news.contains(where: { $0.word == w.word }) {
                 var pending = w
@@ -1526,22 +1544,8 @@ final class AppState {
         let early = earlyPool.filter { !reviewSet.contains($0) }
             .prefix(min(5, max(0, remaining - news.count - reviews.count)))
         let reviewsAll = reviews + early
-        // 跳段复核：发生过跳位（pointer 已显著领先定级边界）时，每天从跳过区间随机抽 1 个词
-        // 顶替 1 个新词位——给"视为已会"的跳过词一次被抓住的机会。
-        // 答对就过（确认真会），答错它会正常进卡片复习，同时水平后验自动回落纠偏。
-        if nNew > 0, news.count == nNew, S.pointer - S.frontier > 200 {
-            for _ in 0..<6 {   // 最多试 6 个随机位置，避开已入卡的词
-                let randPos = Int.random(in: S.frontier..<S.pointer)
-                let result = try? await api.lexiconAt(pos: randPos, n: 1)
-                guard active() else { return false }
-                guard let r = result, let w = r.words.first,
-                      S.cards[w.word] == nil,
-                      !completed.contains(w.word),
-                      !news.contains(where: { $0.word == w.word }) else { continue }
-                news[news.count - 1] = w
-                break
-            }
-        }
+        // Lower-band checks use the shared probe pool; never replace a reserved
+        // new word with an untested random word from a skipped range.
 
         // v1.3 每日主动探测：3 个探测词（2 个后验上方区 / 1 个下方区）随机混入复习段，
         // 4选1 形式与复习测验无差别——用户无感知，证据全额（与定级同级 weight 1.0）
@@ -1554,7 +1558,13 @@ final class AppState {
             revBlock.insert(.probe(word: p.word, reverse: p.reverse), at: at)
         }
 
+        guard S == planState, DayUtil.today() == planDay else {
+            studyNotice = "进度或日期已变化，请重新加载今天的任务。"
+            return false
+        }
+        studyNotice = ""
         session = Session()
+        session.day = planDay
         session.queue = revBlock + news.map { .learn(word: $0) }
         save()
         prefetchDay(news: news, reviewWords: reviewsAll)

@@ -1,6 +1,7 @@
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const html = fs.readFileSync('web/index.html', 'utf8');
 const saveCode = html.slice(html.indexOf('const save = () =>'), html.indexOf('let session ='));
+const admissionCode = html.slice(html.indexOf('// Validate again at grading time'), html.indexOf('async function learn('));
 const reviewCode = html.slice(html.indexOf('let undoSnapshot ='), html.indexOf('const isMastered ='));
 const syncCode = html.slice(html.indexOf('async function syncFromServer('), html.indexOf('function renderUserTag()'));
 const scheduled = new Map(); let nextTimer = 0, pushes = 0;
@@ -9,7 +10,7 @@ const values = {};
 const ctx = {
   AUTH: {userId: 1, accountId:'a'.repeat(32)}, S: {cards: {apple: {pos: 1, fsrs: {state: 2, stability: 5, difficulty: 4,
     due: '2026-10-28', lastReview: '2026-10-20T00:00:00Z'}}}, log: [], knowledge: {}, posterior: [1],
-    probeCount: 0, track: null, calibrated: false},
+    probeCount: 0, track: null, calibrated: false, settings:{dailyCap:100,newPerDay:10}},
   session: {reviewedToday: 0}, largeActive:null, normalActive:null, observedSlotValues:new Map(), deltaBlockedSlots:new Set(), deltaConcurrentSlots:new Set(),
   normalTransitionMarker:slot=>`${slot}:normal-transition`, awaitingServerSlot:slot=>`${slot}:awaiting-server`, deltaRecoveryBlock:slot=>`${slot}:delta-recovery-block`,
   $:()=>({firstElementChild:null}), structuredClone, Date, Math, crypto: require("crypto").webcrypto,
@@ -24,7 +25,7 @@ const ctx = {
   scheduleFsrs: async c => { c.due = '2026-10-28'; vm.runInContext('save()', ctx); },
   LEGACY_STAB: {}, fsrsDue: x => x
 };
-vm.createContext(ctx); vm.runInContext(saveCode + '\n' + reviewCode + '\n' + syncCode, ctx);
+vm.createContext(ctx); vm.runInContext(saveCode + '\n' + admissionCode + '\n' + reviewCode + '\n' + syncCode, ctx);
 const fireTimers = () => { for (const f of scheduled.values()) f(); scheduled.clear(); };
 (async () => {
   await ctx.review('apple', 1, undefined, true);

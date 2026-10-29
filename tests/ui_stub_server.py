@@ -775,8 +775,24 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
         state['pendingNew'] = [{'word': word, 'pos': main.POS_OF[main.WORD2ID[word]]} for word in ('dog','cat')]
         state['settings'] = {'newPerDay': 2, 'dailyCap': 3}
         state['track'] = {'throttle': True}
+        state['frontier'] = 1; state['pointer'] = 5000
+        state['posterior'] = [1.] + [0.] * 48
+        state['cards']['apple']['due'] = '1999-01-01T00:00:00Z'
+        state['cards']['apple']['fsrs'] = {'state':2,'stability':30,'difficulty':5,'due':'1999-01-01T00:00:00Z','lastReview':'1998-12-01T00:00:00Z'}
         state_put(state, token)
         fixture.update(fsrs_offline=False, fixed_quiz=True, personal_offline=False)
+        return account
+
+    @main.app.post('/api/v1/__ui_fixture/queue-budget-case')
+    def seed_queue_budget_case(body: dict):
+        account = seed_budget_case(body)
+        get_state = next(route.endpoint for route in main.app.routes if getattr(route, 'path', None) == '/api/v1/me/state' and 'GET' in getattr(route, 'methods', set()))
+        put_state = next(route.endpoint for route in main.app.routes if getattr(route, 'path', None) == '/api/v1/me/state' and 'PUT' in getattr(route, 'methods', set()))
+        token = 'Bearer ' + account['token']
+        state = get_state(token)['state']; state['settings']['newPerDay'] = 1
+        put_state(state, token)
+        lexicon_release.clear()
+        fixture.update(lexicon_hold=True, lexicon_delay=0, lexicon_attempts=0, lexicon_completed=0)
         return account
 
     @main.app.post('/api/v1/__ui_fixture/same-day-relearning-case')

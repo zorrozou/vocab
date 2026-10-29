@@ -571,7 +571,7 @@ struct SettingsView: View {
     }
 }
 
-/// 独立留出水平校验：单独后验，不影响学习计划；正反题交替，正向猜测率 0.25、反向为 0
+/// 独立留出水平校验：单独后验，不影响学习计划；正反题交替，正反向四选一均按猜测率 0.25
 struct ValidationView: View {
     @Environment(AppState.self) private var app
     @State private var quiz: Quiz?
@@ -626,7 +626,7 @@ struct ValidationView: View {
                                 if reverse, let prompt = quiz?.prompt {
                                     Text(prompt).font(.system(size: 30, weight: .bold))
                                         .foregroundStyle(Theme.text).multilineTextAlignment(.center)
-                                    Text("回想它的英文单词").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                                    Text("选出对应的英文单词").font(.system(size: 14)).foregroundStyle(Theme.muted)
                                 } else {
                                     HStack(spacing: 10) {
                                         BigWord(word: v.words[v.idx].word)
@@ -651,7 +651,7 @@ struct ValidationView: View {
             Group {
                 if let q = quiz, let v = app.validation, v.idx < v.words.count {
                     QuizOptionsView(options: q.options) { ok in
-                        app.answerValidation(ok: ok)
+                        app.answerValidation(ok: ok, verifiedPos: q.pos)
                         quiz = nil
                         loading = true
                     }
@@ -666,9 +666,12 @@ struct ValidationView: View {
         guard let v = app.validation, v.idx < v.words.count else { return }
         let w = v.words[v.idx]
         let reverse = v.idx % 2 == 1
-        if let q = try? await APIClient.shared.quiz(pos: w.pos, seed: Int(Date().timeIntervalSince1970) % 99991,
-                                                    mode: reverse ? "reverse" : "forward"),
-           q.options.count >= 4 {
+        let owner = app.auth, generation = app.routeGeneration
+        let result = try? await APIClient.shared.quiz(pos: w.pos, seed: Int(Date().timeIntervalSince1970) % 99991,
+                                                      mode: reverse ? "reverse" : "forward", word: w.word)
+        guard !Task.isCancelled, app.auth == owner, app.routeGeneration == generation,
+              app.route == .validation, app.validation?.id == v.id, app.validation?.idx == v.idx else { return }
+        if let q = result, q.options.count == 4 {
             quiz = q
             loading = false
         } else {

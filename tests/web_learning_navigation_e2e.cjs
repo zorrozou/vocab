@@ -10,7 +10,10 @@ const question = {word:'apple',pos:1,mode:'forward',options:[{text:'yes',ok:true
   async function hold(page, pattern, payload) {
     let release, entered, settled;
     const gate = new Promise(r => {release = r;});
-    const started = new Promise(r => {entered = r;});
+    const started = new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(Error(`Expected request did not start: ${pattern}`)), 30000);
+      entered = () => { clearTimeout(timeout); resolve(); };
+    });
     const done = new Promise(r => {settled = r;});
     await page.route(pattern, async route => { entered(); await gate; if (payload) await route.fulfill({json:payload}); else await route.continue(); settled(); });
     return {release, started, done};
@@ -107,7 +110,7 @@ const question = {word:'apple',pos:1,mode:'forward',options:[{text:'yes',ok:true
       const page=await browser.newPage(); await page.goto(base);
       await page.evaluate(async account => { await onAuthed(account,false); },authA);
       const gate=await hold(page,'**/api/v1/fsrs/review',null);
-      await page.evaluate(() => { const item={kind:'learn',word:'pear',detail:{word:'pear',pos:1,senses:[{text:'x'}]}}; session={queue:[item],idx:0,reviewedToday:0,learnedToday:0}; void showLearn(item); });
+      await page.evaluate(() => { S.settings.newPerDay=1; const item={kind:'learn',word:'pear',detail:{word:'pear',pos:1,senses:[{text:'x'}]}}; session={queue:[item],idx:0,reviewedToday:0,learnedToday:0}; void showLearn(item); });
       await page.locator('#bNext').click(); await gate.started;
       await page.evaluate(async account => { await onAuthed(account,false); },authB);
       gate.release(); await gate.done; await page.waitForTimeout(400);

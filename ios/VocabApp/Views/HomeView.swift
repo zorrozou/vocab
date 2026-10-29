@@ -19,6 +19,10 @@ struct HomeView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     chips
+                    if !app.studyNotice.isEmpty {
+                        Text(app.studyNotice).font(.system(size: 14)).foregroundStyle(Theme.warn)
+                            .accessibilityIdentifier("study-plan-notice")
+                    }
                     if !app.S.calibrated {
                         placementIntro
                     } else {

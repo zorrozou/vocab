@@ -385,7 +385,7 @@ struct ReviewQuizView: View {
                         .font(.system(size: 30, weight: .bold))
                         .foregroundStyle(Theme.text)
                         .multilineTextAlignment(.center)
-                    Text("回想它的英文单词").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                    Text("选出对应的英文单词").font(.system(size: 14)).foregroundStyle(Theme.muted)
                 } else {
                     HStack(alignment: .center, spacing: 10) {
                         BigWord(word: word)
@@ -465,7 +465,7 @@ struct ReviewQuizView: View {
 }
 
 /// v1.4 水平探测题：与复习测验同形态；每日一题反向回想，检验是否真会而非眼熟。
-/// 正向猜测率 0.25，反向为 0；答错的词进明日新词候选。出题失败直接跳过，不阻塞主流程
+/// 正反向均为四选一，猜测率 0.25；答错的词进明日新词候选。出题失败直接跳过，不阻塞主流程
 struct ProbeQuizView: View {
     @Environment(AppState.self) private var app
     let item: NewWord
@@ -491,7 +491,7 @@ struct ProbeQuizView: View {
                                 .font(.system(size: 30, weight: .bold))
                                 .foregroundStyle(Theme.text)
                                 .multilineTextAlignment(.center)
-                            Text("回想它的英文单词").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                            Text("选出对应的英文单词").font(.system(size: 14)).foregroundStyle(Theme.muted)
                         } else {
                             HStack(alignment: .center, spacing: 10) {
                                 BigWord(word: item.word)
@@ -514,7 +514,7 @@ struct ProbeQuizView: View {
                     QuizOptionsView(options: quiz.options) { ok in
                         var observed = item
                         observed.pos = quiz.pos
-                        app.answerProbe(observed, ok: ok, reverse: reverse)
+                        guard app.answerProbe(observed, ok: ok, reverse: reverse) else { return }
                         app.session.idx += 1
                         app.save()
                     }
