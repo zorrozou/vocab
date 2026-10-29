@@ -366,9 +366,16 @@ const save = () => {
   }
   // 限制日志条数；卡片和事件仍会增长，网络同步还有独立的字节上限。
   const originalLog = S.log;
+  if (largeActive || normalActive) {
+    // Keep the live state untouched until the asynchronous write commits.
+    // A failed write must leave the complete log available for export.
+    const originalRaw = JSON.stringify(S);
+    const trimmedLog = S.log.length > 1200 ? trimLearningLog(S.log) : S.log;
+    const snapshot = trimmedLog === S.log ? originalRaw : JSON.stringify({...S, log:trimmedLog});
+    return largeActive ? queueLargeSave(largeActive, snapshot, originalRaw, trimmedLog)
+                       : queueNormalSave(normalActive, snapshot, originalRaw, trimmedLog);
+  }
   if (S.log.length > 1200) S.log = trimLearningLog(S.log);
-  if (largeActive) return queueLargeSave(largeActive);
-  if (normalActive) return queueNormalSave(normalActive);
   try {
     const slot = accountSlot(AUTH);
     if (localStorage.getItem(normalTransitionMarker(slot))) throw new Error("本机迁移尚未完成，请先导出并重新检查");
@@ -6783,11 +6790,11 @@ function normalSetBusy(active) {
   ["#btnUser", "#btnSettings", "#btnStats", "#syncStatus"].forEach(id => { const el = $(id); if (el) el.disabled = busy; });
   renderUserTag();
 }
-function queueNormalSave(active) {
+function queueNormalSave(active, snapshot, originalRaw, trimmedLog) {
   clearTimeout(save._t);
   if (!normalSessionCurrent(active) || active.conflict) { localSaveFailed = true; renderUserTag(); return; }
   if (!active.pending) active.error = null;
-  const snapshot = JSON.stringify(S), startingRaw = active.prepared.primary.raw, waitingForSync = active.syncing;
+  const startingRaw = active.prepared.primary.raw, waitingForSync = active.syncing;
   active.pending++; localSaveFailed = true; normalSetBusy(active);
   active.queue = active.queue.then(async () => {
     if (active.error) return;
@@ -6797,6 +6804,7 @@ function queueNormalSave(active) {
       active.conflict = true; throw new Error("同步期间本机进度已变化，请先导出本页面进度");
     }
     active.prepared = await normalPrimarySave(active.lease, active.prepared, snapshot);
+    if (JSON.stringify(S) === originalRaw) S.log = trimmedLog;
   }).catch(error => { active.error = error; }).then(() => {
     active.pending--;
     if (normalActive !== active) return;
@@ -6842,12 +6850,12 @@ async function releaseNormalSession() {
   clearTimeout(save._t); active.release(); await active.task;
   if (normalActive === active) { normalActive = null; const app = $("#app"); if (app) app.inert = false; }
 }
-function queueLargeSave(active) {
+function queueLargeSave(active, snapshot, originalRaw, trimmedLog) {
   clearTimeout(save._t);
   if (!largeSessionCurrent(active)) { localSaveFailed = true; active.error = new Error("账号或本机进度已变化，请先导出"); renderUserTag(); return; }
   if (active.conflict) { localSaveFailed = true; renderUserTag(); return; }
   if (!active.pending) active.error = null;
-  const snapshot = JSON.stringify(S), startingRaw = active.lease.raw, waitingForSync = active.syncing;
+  const startingRaw = active.lease.raw, waitingForSync = active.syncing;
   active.pending++; localSaveFailed = true; largeSetBusy(active);
   active.queue = active.queue.then(async () => {
     if (active.error) return;
@@ -6859,7 +6867,7 @@ function queueLargeSave(active) {
       // Keep retries fenced until the rebased view has itself been persisted.
       active.conflict = true;
       nextRaw = null;
-      if (active.pending === 1 && JSON.stringify(S) === snapshot)
+      if (active.pending === 1 && JSON.stringify(S) === originalRaw)
         nextRaw = largeRebaseCompletedFsrs(startingRaw, snapshot, active.lease.raw);
       if (!nextRaw) {
         throw new Error("同步期间本机与服务器进度同时变化，请先导出本页面进度");
@@ -6872,13 +6880,13 @@ function queueLargeSave(active) {
       await largeLocalFlush(active.lease); await largeLocalAppend(active.lease, nextRaw);
     }
     if (rebased) {
-      if (active.pending !== 1 || JSON.stringify(S) !== snapshot) {
+      if (active.pending !== 1 || JSON.stringify(S) !== originalRaw) {
         active.conflict = true;
         throw new Error("合并期间本机进度再次变化，请先导出本页面进度");
       }
       S = JSON.parse(nextRaw);
       active.conflict = false;
-    }
+    } else if (JSON.stringify(S) === originalRaw) S.log = trimmedLog;
   }).catch(error => { active.error = error; }).then(() => {
     active.pending--;
     if (largeActive !== active) return;

@@ -116,6 +116,7 @@ scenarios=(
   tests/web_large_background_save_e2e.cjs
   tests/web_large_background_conflict_e2e.cjs
   tests/web_large_background_quota_e2e.cjs
+  tests/web_large_quota_log_preservation_e2e.cjs
   tests/web_large_pull_process_e2e.cjs
   tests/web_experimental_large_push_e2e.cjs
   tests/web_save_failure_sync_e2e.cjs
