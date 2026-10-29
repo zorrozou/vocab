@@ -25,9 +25,6 @@ final class VocabUITests: XCTestCase {
         let finish = app.buttons["开始学习"]
         XCTAssertTrue(finish.waitForExistence(timeout: 30), "placement did not finish")
         finish.tap()
-        let start = app.buttons["开始今天"]
-        XCTAssertTrue(start.waitForExistence(timeout: 30), "home unavailable after placement")
-        start.tap()
         let learn = app.buttons["学会了 →"]
         for _ in 0..<5 {
             if learn.waitForExistence(timeout: 2) { break }
@@ -46,6 +43,7 @@ final class VocabUITests: XCTestCase {
         waitForExpectations(timeout: 30)
         XCTAssertTrue(app.buttons["退出"].waitForExistence(timeout: 30), "study session unavailable")
         app.buttons["退出"].tap()
+        let start = app.buttons["start-today"]
         XCTAssertTrue(start.waitForExistence(timeout: 30), "home unavailable after study")
         let remainingNew = app.descendants(matching: .any)["daily-new-planned"]
         XCTAssertTrue(remainingNew.waitForExistence(timeout: 10), "daily plan unavailable")
@@ -123,14 +121,14 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(user.waitForExistence(timeout: 20)); user.tap(); user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
         app.buttons["登录"].tap()
-        let start = app.buttons["开始今天"]
+        let start = app.buttons["start-today"]
         XCTAssertTrue(start.waitForExistence(timeout: 30), "seeded account failed to load")
         start.tap()
         let option = app.buttons["quiz-option-0"]
         XCTAssertTrue(option.waitForExistence(timeout: 30)); option.tap()
         let remember = app.buttons["记得"]
         XCTAssertTrue(remember.waitForExistence(timeout: 30)); remember.tap()
-        let pending = app.staticTexts["评分待同步"]
+        let pending = app.buttons["pending-sync-status"]
         XCTAssertTrue(pending.waitForExistence(timeout: 30), "offline review was not retained")
         // Sync is also unavailable: the pending event exists only in the app's local slot.
         try await Task.sleep(nanoseconds: 3_000_000_000)
@@ -421,7 +419,7 @@ final class VocabUITests: XCTestCase {
         let first = try await fixtureRequest("/api/v1/__ui_fixture/undo-case", method: "POST")
         let firstToken = try XCTUnwrap(first["token"] as? String)
         app.launch(); try login(first)
-        let start = app.buttons["开始今天"]
+        let start = app.buttons["start-today"]
         XCTAssertTrue(start.waitForExistence(timeout: 30)); start.tap()
         let wrong = app.buttons["quiz-option-1"]
         XCTAssertTrue(wrong.waitForExistence(timeout: 30)); wrong.tap()
@@ -471,7 +469,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(user.waitForExistence(timeout: 20)); user.tap(); user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
         app.buttons["登录"].tap()
-        let start = app.buttons["开始今天"]
+        let start = app.buttons["start-today"]
         XCTAssertTrue(start.waitForExistence(timeout: 30)); start.tap()
         var attempts = 0
         for _ in 0..<30 {
@@ -507,7 +505,7 @@ final class VocabUITests: XCTestCase {
             app.buttons["登录"].tap()
         }
         loginAccount()
-        let start = app.buttons["开始今天"]
+        let start = app.buttons["start-today"]
         XCTAssertTrue(start.waitForExistence(timeout: 30)); start.tap()
         let answer = app.buttons["quiz-option-0"]
         XCTAssertTrue(answer.waitForExistence(timeout: 30)); answer.tap()
@@ -527,7 +525,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(switchAccount.waitForExistence(timeout: 20)); switchAccount.tap()
         loginAccount()
         XCTAssertTrue(start.waitForExistence(timeout: 30))
-        let pending = app.staticTexts["评分待同步"]
+        let pending = app.buttons["pending-sync-status"]
         XCTAssertTrue(pending.waitForExistence(timeout: 20), "pending event was not restored")
         _ = try await fixtureRequest("/api/v1/__ui_fixture/fsrs-release", method: "POST")
         var completed = 0
@@ -1199,7 +1197,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(user.waitForExistence(timeout: 20)); user.tap(); user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
         app.buttons["登录"].tap()
-        let start = app.buttons["开始今天"]
+        let start = app.buttons["start-today"]
         XCTAssertTrue(start.waitForExistence(timeout: 30)); start.tap()
         let retry = app.buttons["重新加载词义"], next = app.buttons["学会了 →"], weak = app.buttons["不熟悉"]
         XCTAssertTrue(retry.waitForExistence(timeout: 30)); XCTAssertFalse(next.isEnabled); XCTAssertFalse(weak.isEnabled)
@@ -1260,7 +1258,7 @@ final class VocabUITests: XCTestCase {
             app.buttons["登录"].tap()
         }
         loginAccount(oldName)
-        XCTAssertTrue(app.buttons["开始今天"].waitForExistence(timeout: 30)); app.buttons["开始今天"].tap()
+        XCTAssertTrue(app.buttons["start-today"].waitForExistence(timeout: 30)); app.buttons["start-today"].tap()
         let option = app.buttons["quiz-option-0"]
         XCTAssertTrue(option.waitForExistence(timeout: 30)); option.tap()
         var attempts = 0
@@ -1290,7 +1288,7 @@ final class VocabUITests: XCTestCase {
         }
         XCTAssertGreaterThan(completed, 0, "held review did not complete")
         try await Task.sleep(for: .seconds(2))
-        XCTAssertTrue(app.buttons["开始今天"].exists, "old acceptance replaced new account home")
+        XCTAssertTrue(app.buttons["start-today"].exists, "old acceptance replaced new account home")
         let response = try await fixtureRequest("/api/v1/me/state", token: newToken)
         let state = try XCTUnwrap(response["state"] as? [String: Any])
         XCTAssertEqual(Set(try XCTUnwrap(state["cards"] as? [String: Any]).keys), Set(["banana", "cherry"]))
@@ -1318,7 +1316,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(user.waitForExistence(timeout: 20)); user.tap(); user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
         app.buttons["登录"].tap()
-        XCTAssertTrue(app.buttons["开始今天"].waitForExistence(timeout: 30)); app.buttons["开始今天"].tap()
+        XCTAssertTrue(app.buttons["start-today"].waitForExistence(timeout: 30)); app.buttons["start-today"].tap()
         XCTAssertTrue(app.buttons["学会了 →"].waitForExistence(timeout: 30), "final partial batch was rejected")
         XCTAssertTrue(app.staticTexts[expected].waitForExistence(timeout: 10))
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "新词 1/1")).firstMatch.exists)
@@ -1339,7 +1337,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(user.waitForExistence(timeout: 20)); user.tap(); user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
         app.buttons["登录"].tap()
-        let start = app.buttons["开始今天"]
+        let start = app.buttons["start-today"]
         XCTAssertTrue(start.waitForExistence(timeout: 30)); start.tap()
         let retry = app.buttons["重新加载"]
         XCTAssertTrue(retry.waitForExistence(timeout: 30), "partial page failure did not remain on home")
@@ -1375,7 +1373,7 @@ final class VocabUITests: XCTestCase {
             app.buttons["登录"].tap()
         }
         loginAccount(oldName)
-        let start = app.buttons["开始今天"]
+        let start = app.buttons["start-today"]
         XCTAssertTrue(start.waitForExistence(timeout: 30)); start.tap()
         var attempts = 0
         for _ in 0..<50 {
@@ -1432,7 +1430,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["2 / 3"].waitForExistence(timeout: 30))
         let newPlan = app.descendants(matching: .any)["daily-new-planned"]
         XCTAssertTrue(newPlan.waitForExistence(timeout: 10)); XCTAssertTrue(newPlan.label.contains("0"))
-        app.buttons["开始今天"].tap()
+        app.buttons["start-today"].tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "复习 1/1")).firstMatch.waitForExistence(timeout: 30))
         let option = app.buttons["quiz-option-0"]
         XCTAssertTrue(option.waitForExistence(timeout: 30)); option.tap()
@@ -1471,7 +1469,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
         app.buttons["登录"].tap()
         XCTAssertTrue(app.staticTexts["0 / 1"].waitForExistence(timeout: 30), "legacy card missing from today's plan")
-        app.buttons["开始今天"].tap()
+        app.buttons["start-today"].tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "复习 1/1")).firstMatch.waitForExistence(timeout: 30))
     }
 
@@ -1618,7 +1616,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(user.waitForExistence(timeout: 20)); user.tap(); user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
         app.buttons["登录"].tap()
-        let start = app.buttons["开始今天"]
+        let start = app.buttons["start-today"]
         XCTAssertTrue(start.waitForExistence(timeout: 30)); start.tap()
         let option = app.buttons["quiz-option-0"]
         XCTAssertTrue(option.waitForExistence(timeout: 30)); option.tap()
@@ -1714,7 +1712,7 @@ final class VocabUITests: XCTestCase {
         }
         XCTAssertEqual(scores.reduce(0) { $0 + $1.0 }, 0)
         XCTAssertEqual(scores.reduce(0) { $0 + $1.1 }, 30)
-        finish.tap()
+        app.buttons["返回首页"].tap()
         XCTAssertTrue(learned.waitForExistence(timeout: 30)); XCTAssertTrue(learned.label.contains("1"))
         app.buttons["account-menu"].tap()
         XCTAssertTrue(app.buttons["立即同步"].waitForExistence(timeout: 20)); app.buttons["立即同步"].tap()

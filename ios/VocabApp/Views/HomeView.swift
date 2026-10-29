@@ -3,6 +3,7 @@ import SwiftUI
 /// 主页：状态条 + 今日任务入口（未定级则引导定级）
 struct HomeView: View {
     @Environment(AppState.self) private var app
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var starting = false
     @State private var startError = ""
 
@@ -37,7 +38,7 @@ struct HomeView: View {
                     }
                 } else {
                     VStack(spacing: 6) {
-                        PrimaryButton(title: starting ? "准备中…" : (startError.isEmpty ? "开始今天" : "重新加载")) {
+                        PrimaryButton(title: starting ? "准备中…" : (startError.isEmpty ? (dailyPlan.completed > 0 ? "继续今天" : "开始今天") : "重新加载")) {
                             guard !starting else { return }
                             starting = true
                             startError = ""
@@ -53,7 +54,7 @@ struct HomeView: View {
                                     startError = "任务加载失败，请检查网络后重试"
                                 }
                             }
-                        }
+                        }.accessibilityIdentifier("start-today")
                         if !startError.isEmpty {
                             Text(startError).font(.system(size: 12)).foregroundStyle(Theme.bad)
                         }
@@ -67,7 +68,7 @@ struct HomeView: View {
     }
 
     private var chips: some View {
-        HStack(spacing: 8) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: dynamicTypeSize.isAccessibilitySize ? 2 : 4), spacing: 8) {
             Chip(label: "词汇边界", value: app.S.calibrated ? "≈\(app.S.frontier)" : "未定级")
             Chip(label: "已学", value: "\(learnedCount)")
                 .accessibilityElement(children: .combine)
@@ -81,7 +82,7 @@ struct HomeView: View {
     private var placementIntro: some View {
         Card {
             Text(app.S.placementVersion == nil ? "首次使用 · 智能定级" : "重新定级").font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
-            Text("共 30 道词义选择（4 选 1），难度随作答实时调整，\n系统根据你的真实答题成绩估计词汇量，\n答完后把新词起点放到适合你的位置。")
+            Text("共 30 道词义选择题，约需几分钟。难度会随作答调整，结果用于估计适合你的新词起点。可以中途退出，之后继续。")
                 .font(.system(size: 15)).foregroundStyle(Theme.text)
                 .multilineTextAlignment(.center)
             if app.S.probeCount > 0 {
@@ -99,12 +100,14 @@ struct HomeView: View {
             // 今日进度：已完成 / 目标（复习+新词），一眼看到还差多少
             VStack(spacing: 4) {
                 HStack {
-                    Text("今日进度").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    Text("今日进度（预计）").font(.system(size: 12)).foregroundStyle(Theme.muted)
                     Spacer()
                     Text("\(plan.completed) / \(plan.totalPlanned)").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accentLight)
                 }
                 ProgressBar(value: plan.totalPlanned > 0 ? Double(plan.completed) / Double(plan.totalPlanned) : 0)
             }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("预计今日进度，已完成 \(plan.completed)，共 \(plan.totalPlanned) 词")
             HStack(spacing: 0) {
                 StatCell(number: "\(plan.dueAvailable)", label: "待复习")
                 StatCell(number: "\(plan.newPlanned)", label: "新词上限")
@@ -160,13 +163,17 @@ struct TopBar: View {
                 Text("⚠️ 登录凭证未保存，重启后需重新登录").font(.system(size: 11)).foregroundStyle(Theme.warn)
             }
             if app.localSaveFailed {
-                Text("⚠️ 本机保存失败，请导出进度").font(.system(size: 11)).foregroundStyle(Theme.warn)
+                Button("本机保存失败，打开设置导出进度") { app.route = .settings }
+                    .font(.system(size: 13)).foregroundStyle(Theme.warn).frame(minHeight: 44)
             }
             if !app.fsrsReplayError.isEmpty {
-                Text("⚠️ 评分参数冲突").font(.system(size: 11)).foregroundStyle(Theme.warn)
+                Button("评分参数冲突，打开设置查看") { app.route = .settings }
+                    .font(.system(size: 13)).foregroundStyle(Theme.warn).frame(minHeight: 44)
             }
             if app.S.cards.values.contains(where: { $0.pendingFsrs != nil }) {
-                Text("评分待同步").font(.system(size: 11)).foregroundStyle(Theme.warn)
+                Button("评分待同步，打开账号查看") { app.route = app.isGuest ? .welcome : .userMenu }
+                    .font(.system(size: 13)).foregroundStyle(Theme.warn).frame(minHeight: 44)
+                    .accessibilityIdentifier("pending-sync-status")
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)

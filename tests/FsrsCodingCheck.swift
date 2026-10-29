@@ -20,6 +20,14 @@ enum APIClient {
 @main
 struct FsrsCodingCheck {
     static func main() async throws {
+        var drill = LearningState()
+        drill.cards = ["apple": CardState(stage: 1, due: nil, lt: 0, pos: 1, fsrs: nil),
+                       "banana": CardState(stage: 1, due: nil, lt: 0, pos: 2, fsrs: nil)]
+        drill.log = [LogEntry(d: "2026-10-29", word: "apple", rating: 1, kind: "learn"),
+                     LogEntry(d: "2026-10-29", word: "apple", rating: 2, kind: "review"),
+                     LogEntry(d: "2026-10-29", word: "banana", rating: 1, kind: "placement"),
+                     LogEntry(d: "2026-10-29", word: "banana", rating: 1, kind: "shadow")]
+        precondition(StudyEngine.stubbornWords(drill).map(\.0) == ["apple"])
         precondition(LocalAccountSlot.name(userId: 7, username: "Alice") == LocalAccountSlot.name(userId: 7, username: "alice"))
         precondition(LocalAccountSlot.name(userId: 7, username: "alice") != LocalAccountSlot.name(userId: 7, username: "bob"))
         let firstIdentity = String(repeating: "a", count: 32), secondIdentity = String(repeating: "b", count: 32)

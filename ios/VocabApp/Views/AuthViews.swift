@@ -37,7 +37,8 @@ struct AuthView: View {
     @State private var busy = false
 
     var body: some View {
-        VStack {
+        ScrollView {
+          VStack {
             Spacer()
             Card {
                 Text(isLogin ? "登录" : "注册")
@@ -80,6 +81,7 @@ struct AuthView: View {
                 }
             }
             Spacer()
+          }.padding(.vertical, 20)
         }
     }
 }
@@ -96,7 +98,8 @@ struct UserMenuView: View {
     @State private var showBackupExporter = false
 
     var body: some View {
-        VStack {
+        ScrollView {
+          VStack {
             Spacer()
             Card {
                 if let a = app.auth {
@@ -149,6 +152,8 @@ struct UserMenuView: View {
                     GhostButton(title: "切换账号 / 游客模式", color: Theme.muted) {
                         if !app.switchAccount() { msg = app.syncMsg }
                     }
+                    Text("切换账号会先保留本机进度；退出登录会先尝试同步。")
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
                     PrimaryButton(title: "退出登录", color: Theme.bad) {
                         let owner = app.auth
                         Task {
@@ -163,6 +168,7 @@ struct UserMenuView: View {
                 }
             }
             Spacer()
+          }.padding(.vertical, 20)
         }
         .fileExporter(isPresented: $showBackupExporter, document: backupDocument,
                       contentType: .json, defaultFilename: "vocab-server-backup") { result in

@@ -1,0 +1,7 @@
+[Unit]
+Description=Renew the vocab IP TLS certificate
+After=network-online.target
+Wants=network-online.target
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/vocab-certbot/bin/certbot renew --non-interactive --config-dir /home/ubuntu/vocab-certbot-production/config --work-dir /home/ubuntu/vocab-certbot-production/work --logs-dir /home/ubuntu/vocab-certbot-production/logs --deploy-hook /usr/local/sbin/vocab-cert-reload

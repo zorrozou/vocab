@@ -20,6 +20,9 @@ enum Theme {
 /// 微信式按住说话按钮：按下收音、松手评分
 struct ShadowHoldButton: View {
     @Environment(AppState.self) private var app
+    @State private var pressing = false
+    @State private var ownsRecording = false
+    @State private var requestID = UUID()
     let target: String          // 目标句（空则禁用提示）
     var onBusy: (String) -> Void = { _ in }
     var onResult: (ShadowResult?) -> Void
@@ -36,26 +39,56 @@ struct ShadowHoldButton: View {
             .contentShape(Rectangle())
             .onLongPressGesture(minimumDuration: 0.15, perform: {}) { pressing in
                 if pressing {
+                    self.pressing = true
                     start()
-                } else if app.speech.state == .listening {
-                    app.speech.stopCapture(finalize: true)
+                } else {
+                    finish(finalize: true)
                 }
             }
+            .accessibilityAddTraits(.isButton)
+            .accessibilityLabel(ownsRecording ? "结束跟读" : "开始跟读")
+            .accessibilityHint("轻点开始或结束录音")
+            .accessibilityAction {
+                if ownsRecording || pressing { finish(finalize: true) }
+                else { pressing = true; start() }
+            }
+            .onDisappear { finish(finalize: false) }
+    }
+
+    private func finish(finalize: Bool) {
+        pressing = false
+        requestID = UUID()
+        if ownsRecording && app.speech.state == .listening {
+            app.speech.stopCapture(finalize: finalize)
+        }
+        ownsRecording = false
     }
 
     private func start() {
-        guard !target.isEmpty else { onBusy("例句还在生成，稍等"); return }
+        guard !target.isEmpty else { pressing = false; onBusy("例句还在生成，稍等"); return }
+        let request = UUID()
+        requestID = request
         app.audio.stop()
         Task {
-            guard await SpeechService.requestPermissions() else {
+            let allowed = await SpeechService.requestPermissions()
+            guard pressing, requestID == request else { return }
+            guard allowed else {
+                pressing = false
                 onBusy("需要麦克风和语音识别权限（设置 → 词航）")
                 return
             }
             guard app.speech.onDeviceAvailable else {
+                pressing = false
                 onBusy("本机语音识别暂不可用；请检查设备语言与语音模型")
                 return
             }
-            app.speech.start(target: target, onResult: onResult)
+            guard app.speech.state == .idle else { pressing = false; return }
+            ownsRecording = true
+            app.speech.start(target: target) { result in
+                ownsRecording = false
+                pressing = false
+                onResult(result)
+            }
         }
     }
 }
@@ -117,11 +150,11 @@ struct PrimaryButton: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 16, weight: .semibold))
+                .font(.body.weight(.semibold))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 13)
                 .background(color)
-                .foregroundStyle(.white)
+                .foregroundStyle(color == Theme.ok || color == Theme.warn ? Theme.bg : .white)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
         }
     }
@@ -134,7 +167,7 @@ struct GhostButton: View {
     var body: some View {
         Button(action: action) {
             Text(title)
-                .font(.system(size: 15, weight: .medium))
+                .font(.body.weight(.medium))
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 11)
                 .foregroundStyle(color)
@@ -161,6 +194,9 @@ struct PlayButton: View {
                 .font(.system(size: 22))
                 .foregroundStyle(Theme.accentLight)
         }
+        .frame(minWidth: 44, minHeight: 44)
+        .contentShape(Rectangle())
+        .accessibilityLabel("朗读：\(text)")
         .buttonStyle(.plain)
     }
 }

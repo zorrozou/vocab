@@ -1,6 +1,6 @@
 # 词航 iOS App（M1）
 
-Web 版（http://175.27.210.206/vocab/）的原生 iOS 客户端。调度、例句、音频、账号与进度同步**全部复用现有服务端**，App 是原生体验壳 + 跟读评分（Web 端做不了的核心能力）。
+Web 版（https://175.27.210.206/vocab/）的原生 iOS 客户端。调度、例句、音频、账号与进度同步**全部复用现有服务端**，App 是原生体验壳 + 跟读评分（Web 端做不了的核心能力）。
 
 ## 功能（与 Web 版 1:1 对齐）
 
@@ -37,7 +37,7 @@ open VocabApp.xcodeproj
 ```
 VocabApp/
 ├── VocabApp.swift        # @main + 路由（RootView）
-├── Config.swift          # API 地址（http://175.27.210.206/vocab）
+├── Config.swift          # API 地址（https://175.27.210.206/vocab）
 ├── Models.swift          # 学习状态 LearningState（与 Web state 字段级同构）+ API DTO + 日期工具
 ├── Keychain.swift        # token 安全存储
 ├── APIClient.swift       # 全部服务端端点（actor）
@@ -60,7 +60,7 @@ VocabApp/
 - **state 同构**：`LearningState` 字段与 Web 端 `vocab_v1` 一一对应（含运行期扩展字段 quizDay/weaveDay/weaveCount/wrongStreak/personalizedDay/personalizedWeak），UTC 日期口径一致，跨端同步无损
 - **调度单一事实源**：FSRS 一律走服务端 `/api/v1/fsrs/review`；离线只用阶梯给出临时到期时间，待处理评分重放成功后以 FSRS 结果替换。
 - **日期字符串原样保留**：due 等时间不做 Date 往返，避免格式漂移
-- **服务地址**：按部署要求，Release 默认使用 `http://175.27.210.206/vocab`，仅对这个确切地址允许 HTTP；其他服务地址必须使用 HTTPS，可通过构建设置 `VOCAB_API_BASE_URL` 指定。HTTP 不加密账号密码、令牌和学习数据。
+- **服务地址**：Release 默认使用 `https://175.27.210.206/vocab`，只接受 HTTPS；可通过构建设置 `VOCAB_API_BASE_URL` 指定其他 HTTPS 地址。IP 证书需保持自动续期。
 
 ## 已知边界 / TODO
 

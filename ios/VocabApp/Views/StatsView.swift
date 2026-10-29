@@ -12,9 +12,7 @@ struct StatsView: View {
     }
 
     private var stubborn: [(String, Int)] {
-        var count: [String: Int] = [:]
-        for l in app.S.log where l.rating <= 2 { count[l.word, default: 0] += 1 }
-        return count.filter { $0.value >= 2 }.sorted { $0.value > $1.value }.prefix(8).map { ($0.key, $0.value) }
+        StudyEngine.stubbornWords(app.S)
     }
 
     var body: some View {
@@ -77,11 +75,13 @@ struct StatsView: View {
                     }
                     .frame(height: 84)
                     if !stubborn.isEmpty {
-                        Text("顽固词（≥2 次没记住）").font(.system(size: 16, weight: .bold))
+                        Text("需要巩固（学习或复习至少 2 次困难／忘记）").font(.system(size: 16, weight: .bold))
                             .foregroundStyle(Theme.text).frame(maxWidth: .infinity, alignment: .leading)
                         Text(stubborn.map { "\($0.0) ×\($0.1)" }.joined(separator: " · "))
                             .font(.system(size: 14)).foregroundStyle(Theme.text)
                             .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("根据当前保留的学习记录统计，整理历史后数量可能变化。")
+                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
                         // 顽固词特训：单独组队歼灭（纯复习队列，不进新词）
                         PrimaryButton(title: "🔥 顽固词特训（\(stubborn.count) 词）", color: Theme.warn) {
                             app.startStubbornDrill()

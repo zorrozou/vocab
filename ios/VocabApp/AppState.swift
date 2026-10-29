@@ -1019,8 +1019,11 @@ final class AppState {
     }
 
     /// 独立留出水平校验：单独维护一份后验，不写 S.posterior/log/cards/pendingNew，不影响学习计划
-    func startValidation() async {
-        guard let r = try? await api.placementSet(seed: "validation-\(deviceId())-\(Int(Date().timeIntervalSince1970))") else { return }
+    func startValidation() async throws {
+        let owner = auth, generation = routeGeneration, origin = route
+        let r = try await api.placementSet(seed: "validation-\(deviceId())-\(Int(Date().timeIntervalSince1970))")
+        guard auth == owner, route == origin, routeGeneration == generation, !Task.isCancelled else { return }
+        guard r.words.count >= 24 else { throw APIError(message: "校验题目不足，请稍后重试") }
         validation = ValidationSession(words: Array(r.words.prefix(24)))
         route = .validation
     }
@@ -1411,12 +1414,7 @@ final class AppState {
     /// 顽固词特训：把 ≥2 次没记住的词单独组一队复习（不进新词，纯歼灭战）
     @discardableResult
     func startStubbornDrill() -> Int {
-        var lapse: [String: Int] = [:]
-        for l in S.log where l.rating <= 2 { lapse[l.word, default: 0] += 1 }
-        let words = S.cards
-            .filter { w, c in (lapse[w] ?? 0) >= 2 && !StudyEngine.isMastered(c) }
-            .map(\.key)
-            .sorted()
+        let words = StudyEngine.stubbornWords(S).map(\.0)
         guard !words.isEmpty else { return 0 }
         session = Session()
         session.queue = words.map { .review(word: $0) }

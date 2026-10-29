@@ -12,11 +12,11 @@ async function api(path,method='GET',body,token){const r=await fetch(base+path,{
   // A second tab must neither edit nor install a competing small slot.
   const other=await context.newPage();await other.goto(base);await other.locator('#awaitUseSnapshot').waitFor();await other.locator('#awaitRetry').click();await other.waitForFunction(()=>document.querySelector('#awaitMsg')?.textContent.includes('其他页面'));
   assert.equal(await other.evaluate(slot=>localStorage.getItem(slot),slot),null);await other.close();
-  await page.locator('#btnSettings').click();await page.locator('[data-new="15"]').click();
-  // Hold the strict journal transaction and check the UI cannot claim success.
+  await page.locator('#btnSettings').click();
+  // Hold the strict journal transaction before the auto-saved setting change.
   await page.evaluate(()=>{window.holdJournal=true;const original=IDBObjectStore.prototype.put;window.originalPut=original;IDBObjectStore.prototype.put=function(...args){const result=original.apply(this,args);if(this.name==='journals'){const store=this;const keep=()=>{if(!window.holdJournal)return;const request=store.get('__hold_test__');request.onsuccess=keep;};keep();window.journalWaiting=true;}return result;};});
-  await page.locator('#bSave').click();await page.waitForFunction(()=>window.journalWaiting===true);assert(await page.evaluate(()=>document.querySelector('#app').inert));assert((await page.locator('#userTag').innerText()).includes('保存中'));
-  await page.evaluate(()=>{window.holdJournal=false;IDBObjectStore.prototype.put=window.originalPut;});await page.waitForFunction(()=>largeActive&&!largeActive.pending&&!localSaveFailed);await page.evaluate(()=>clearTimeout(save._t));
+  await page.locator('[data-new="15"]').click();await page.waitForFunction(()=>window.journalWaiting===true);assert(await page.evaluate(()=>document.querySelector('#app').inert));assert((await page.locator('#userTag').innerText()).includes('保存中'));assert((await page.locator('#settingsSaveStatus').innerText()).includes('正在保存'));
+  await page.evaluate(()=>{window.holdJournal=false;IDBObjectStore.prototype.put=window.originalPut;});await page.waitForFunction(()=>largeActive&&!largeActive.pending&&!localSaveFailed);await page.locator('#bSave').click();await page.evaluate(()=>clearTimeout(save._t));
   assert(await page.evaluate(async()=>!!(await largeJournalRead(accountSlot(AUTH)))));assert.equal(await page.evaluate(slot=>localStorage.getItem(slot),slot),null);
   await page.close();const reopened=await context.newPage();await reopened.goto(base);await reopened.locator('#bStart, #bPlace').first().waitFor();assert.equal(await reopened.evaluate(()=>S.settings.newPerDay),15);await reopened.evaluate(()=>clearTimeout(save._t));
   await reopened.locator('#btnUser').click();await reopened.locator('#mSync').click();await reopened.waitForFunction(()=>document.querySelector('#mMsg')?.textContent.includes('✓ 已同步'),null,{timeout:60000});
@@ -34,9 +34,9 @@ async function api(path,method='GET',body,token){const r=await fetch(base+path,{
   await reopened.evaluate(()=>clearTimeout(save._t));await reopened.locator('#btnUser').click();await reopened.locator('#mSync').click();
   await reopened.waitForFunction(()=>document.querySelector('#mMsg')?.textContent.includes('✓ 已同步'),null,{timeout:60000});
   assert(await reopened.evaluate(async slot=>!!JSON.parse((await largeReadVerifiedSnapshot(slot)).baseline.baseRaw).cards.pear,slot));
-  await reopened.locator('#mBack').click();await reopened.locator('#btnSettings').click();await reopened.locator('[data-new="20"]').click();
+  await reopened.locator('#mBack').click();await reopened.locator('#btnSettings').click();
   await reopened.evaluate(()=>{window.originalPut=IDBObjectStore.prototype.put;IDBObjectStore.prototype.put=function(...args){if(this.name==='journals')throw Error('injected quota');return window.originalPut.apply(this,args);};});
-  await reopened.locator('#bSave').click();await reopened.waitForFunction(()=>largeActive&&!largeActive.pending&&localSaveFailed);assert.equal(await reopened.evaluate(()=>S.settings.newPerDay),20);
+  await reopened.locator('[data-new="20"]').click();await reopened.waitForFunction(()=>largeActive&&!largeActive.pending&&localSaveFailed);assert((await reopened.locator('#settingsSaveStatus').innerText()).includes('保存失败'));assert.equal(await reopened.evaluate(()=>S.settings.newPerDay),20);
   await reopened.locator('#btnUser').click();await reopened.locator('#mSwitch').click();await reopened.waitForFunction(()=>document.querySelector('#mMsg')?.textContent.includes('本机保存失败'));assert(await reopened.evaluate(()=>!!AUTH&&!!largeActive));
   await reopened.evaluate(()=>{IDBObjectStore.prototype.put=window.originalPut;});await reopened.locator('#mBack').click();await reopened.locator('#btnSettings').click();
   const exportEvent=reopened.waitForEvent('download');await reopened.locator('#bExport').click();const exported=JSON.parse(require('fs').readFileSync(await (await exportEvent).path(),'utf8'));assert.equal(exported.settings.newPerDay,20);

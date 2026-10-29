@@ -11,6 +11,8 @@ struct PlacementView: View {
     @State private var recentMeans: [Double] = []
     @State private var finished: Int? = nil
     @State private var answering = false
+    @State private var startingStudy = false
+    @State private var startError = ""
 
     private let bands = [(1, 2000), (2001, 4000), (4001, 6000),
                          (6001, 8000), (8001, 10000), (10001, 10987)]
@@ -166,7 +168,25 @@ struct PlacementView: View {
                 Text("当前级别：\(levelDisplayName(levelForPos(boundary))) · 发词位置 \(boundary)\n\(scoreText)\n新词将从这个位置开始，\(app.S.pendingNew.count) 个答错词会优先补学")
                     .font(.system(size: 14)).foregroundStyle(Theme.muted)
                     .multilineTextAlignment(.center)
-                PrimaryButton(title: "开始学习") { app.route = .home }
+                Text("这是近似估计，可随学习逐步调整。")
+                    .font(.system(size: 13)).foregroundStyle(Theme.muted)
+                PrimaryButton(title: startingStudy ? "正在准备…" : "开始学习") {
+                    guard !startingStudy else { return }
+                    startingStudy = true
+                    startError = ""
+                    let generation = app.routeGeneration, owner = app.auth
+                    Task {
+                        let ready = await app.buildQueue()
+                        guard app.routeGeneration == generation, app.auth == owner else { return }
+                        startingStudy = false
+                        if ready {
+                            if app.session.queue.isEmpty { app.markDayDone() }
+                            app.route = .session
+                        } else { startError = "任务加载失败，请检查网络后重试。" }
+                    }
+                }.disabled(startingStudy)
+                if !startError.isEmpty { Text(startError).foregroundStyle(Theme.warn) }
+                GhostButton(title: "返回首页") { app.route = .home }
             }
             Spacer()
         }

@@ -50,6 +50,8 @@ struct SettingsView: View {
     @State private var restoreIsUnverified = false
     @State private var restoreMessage = ""
     @State private var restoring = false
+    @State private var validationLoading = false
+    @State private var validationError = ""
 
     private func backupWarnings(_ state: LearningState, verified: Set<String> = []) -> [String] {
         var warnings: [String] = []
@@ -209,8 +211,22 @@ struct SettingsView: View {
                 Card {
                     Text("估值校验").font(.system(size: 13)).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                    GhostButton(title: "独立水平校验（24 题，不影响学习计划）") {
-                        Task { await app.startValidation() }
+                    GhostButton(title: validationLoading ? "正在准备校验…" : "独立水平校验（24 题，不影响学习计划）") {
+                        guard !validationLoading else { return }
+                        validationLoading = true
+                        validationError = ""
+                        let owner = app.auth, generation = app.routeGeneration
+                        Task {
+                            defer { validationLoading = false }
+                            do { try await app.startValidation() }
+                            catch {
+                                guard app.auth == owner, app.route == .settings, app.routeGeneration == generation else { return }
+                                validationError = "无法开始校验，请检查网络后重试。"
+                            }
+                        }
+                    }.disabled(validationLoading)
+                    if !validationError.isEmpty {
+                        Text(validationError).font(.system(size: 13)).foregroundStyle(Theme.warn)
                     }
                     if let r = app.S.evalReport {
                         Text("上次 \(r.date)：独立 ≈\(r.mean)，当前 ≈\(r.appMean)，差值 \(r.delta > 0 ? "+" : "")\(r.delta)")
@@ -543,9 +559,27 @@ struct ValidationView: View {
     @Environment(AppState.self) private var app
     @State private var quiz: Quiz?
     @State private var loading = true
+    @State private var retrying = false
+    @State private var retryError = ""
+
+    private func restartValidation() {
+        guard !retrying else { return }
+        retrying = true
+        retryError = ""
+        let owner = app.auth, generation = app.routeGeneration
+        Task {
+            defer { retrying = false }
+            do { try await app.startValidation() }
+            catch {
+                guard app.auth == owner, app.route == .validation, app.routeGeneration == generation else { return }
+                retryError = "无法开始校验，请检查网络后重试。"
+            }
+        }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
+            if !retryError.isEmpty { Text(retryError).foregroundStyle(Theme.warn).padding() }
             if let v = app.validation {
                 if v.idx >= v.words.count, v.failed > 0 {
                     VStack(spacing: 14) {
@@ -554,7 +588,7 @@ struct ValidationView: View {
                         Text("部分题目加载失败，本次结果不作为估值依据。请重试。")
                             .font(.system(size: 14)).foregroundStyle(Theme.muted)
                         Spacer()
-                        PrimaryButton(title: "重新校验") { Task { await app.startValidation() } }
+                        PrimaryButton(title: retrying ? "正在准备…" : "重新校验") { restartValidation() }.disabled(retrying)
                         GhostButton(title: "返回设置") { app.closeValidation() }
                     }
                     .padding(.horizontal, 16)
@@ -640,7 +674,7 @@ struct ValidationView: View {
                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
             Spacer()
             PrimaryButton(title: "返回设置") { app.closeValidation() }
-            GhostButton(title: "重新校验") { Task { await app.startValidation() } }
+            GhostButton(title: retrying ? "正在准备…" : "重新校验") { restartValidation() }.disabled(retrying)
         }
         .padding(.horizontal, 16)
     }

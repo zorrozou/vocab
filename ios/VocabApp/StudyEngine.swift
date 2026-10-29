@@ -87,6 +87,22 @@ enum StudyEngine {
         var totalPlanned: Int { completed + duePlanned + newPlanned }
     }
 
+    /// Recent retained learning and review records with repeated difficulty.
+    /// Placement, probes and speech are different signals and do not count.
+    static func stubbornWords(_ s: LearningState) -> [(String, Int)] {
+        var counts: [String: Int] = [:]
+        for entry in s.log where (entry.kind == "learn" || entry.kind == "review") && entry.rating <= 2 {
+            counts[entry.word, default: 0] += 1
+        }
+        var result: [(String, Int)] = []
+        for (word, count) in counts {
+            guard count >= 2, let card = s.cards[word], !isMastered(card) else { continue }
+            result.append((word, count))
+        }
+        result.sort { a, b in a.1 == b.1 ? a.0 < b.0 : a.1 > b.1 }
+        return Array(result.prefix(8))
+    }
+
     /// 与建队列相同的去重、复习优先和每日容量规则；不预估随机探测和提前复习。
     static func dailyPlanSummary(_ s: LearningState, day: String, now: Date) -> DailyPlanSummary {
         let completed = completedDailyWords(s.log, day: day)

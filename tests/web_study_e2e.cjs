@@ -17,7 +17,7 @@ const assert = require('assert');
     }
     await page.locator('#bGo').click({timeout:15000});
     assert.equal(await page.evaluate(() => S.calibrated), true);
-    await page.locator('#bStart').click();
+    // The completed placement now starts the first study queue directly.
     // Probe cards appear before the first learning card.
     for (let i = 0; i < 5; i++) {
       await page.waitForFunction(() => !!document.querySelector('#bNext') || [...document.querySelectorAll('.opt')].some(x => !x.disabled), null, {timeout:30000});

@@ -37,7 +37,7 @@
     border: none; border-radius: 10px; padding: 12px 18px; font-size: 15px;
     font-weight: 600; cursor: pointer; background: #2f6fed; color: #fff; flex: 1;
   }
-  button.ghost { background: #22262d; color: #cfd4da; }
+  button.ghost { background: #22262d; color: #cfd4da; border: 1px solid #3b4451; border-radius: 10px; padding: 10px 14px; }
   button.warn { background: #4a2f2f; color: #f0a0a0; }
   button.ok { background: #1e4633; color: #8fd0a8; }
   button.icon { background: #22262d; flex: 0 0 auto; padding: 12px 14px; font-weight: 400; }
@@ -48,7 +48,7 @@
   .center { text-align: center; }
   .score { font-size: 26px; font-weight: 700; margin-top: 8px; }
   .rec { color: #f0b45c; }
-  .foot { margin-top: 18px; color: #5f6670; font-size: 11px; text-align: center; line-height: 1.7; }
+  .foot { margin-top: 18px; color: #9da6b2; font-size: 11px; text-align: center; line-height: 1.7; }
   .tools { margin-top: 10px; display: flex; gap: 8px; justify-content: center; }
   .tools button { flex: 0 0 auto; padding: 6px 12px; font-size: 11.5px; background: #171a1f; color: #5f6670; border: 1px solid #262b33; border-radius: 8px; }
   .hl { color: #f0b45c; font-weight: 600; }
@@ -66,13 +66,23 @@
   .opt:disabled { cursor: default; }
   .plays.bad { right: 8px; top: 44px; color: #8b8f96; }
   button, input { font: inherit; }
+  input[type="file"] { min-width: 0; max-width: 100%; }
   button:not(.plays):not(.playw) { min-height: 44px; cursor: pointer; }
   button:focus-visible, input:focus-visible { outline: 3px solid #8ab8ff; outline-offset: 2px; }
   header { align-items: center; gap: 8px; }
   header .row { flex-wrap: nowrap; }
-  header button.icon { border: 1px solid #343b46; color: #e8e9eb; }
+  header button.icon { border: 1px solid #343b46; color: #8ab8ff; }
+  header button.icon svg { display: block; width: 18px; height: 18px; }
   .logo { min-width: 0; }
   .logo small { display: inline-block; }
+  .guest-banner { display: block; width: 100%; color: #e8e9eb; border: 1px solid #4a6a2e; font-size: 13px; }
+  .guest-banner b { color: #8ab8ff; }
+  .study-actions { position: sticky; bottom: max(8px, env(safe-area-inset-bottom)); z-index: 2; padding: 8px; background: #171a1f; border: 1px solid #343b46; border-radius: 12px; }
+  .security-notice { margin-top: 10px; padding: 12px; border: 1px solid #73532b; border-radius: 10px; background: #30271b; color: #f6d6ac; font-size: 13px; }
+  .security-notice a { color: #a9cbff; }
+  .security-notice[hidden] { display: none; }
+  .sync-status { width: 100%; text-align: left; color: #ffd096; background: #30271b; border: 1px solid #73532b; border-radius: 10px; padding: 10px 12px; margin-top: 8px; }
+  .sync-status[hidden] { display: none; }
   .today-title { color: #e8e9eb; font-size: 21px; font-weight: 700; margin-bottom: 8px; }
   .today-progress-label { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; }
   .today-progress { margin-top: 6px; height: 6px; }
@@ -86,11 +96,15 @@
   <div class="logo">词航<small>艾宾浩斯背单词</small><span id="userTag" style="font-size:11px;color:#5f6670;margin-left:8px"></span></div>
   <div class="row" style="margin:0;gap:6px;align-items:center">
     <span class="muted" id="dateStr"></span>
-    <button class="icon" id="btnUser" aria-label="账号与同步" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px">👤</button>
-    <button class="icon" id="btnStats" aria-label="统计" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px">📊</button>
-    <button class="icon" id="btnSettings" aria-label="设置" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px">⚙️</button>
+    <button class="icon" id="btnUser" aria-label="账号与同步" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></button>
+    <button class="icon" id="btnStats" aria-label="统计" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 20V11h4v9M10 20V4h4v16M16 20v-7h4v7M3 20h18"/></svg></button>
+    <button class="icon" id="btnSettings" aria-label="设置" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v2m0 16v2M2 12h2m16 0h2M4.9 4.9l1.4 1.4m11.4 11.4 1.4 1.4m0-14.2-1.4 1.4M6.3 17.7l-1.4 1.4"/><circle cx="12" cy="12" r="7"/></svg></button>
   </div>
 </header>
+<aside class="security-notice" id="securityNotice" hidden>
+  此页面使用未加密连接。请先同步进度，再<a href="https://175.27.210.206/vocab/">打开安全地址</a>并登录。游客请先在设置中导出进度，再到安全地址导入。
+</aside>
+<button class="sync-status" id="syncStatus" hidden></button>
 <div class="chips" id="chips"></div>
 <main id="app"></main>
 <div class="foot" id="foot">
@@ -110,6 +124,7 @@ if (new URLSearchParams(location.search).get("debug") === "1") {
   document.getElementById("testTools").style.display = "";
 }
 const $ = s => document.querySelector(s);
+if (location.protocol === "http:" && location.hostname === "175.27.210.206") $("#securityNotice").hidden = false;
 /* "今天"用本地日期（UTC 日期会让 UTC+8 用户上午被错判成"昨天"，验收/streak/每日上限全按错日界走） */
 const today = () => {
   const d = new Date();
@@ -1054,14 +1069,14 @@ function home() {
   const el = $("#app");
   // 游客横幅：进度只在本机浏览器，登录后才和手机同步（同步分歧的显性提醒）
   const guestBanner = IS_GUEST()
-    ? `<div class="card center" style="padding:10px 14px;font-size:13px;border:1px solid #4a6a2e;cursor:pointer" id="gBanner">
-         ⚠️ 游客模式：进度只存本浏览器，不会同步到手机。<b style="color:#5f9cec">点这里登录/注册 →</b>
-       </div>`
+    ? `<button class="card center guest-banner" id="gBanner">
+         游客模式：进度只存本浏览器，不会同步到手机。<b>登录或注册 →</b>
+       </button>`
     : "";
   if (!S.calibrated) {
     el.innerHTML = guestBanner + `<div class="card center">
       <h2>${S.placementVersion ? "重新定级" : "首次使用 · 智能定级"}</h2>
-      <p style="font-size:15px;margin:10px 0">最多 30 道词义选择（4 选 1），难度会随作答实时调整，<br>系统根据你的真实答题成绩估计词汇量，<br>答完 30 题后，把新词起点放到适合你的位置。</p>
+      <p style="font-size:15px;margin:10px 0">共 30 道词义选择题，约需几分钟。难度会随作答调整，结果用于估计适合你的新词起点。<br>可以中途退出，之后继续。</p>
       <p class="muted">已完成 ${escapeHTML(S.probeCount)}/30${S.probeCount >= 4 ? ` · 当前估计 ≈${Math.round(postMean())}` : ""}</p>
       <div class="row"><button class="act" id="bPlace">${S.probeCount > 0 ? "继续定级" : "开始定级"}</button></div>
     </div>`;
@@ -1073,14 +1088,14 @@ function home() {
   const plan = dailyPlanSummary(S);
   el.innerHTML = guestBanner + `<div class="card center">
     <h2 class="today-title">今日任务</h2>
-    <div class="today-progress-label muted"><span>今日进度</span><strong>${plan.completed} / ${plan.totalPlanned}</strong></div>
+    <div class="today-progress-label muted"><span>今日进度（预计）</span><strong>${plan.completed} / ${plan.totalPlanned}</strong></div>
     <div class="progress today-progress" role="progressbar" aria-label="今日进度" aria-valuemin="0" aria-valuemax="${Math.max(1, plan.totalPlanned)}" aria-valuetext="${plan.completed} / ${plan.totalPlanned}" aria-valuenow="${plan.completed}"><i style="width:${plan.totalPlanned ? Math.min(100, 100 * plan.completed / plan.totalPlanned) : 0}%"></i></div>
     <div class="stat-grid">
       <div class="stat"><b>${plan.dueAvailable}</b><span>待复习</span></div>
       <div class="stat"><b>${plan.newPlanned}</b><span>新词上限</span></div>
       <div class="stat"><b>${escapeHTML(S.pointer)}</b><span>学习位置</span></div>
     </div>
-    <div class="row"><button class="act" id="bStart">开始今天</button></div>
+    <div class="row"><button class="act" id="bStart">${plan.completed ? "继续今天" : "开始今天"}</button></div>
     <p class="muted" id="startHint" style="margin-top:10px">优先复习到期单词；实际队列可能包含探测或提前复习。</p>
   </div>`;
   $("#bStart").onclick = async () => {
@@ -1178,11 +1193,11 @@ async function place() {
   const band = PLACEMENT_BANDS.findIndex(b => w.pos >= b.lo && w.pos <= b.hi) + 1;
   $("#app").innerHTML = `<div class="card center">
     <h2>智能定级 · 第 ${escapeHTML(S.probeCount + 1)}/30 题 · 第 ${band} 区间</h2>
-    <div><span class="big">${escapeHTML(w.word)}</span><button class="playw" data-t="${escapeHTML(w.word)}">▶</button></div>
+    <div><span class="big">${escapeHTML(w.word)}</span><button class="playw" aria-label="朗读单词" data-t="${escapeHTML(w.word)}">▶</button></div>
     <div style="text-align:left;margin-top:10px">${w.options.map((o, i) => `<button class="opt" data-i="${i}">${escapeHTML(o.text)}</button>`).join("")}</div>
     <div class="row" style="margin-top:10px"><button class="act ghost" id="bUnknown">不认识</button></div>
     <div class="progress"><i style="width:${S.probeCount / 30 * 100}%"></i></div>
-    <p class="muted" style="margin-top:10px">不确定请点「不认识」，不要猜</p>
+    <p class="muted" style="margin-top:10px">不确定请点「不认识」，不要猜；进度会保存，可以稍后继续。</p><div class="row"><button class="ghost" id="bPlaceExit">退出定级</button></div>
   </div>`;
   bindPlays();
   playText(w.word);
@@ -1206,6 +1221,7 @@ async function place() {
   };
   document.querySelectorAll(".opt").forEach(b => b.onclick = () => answer(w.options[+b.dataset.i].ok, true, b));
   $("#bUnknown").onclick = () => answer(false, false, null);
+  $("#bPlaceExit").onclick = home;
 }
 
 function finishPlace(r) {
@@ -1217,11 +1233,23 @@ function finishPlace(r) {
   $("#app").innerHTML = `<div class="card center">
     <h2>定级完成</h2>
     <div class="score">预计认识 ${expectedKnown()} 词</div>
-    <p class="muted">当前级别：${LVL_NAME[lvlOfPos(S.frontier)]} · 发词位置 ${escapeHTML(S.frontier)}<br>${placementScoreText()}<br>新词将从这个位置开始，${S.pendingNew.length} 个答错词会优先补学</p>
+    <p class="muted">当前级别：${LVL_NAME[lvlOfPos(S.frontier)]} · 发词位置 ${escapeHTML(S.frontier)}<br>${placementScoreText()}<br>新词将从这个位置开始，${S.pendingNew.length} 个答错词会优先补学。估值会随学习逐步调整。</p>
     <div class="row"><button class="act" id="bGo">开始学习</button></div>
   </div>`;
   renderChips();
-  $("#bGo").onclick = home;
+  $("#bGo").onclick = async () => {
+    const button = $("#bGo"), current = viewGuard();
+    if (button.disabled) return;
+    button.disabled = true; button.textContent = "正在准备…";
+    try { if (await buildQueue(current) && current()) step(); }
+    catch (_) {
+      if (!current()) return;
+      button.disabled = false; button.textContent = "重新加载";
+      let message = $("#placementStartError");
+      if (!message) { message = document.createElement("p"); message.id = "placementStartError"; message.className = "muted"; message.setAttribute("role", "status"); button.parentElement.after(message); }
+      message.textContent = "任务加载失败，请检查网络后重试。";
+    }
+  };
 }
 
 /* ---- 学习卡 ---- */
@@ -1249,7 +1277,7 @@ async function showProbe(item) {
     <h2>复习 ${session.idx + 1}/${session.queue.length}</h2>
     ${isRev
       ? `<div><span class="big" style="font-size:30px">${escapeHTML(quiz.prompt)}</span></div><p class="muted" style="margin:10px 0 4px">回想它的英文单词：</p>`
-      : `<div><span class="big">${escapeHTML(w.word)}</span><button class="playw" data-t="${escapeHTML(w.word)}">▶</button></div><p class="muted" style="margin:10px 0 4px">选出正确词义：</p>`}
+      : `<div><span class="big">${escapeHTML(w.word)}</span><button class="playw" aria-label="朗读单词" data-t="${escapeHTML(w.word)}">▶</button></div><p class="muted" style="margin:10px 0 4px">选出正确词义：</p>`}
     <div style="text-align:left">${quiz.options.map((o, i) => `<button class="opt" data-i="${i}">${escapeHTML(o.text)}</button>`).join("")}</div>
     <div class="progress"><i style="width:${session.idx / session.queue.length * 100}%"></i></div>
   </div>`;
@@ -1308,7 +1336,7 @@ async function quizRound(words, i) {
   }
   $("#app").innerHTML = `<div class="card center">
     <h2>验收测试 ${i + 1}/${words.length} · 今天学的还记得吗？</h2>
-    <div><span class="big">${escapeHTML(w)}</span><button class="playw" data-t="${escapeHTML(w)}">▶</button></div>
+    <div><span class="big">${escapeHTML(w)}</span><button class="playw" aria-label="朗读单词" data-t="${escapeHTML(w)}">▶</button></div>
     <div style="text-align:left;margin-top:10px">${q.options.map((o, k) => `<button class="opt" data-i="${k}">${escapeHTML(o.text)}</button>`).join("")}</div>
     <div class="progress"><i style="width:${i / words.length * 100}%"></i></div>
     <p class="muted" style="margin-top:10px">答对 → 明天复习见 · 答错 → 进入薄弱词，今晚就定制例句</p>
@@ -1370,9 +1398,9 @@ function sentenceBlock(word, personal, sents) {
   const TIER = { 1: "基础", 2: "进阶", 3: "挑战" };
   const list = Array.isArray(sents) ? sents : (sents ? [{ tier: 1, text: sents }] : []);
   let html = "";
-  if (personal) html += `<div class="sent"><span class="tag p">个性化</span>${escapeHTML(personal.text)}<button class="plays" data-t="${escapeHTML(personal.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(personal.text)}" data-w="${escapeHTML(word)}" data-kind="personal" title="换一句">↻</button>${personal.zh ? `<div class="zh">${escapeHTML(personal.zh)}</div>` : ""}</div>`;
+  if (personal) html += `<div class="sent"><span class="tag p">个性化</span>${escapeHTML(personal.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(personal.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(personal.text)}" data-w="${escapeHTML(word)}" data-kind="personal" title="换一句">↻</button>${personal.zh ? `<div class="zh">${escapeHTML(personal.zh)}</div>` : ""}</div>`;
   list.forEach(s => {
-    html += `<div class="sent"><span class="tag s">${TIER[s.tier] || "例句"}</span>${escapeHTML(s.text)}<button class="plays" data-t="${escapeHTML(s.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(s.text)}" data-w="${escapeHTML(word)}" data-kind="static" title="换一句">↻</button>${s.zh ? `<div class="zh">${escapeHTML(s.zh)}</div>` : ""}</div>`;
+    html += `<div class="sent"><span class="tag s">${TIER[s.tier] || "例句"}</span>${escapeHTML(s.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(s.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(s.text)}" data-w="${escapeHTML(word)}" data-kind="static" title="换一句">↻</button>${s.zh ? `<div class="zh">${escapeHTML(s.zh)}</div>` : ""}</div>`;
   });
   if (!html) html = `<div class="sent" id="pendingSent"><span class="tag s">例句</span><span class="muted">生成中…</span></div>`;
   if (personal) logSentenceExposures(personal.text, "personal", false);
@@ -1402,12 +1430,12 @@ async function showLearn(item) {
     || (available ? `<span>${escapeHTML(w.sense)}</span>` : `<span class="muted">词义暂不可用，请重试或稍后再学。</span><button class="ghost" id="bRetrySense">重新加载</button>`);
   $("#app").innerHTML = `<div class="card">
     <h2>新词 ${session.idx + 1}/${session.queue.length} · ${lvlName(w)}</h2>
-    <div><span class="big">${escapeHTML(w.word)}</span><button class="playw" data-t="${escapeHTML(w.word)}">▶</button></div>
+    <div><span class="big">${escapeHTML(w.word)}</span><button class="playw" aria-label="朗读单词" data-t="${escapeHTML(w.word)}">▶</button></div>
     <div class="phon">${escapeHTML(w.phonetic ? "/" + w.phonetic + "/" : "")}</div>
     <div class="sense">${senseHtml}</div>
     ${sb.html}
     <div class="muted" id="trioStatus"></div>
-    <div class="row">
+    <div class="row study-actions">
       ${SR ? `<button class="icon" id="bShadow">🎤 跟读</button>` : ""}
       <button class="act warn" id="bWeak" ${available ? "" : "disabled"}>不熟悉</button>
       <button class="act ok" id="bNext" ${available ? "" : "disabled"}>学会了 →</button>
@@ -1507,7 +1535,7 @@ async function showLearn(item) {
         const anchor = document.querySelector("#app .sense");
         if (!anchor) return;
         anchor.insertAdjacentHTML("afterend",
-          `<div class="sent"><span class="tag" style="color:#5f9cec;border:1px solid #2a4a6e">巩固</span>${escapeHTML(r.text)}<button class="plays" data-t="${escapeHTML(r.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(r.text)}" data-w="${escapeHTML(w.word)}" data-kind="weave" title="换一句">↻</button> <span class="zh">（复习词：${escapeHTML(weakW)}）</span>${r.zh ? `<div class="zh">${escapeHTML(r.zh)}</div>` : ""}</div>`);
+          `<div class="sent"><span class="tag" style="color:#5f9cec;border:1px solid #2a4a6e">巩固</span>${escapeHTML(r.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(r.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(r.text)}" data-w="${escapeHTML(w.word)}" data-kind="weave" title="换一句">↻</button> <span class="zh">（复习词：${escapeHTML(weakW)}）</span>${r.zh ? `<div class="zh">${escapeHTML(r.zh)}</div>` : ""}</div>`);
         bindPlays();
       }).catch(() => {});
   }
@@ -1538,7 +1566,7 @@ function bindPlays() {
           const fresh = wd && (wd.sentences || []).find(x => x.text !== text);
           if (fresh && sentEl) {
             const TIER = { 1: "基础", 2: "进阶", 3: "挑战" };
-            sentEl.outerHTML = `<div class="sent"><span class="tag s">${TIER[fresh.tier] || "例句"}</span>${escapeHTML(fresh.text)}<button class="plays" data-t="${escapeHTML(fresh.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(fresh.text)}" data-w="${escapeHTML(w)}" data-kind="static" title="换一句">↻</button>${fresh.zh ? `<div class="zh">${escapeHTML(fresh.zh)}</div>` : ""}</div>`;
+            sentEl.outerHTML = `<div class="sent"><span class="tag s">${TIER[fresh.tier] || "例句"}</span>${escapeHTML(fresh.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(fresh.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(fresh.text)}" data-w="${escapeHTML(w)}" data-kind="static" title="换一句">↻</button>${fresh.zh ? `<div class="zh">${escapeHTML(fresh.zh)}</div>` : ""}</div>`;
             bindPlays();
           } else if (sentEl) sentEl.remove();
         } else {
@@ -1553,7 +1581,7 @@ function bindPlays() {
           if (S !== state || deviceId() !== owner) return;
           const s = personalSentence(w);
           if (s && s.text !== text && sentEl) {
-            sentEl.outerHTML = `<div class="sent"><span class="tag p">个性化</span>${escapeHTML(s.text)}<button class="plays" data-t="${escapeHTML(s.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(s.text)}" data-w="${escapeHTML(w)}" data-kind="personal" title="换一句">↻</button>${s.zh ? `<div class="zh">${escapeHTML(s.zh)}</div>` : ""}</div>`;
+            sentEl.outerHTML = `<div class="sent"><span class="tag p">个性化</span>${escapeHTML(s.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(s.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(s.text)}" data-w="${escapeHTML(w)}" data-kind="personal" title="换一句">↻</button>${s.zh ? `<div class="zh">${escapeHTML(s.zh)}</div>` : ""}</div>`;
             bindPlays();
           } else if (sentEl) sentEl.remove();
         }
@@ -1591,7 +1619,7 @@ async function showReview(item) {
     <h2>复习 ${session.idx + 1}/${session.queue.length} · ${escapeHTML(stageLabel(c))}</h2>
     ${isRev
       ? `<div><span class="big" style="font-size:30px">${escapeHTML(quiz.prompt)}</span></div><p class="muted" style="margin:10px 0 4px">回想它的英文单词：</p>`
-      : `<div><span class="big">${escapeHTML(word)}</span><button class="playw" data-t="${escapeHTML(word)}">▶</button></div><p class="muted" style="margin:10px 0 4px">选出正确词义：</p>`}
+      : `<div><span class="big">${escapeHTML(word)}</span><button class="playw" aria-label="朗读单词" data-t="${escapeHTML(word)}">▶</button></div><p class="muted" style="margin:10px 0 4px">选出正确词义：</p>`}
     <div style="text-align:left">${quiz.options.map((o, i) => `<button class="opt" data-i="${i}">${escapeHTML(o.text)}</button>`).join("")}</div>
     <div class="progress"><i style="width:${session.idx / session.queue.length * 100}%"></i></div>
   </div>`;
@@ -1632,7 +1660,7 @@ async function answerCard(item, quizOk, wrongRecorded = false) {
     || `<span class="muted">词义加载失败，请检查网络</span><button class="ghost" id="bRetryDetail">重新加载</button>`;
   $("#app").innerHTML = `<div class="card">
     <h2>${quizOk ? "✓ 答对了——这次掌握程度？" : "✗ 正确答案"}</h2>
-    <div><span class="big">${escapeHTML(word)}</span><button class="playw" data-t="${escapeHTML(word)}">▶</button></div>
+    <div><span class="big">${escapeHTML(word)}</span><button class="playw" aria-label="朗读单词" data-t="${escapeHTML(word)}">▶</button></div>
     <div class="phon">${escapeHTML(d.phonetic ? "/" + d.phonetic + "/" : "")}</div>
     <div class="sense">${answerSenses}</div>
     ${sb.html.replace('id="pendingSent"', "")}
@@ -1677,7 +1705,7 @@ async function showReviewClassic(item) {
   if (!current()) return;
   $("#app").innerHTML = `<div class="card center">
     <h2>复习 ${session.idx + 1}/${session.queue.length} · ${escapeHTML(stageLabel(c))}</h2>
-    <div><span class="big">${escapeHTML(word)}</span><button class="playw" data-t="${escapeHTML(word)}">▶</button></div>
+    <div><span class="big">${escapeHTML(word)}</span><button class="playw" aria-label="朗读单词" data-t="${escapeHTML(word)}">▶</button></div>
     <p class="muted" style="margin:12px 0">先回忆词义，再翻卡核对</p>
     <div class="row"><button class="act ghost" id="bFlip">显示释义</button></div>
     <div class="progress"><i style="width:${session.idx / session.queue.length * 100}%"></i></div>
@@ -1912,8 +1940,8 @@ function showStats() {
   const loads = forecastDueDates(S.cards, today());
   const maxL = Math.max(1, ...loads.map(x => x.n));
   const lapseCount = {};
-  S.log.filter(l => l.rating <= 2).forEach(l => lapseCount[l.word] = (lapseCount[l.word] || 0) + 1);
-  const stubborn = Object.entries(lapseCount).filter(([, n]) => n >= 2).sort((a, b) => b[1] - a[1]).slice(0, 8);
+  S.log.filter(l => ["learn", "review"].includes(l.kind) && l.rating <= 2).forEach(l => lapseCount[l.word] = (lapseCount[l.word] || 0) + 1);
+  const stubborn = Object.entries(lapseCount).filter(([word, n]) => n >= 2 && S.cards[word] && !isMastered(S.cards[word])).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).slice(0, 8);
   $("#app").innerHTML = `<div class="card">
     <h2>学习统计</h2>
     <div class="stat-grid">
@@ -1932,17 +1960,37 @@ function showStats() {
       ${loads.map(x => `<div style="flex:1;background:#2f6fed;border-radius:3px 3px 0 0;height:${Math.max(3, x.n / maxL * 60)}px" title="${escapeHTML(x.d)}: ${escapeHTML(x.n)}词"></div>`).join("")}
     </div>
     <div class="row" style="gap:3px">${loads.map((x, i) => `<div class="muted" style="flex:1;text-align:center;font-size:9px">${escapeHTML(i % 2 ? "" : x.d.slice(5))}</div>`).join("")}</div>
-    ${stubborn.length ? `<h2 style="margin-top:14px">顽固词（≥2 次没记住）</h2><p style="font-size:14px">${stubborn.map(([w, n]) => `${escapeHTML(w)} ×${n}`).join(" · ")}</p>` : ""}
+    ${stubborn.length ? `<h2 style="margin-top:14px">需要巩固（学习或复习至少 2 次困难／忘记）</h2><p style="font-size:14px">${stubborn.map(([w, n]) => `${escapeHTML(w)} ×${n}`).join(" · ")}</p><p class="muted">根据当前保留的学习记录统计，整理历史后数量可能变化。</p><div class="row"><button class="act" id="bDrill">巩固练习（${stubborn.length} 词）</button></div>` : ""}
     <div class="row"><button class="act ghost" id="bBack">返回</button></div>
   </div>`;
   $("#bBack").onclick = home;
+  if ($("#bDrill")) $("#bDrill").onclick = () => {
+    session = {queue: stubborn.map(([word]) => ({kind:"review", word})), idx:0, learnedToday:0, reviewedToday:0};
+    step();
+  };
 }
 
 /* ---------------- 独立留出水平校验（不影响后验、卡片与学习计划） ---------------- */
 let validation = null;
 async function startValidation() {
   const current = viewGuard();
-  const r = await fetch(`${API}/api/v1/placement/set?seed=${encodeURIComponent("validation-" + deviceId() + "-" + Date.now())}`).then(r => r.json());
+  const button = $("#bValidation") || $("#bValRetry") || $("#bValAgain");
+  if (button?.disabled) return;
+  if (button) button.disabled = true;
+  let r;
+  try {
+    const response = await fetch(`${API}/api/v1/placement/set?seed=${encodeURIComponent("validation-" + deviceId() + "-" + Date.now())}`);
+    if (!response.ok) throw new Error("校验请求失败");
+    r = await response.json();
+    if (!Array.isArray(r.words) || r.words.length < 24) throw new Error("校验题目不足");
+  } catch (_) {
+    if (!current()) return;
+    if (button) button.disabled = false;
+    let message = $("#validationStartError");
+    if (!message && button) { message = document.createElement("p"); message.id = "validationStartError"; message.className = "muted"; message.setAttribute("role", "status"); button.parentElement.after(message); }
+    if (message) message.textContent = "无法开始校验，请检查网络后重试。";
+    return;
+  }
   if (!current()) return;
   const words = r.words.slice(0, 24).map((w, i) => ({ ...w, reverse: i % 2 === 1 }));
   validation = { words, idx: 0, posterior: null, correct: 0, failed: 0 };
@@ -1964,7 +2012,7 @@ async function showValidation() {
     <p class="muted">只用于检验估值偏差，不影响学习计划</p>
     ${isRev
       ? `<div><span class="big" style="font-size:30px">${escapeHTML(q.prompt)}</span></div><p class="muted">回想它的英文单词：</p>`
-      : `<div><span class="big">${escapeHTML(w.word)}</span><button class="playw" data-t="${escapeHTML(w.word)}">▶</button></div><p class="muted">选出正确词义：</p>`}
+      : `<div><span class="big">${escapeHTML(w.word)}</span><button class="playw" aria-label="朗读单词" data-t="${escapeHTML(w.word)}">▶</button></div><p class="muted">选出正确词义：</p>`}
     <div style="text-align:left">${q.options.map((o, i) => `<button class="opt" data-i="${i}">${escapeHTML(o.text)}</button>`).join("")}</div>
     <div class="progress"><i style="width:${validation.idx / validation.words.length * 100}%"></i></div>
   </div>`;
@@ -2043,7 +2091,7 @@ function showSettings() {
     <p class="muted" style="margin-top:12px">每日总上限（复习、新词和探测的不同单词）</p>
     <div class="row">${[30, 60, 100, 130].map(n => `<button class="ghost" style="flex:1;padding:9px;${st.dailyCap === n ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-cap="${n}">${n}</button>`).join("")}</div>
     <p class="setting-heading">朗读嗓音</p>
-    <div class="row">${[["en-US-AriaNeural", "Aria 女声"], ["en-US-GuyNeural", "Guy 男声"], ["en-US-JennyNeural", "Jenny 女声"], ["en-GB-SoniaNeural", "Sonia 英音"]].map(([v, name]) => `<button class="ghost" style="flex:1 1 40%;padding:9px;${(st.voice || "") === v ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-voice="${v}">${name}</button>`).join("")}</div>
+    <div class="row">${[["en-US-AriaNeural", "Aria 女声"], ["en-US-GuyNeural", "Guy 男声"], ["en-US-JennyNeural", "Jenny 女声"], ["en-GB-SoniaNeural", "Sonia 英音"]].map(([v, name]) => `<button class="ghost" style="flex:1 1 40%;padding:9px;${(st.voice || "en-US-AriaNeural") === v ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-voice="${v}">${name}</button>`).join("")}</div>
     <p class="setting-heading">定级与校验</p>
     <div class="row"><button class="ghost" style="flex:1;padding:9px" id="bReplace">重新定级（30 题重测词汇边界）</button></div>
     <p class="muted" style="font-size:12px">随时可测。已学单词、复习进度、连续天数全部保留，只更新词汇边界和后续新词起点。</p>
@@ -2065,12 +2113,13 @@ function showSettings() {
     <div class="row"><label for="bImport" class="muted">选择备份文件恢复</label><input id="bImport" type="file" accept="application/json,.json"></div>
     <p class="muted" id="restoreMsg"></p>
     <p class="muted">导出文件包含学习记录，不包含密码或登录凭证，请妥善保管。游客更换设备或清除浏览器数据后，旧的云端例句任务无法继续取回，可重新生成。</p>
-    <div class="row"><button class="act" id="bSave">保存</button></div>
+    <p class="muted" id="settingsSaveStatus" role="status"></p><div class="row"><button class="act" id="bSave">返回学习</button></div>
   </div>`;
-  document.querySelectorAll("[data-new]").forEach(b => b.onclick = () => { const value = +b.dataset.new; if (st.newPerDay !== value && markSettingChanged("newPerDay")) st.newPerDay = value; showSettings(); });
-  document.querySelectorAll("[data-cap]").forEach(b => b.onclick = () => { const value = +b.dataset.cap; if (st.dailyCap !== value && markSettingChanged("dailyCap")) st.dailyCap = value; showSettings(); });
+  renderUserTag();
+  document.querySelectorAll("[data-new]").forEach(b => b.onclick = () => { const value = +b.dataset.new; if (st.newPerDay !== value && markSettingChanged("newPerDay")) { st.newPerDay = value; save(); } showSettings(); });
+  document.querySelectorAll("[data-cap]").forEach(b => b.onclick = () => { const value = +b.dataset.cap; if (st.dailyCap !== value && markSettingChanged("dailyCap")) { st.dailyCap = value; save(); } showSettings(); });
   document.querySelectorAll("[data-voice]").forEach(b => b.onclick = () => {
-    if (st.voice !== b.dataset.voice && markSettingChanged("voice")) st.voice = b.dataset.voice;
+    if (st.voice !== b.dataset.voice && markSettingChanged("voice")) { st.voice = b.dataset.voice; save(); }
     playText("The quick brown fox jumps over the lazy dog.");
     showSettings();
   });
@@ -2096,7 +2145,7 @@ function showSettings() {
       if (localSaveFailed || !deltaSlotMatchesMemory(slot)) { message.textContent = "本机进度未能保存，请先导出并核对。"; return; }
     }
     clearTimeout(save._t); app.inert = true;
-    ["#btnUser", "#btnSettings", "#btnStats"].forEach(id => { const el = $(id); if (el) el.disabled = true; });
+    ["#btnUser", "#btnSettings", "#btnStats", "#syncStatus"].forEach(id => { const el = $(id); if (el) el.disabled = true; });
     let routed = false;
     try {
       await normalMigrationStage(slot, owner, token, current);
@@ -2112,7 +2161,7 @@ function showSettings() {
       }
     } finally {
       if (!routed && deltaSession(owner, token, slot) && button.isConnected) {
-        app.inert = false; ["#btnUser", "#btnSettings", "#btnStats"].forEach(id => { const el = $(id); if (el) el.disabled = false; });
+        app.inert = false; ["#btnUser", "#btnSettings", "#btnStats", "#syncStatus"].forEach(id => { const el = $(id); if (el) el.disabled = false; });
       }
     }
   };
@@ -2314,7 +2363,7 @@ function showSettings() {
     catch (e) { if (message?.isConnected) message.textContent = "恢复失败：" + (e.message || "备份无效"); }
     event.target.value = "";
   };
-  $("#bSave").onclick = () => { save(); home(); };
+  $("#bSave").onclick = () => { if (localSaveFailed) save(); home(); };
 }
 
 function exportLearningState() {
@@ -4155,7 +4204,7 @@ async function normalTransitionRestoreMarker(slot, owner, token) {
 let normalRouteGuard = null;
 async function routePendingNormalTransition(owner, token, slot) {
   if (!/^vocab_v3_a[a-f0-9]{32}$/.test(slot)) return false;
-  const current = () => deltaSession(owner, token, slot), app = $("#app"), controls = ["#btnUser", "#btnSettings", "#btnStats"].map(id => $(id));
+  const current = () => deltaSession(owner, token, slot), app = $("#app"), controls = ["#btnUser", "#btnSettings", "#btnStats", "#syncStatus"].map(id => $(id));
   const baseInert = normalRouteGuard?.baseInert ?? app?.inert;
   const baseDisabled = normalRouteGuard?.baseDisabled ?? controls.map(el => el?.disabled);
   const guard = {baseInert, baseDisabled}; normalRouteGuard = guard;
@@ -4179,7 +4228,7 @@ async function routePendingNormalTransition(owner, token, slot) {
   release();
   if (!current()) return true;
   if (!fenced) return false;
-  ["#btnUser", "#btnSettings", "#btnStats"].forEach(id => { const el = $(id); if (el) el.disabled = true; });
+  ["#btnUser", "#btnSettings", "#btnStats", "#syncStatus"].forEach(id => { const el = $(id); if (el) el.disabled = true; });
   $("#app").innerHTML = `<div class="card center"><h2>本机进度需要核对</h2>
     <p>检测到尚未完成的本机进度切换，暂时不能继续同步或覆盖旧进度。请先导出记录并重新检查。</p>
     <div class="row"><button class="act" id="normalTransitionResume">使用已准备的本机进度</button></div>
@@ -4267,7 +4316,7 @@ async function routePendingNormalTransition(owner, token, slot) {
       S = JSON.parse(prepared.primary.raw);
       normalActive = {slot, owner, token, lease, prepared, release:releaseLease, task, resumePrefFailed, pending:0, syncing:false, error:null, queue:Promise.resolve()};
       localSaveFailed = false; syncFailed = false; syncFailureMessage = "";
-      ["#btnUser", "#btnSettings", "#btnStats"].forEach(id => { const el = $(id); if (el) el.disabled = false; });
+      ["#btnUser", "#btnSettings", "#btnStats", "#syncStatus"].forEach(id => { const el = $(id); if (el) el.disabled = false; });
       renderUserTag(); home();
     } catch (e) {
       if (releaseLease) releaseLease();
@@ -4307,7 +4356,7 @@ async function routePendingNormalTransition(owner, token, slot) {
   $("#normalTransitionSwitch").onclick = () => {
     if (!current()) return;
     clearTimeout(save._t); AUTH = null; localStorage.removeItem("vocab_auth");
-    ["#btnUser", "#btnSettings", "#btnStats"].forEach(id => { const el = $(id); if (el) el.disabled = false; });
+    ["#btnUser", "#btnSettings", "#btnStats", "#syncStatus"].forEach(id => { const el = $(id); if (el) el.disabled = false; });
     welcome();
   };
   const resumeButton = $("#normalTransitionResume"), card = resumeButton.closest(".card");
@@ -5028,7 +5077,7 @@ async function routePendingLargeRestore(owner, token, slot) {
   const current = () => deltaSession(owner, token, slot);
   const failClosed = () => {
     if (!current()) return true;
-    ["#btnUser", "#btnSettings", "#btnStats"].forEach(id => { const el = $(id); if (el) el.disabled = true; });
+    ["#btnUser", "#btnSettings", "#btnStats", "#syncStatus"].forEach(id => { const el = $(id); if (el) el.disabled = true; });
     $("#app").innerHTML = `<div class="card center"><h2>无法检查本机恢复记录</h2><p>本机进度仍保留，请导出当前页面进度并检查浏览器存储后重试。</p><button class="ghost" id="restoreCheckExport">导出当前页面进度</button><button class="act" id="restoreCheckReload">重新检查</button></div>`;
     $("#restoreCheckExport").onclick = () => { if (current()) downloadLearningBackup(S, `vocab-unconfirmed-page-${today()}.json`); };
     $("#restoreCheckReload").onclick = () => location.reload();
@@ -6625,7 +6674,7 @@ function largeSetBusy(active) {
   if (largeActive !== active) return;
   const busy = active.pending > 0 || active.syncing;
   const app = $("#app"); if (app) app.inert = busy;
-  ["#btnUser", "#btnSettings", "#btnStats"].forEach(id => { const el = $(id); if (el) el.disabled = busy; });
+  ["#btnUser", "#btnSettings", "#btnStats", "#syncStatus"].forEach(id => { const el = $(id); if (el) el.disabled = busy; });
   renderUserTag();
 }
 // Only rebase completed FSRS replays when the server kept each affected card
@@ -6707,7 +6756,7 @@ function normalSetBusy(active) {
   if (normalActive !== active) return;
   const busy = active.pending > 0 || active.syncing, app = $("#app");
   if (app) app.inert = busy;
-  ["#btnUser", "#btnSettings", "#btnStats"].forEach(id => { const el = $(id); if (el) el.disabled = busy; });
+  ["#btnUser", "#btnSettings", "#btnStats", "#syncStatus"].forEach(id => { const el = $(id); if (el) el.disabled = busy; });
   renderUserTag();
 }
 function queueNormalSave(active) {
@@ -7062,6 +7111,23 @@ async function syncFromServer(stillCurrent = () => true) {
 }
 
 function renderUserTag() {
+  const status = $("#syncStatus");
+  const saving = !!(largeActive?.pending || normalActive?.pending);
+  const settingsStatus = $("#settingsSaveStatus");
+  if (settingsStatus) settingsStatus.textContent = saving ? "正在保存本机设置…" : localSaveFailed ? "本机保存失败，请导出进度并检查存储空间。" : "学习设置更改后会自动保存。";
+  if (status) {
+    let message = "";
+    if (saving) message = "正在保存本机进度…";
+    else if (largeActive?.syncing || normalActive?.syncing) message = "正在同步…";
+    else if (localSaveFailed) message = "本机保存失败，打开设置导出进度";
+    else if (AUTH && !AUTH.accountId) message = "需要重新登录，打开账号查看";
+    else if (syncFailed) message = "同步未完成，打开账号查看详情";
+    else if (fsrsReplayWarning) message = "评分参数冲突，打开设置导出进度";
+    else if (Object.values(S.cards).some(c => c.pendingFsrs)) message = "评分待同步，打开账号查看";
+    status.hidden = !message;
+    status.textContent = message;
+    status.onclick = () => { commitUndoReview(); return (localSaveFailed || fsrsReplayWarning) ? showSettings() : userMenu(); };
+  }
   const el = document.querySelector("#userTag");
   if (el) el.textContent = (AUTH ? `· ${AUTH.nickname || AUTH.username}` : "· 游客（进度仅本机）") + (AUTH && !AUTH.accountId ? " ⚠️旧会话仅本机，请重新登录并核对旧存档" : "") + ((largeActive?.pending || normalActive?.pending) ? " · 本机保存中" : localSaveFailed ? " ⚠️本机保存失败，请导出进度" : "") + ((largeActive?.resumePrefFailed || normalActive?.resumePrefFailed) ? " ⚠️自动恢复设置未保存" : "") + ((largeActive?.syncing || normalActive?.syncing) ? " · 同步中" : "") + (syncFailed ? (AUTH && deltaConcurrentSlots.has(accountSlot(AUTH)) ? " ⚠️本机进度已在其他页面变化，请先导出当前页面进度，再重新加载" : " ⚠️同步失败") : "") + (Object.values(S.cards).some(c => c.pendingFsrs) ? " · 评分待同步" : "") + (fsrsReplayWarning ? " ⚠️评分参数冲突" : "");
 }
@@ -7125,9 +7191,9 @@ function authForm(mode) {
   $("#app").innerHTML = `<div class="card">
     <h2>${isLogin ? "登录" : "注册"}</h2>
     <div class="row" style="flex-direction:column;align-items:stretch;gap:10px">
-      <input type="text" id="aUser" placeholder="用户名（字母/数字/下划线，3~20 位）" style="width:100%">
-      ${isLogin ? "" : `<input type="text" id="aNick" placeholder="昵称（可中文，仅展示用）" style="width:100%">`}
-      <input type="password" id="aPass" placeholder="密码（至少 8 位）" style="width:100%">
+      <input type="text" id="aUser" aria-label="用户名" autocomplete="username" placeholder="用户名（字母/数字/下划线，3~20 位）" style="width:100%">
+      ${isLogin ? "" : `<input type="text" id="aNick" aria-label="昵称" autocomplete="nickname" placeholder="昵称（可中文，仅展示用）" style="width:100%">`}
+      <input type="password" id="aPass" aria-label="密码" autocomplete="${isLogin ? "current-password" : "new-password"}" placeholder="密码（至少 8 位）" style="width:100%">
       <button class="act" id="aGo">${isLogin ? "登录" : "注册并登录"}</button>
       <button class="act ghost" id="aBack">返回</button>
       <div class="muted" id="aMsg"></div>
@@ -7155,7 +7221,7 @@ function authForm(mode) {
 function showAwaitingServer() {
   const auth = AUTH, slot = accountSlot(auth), token = auth?.token, owner = auth?.userId;
   if (!auth || !localStorage.getItem(awaitingServerSlot(slot))) return;
-  const controls = ["#btnUser", "#btnSettings", "#btnStats"];
+  const controls = ["#btnUser", "#btnSettings", "#btnStats", "#syncStatus"];
   const enable = value => controls.forEach(id => { const el = $(id); if (el) el.disabled = !value; });
   const current = () => deltaSession(owner, token, slot) && !!localStorage.getItem(awaitingServerSlot(slot));
   enable(false);
@@ -7900,7 +7966,7 @@ $("#btnUser").onclick = () => { commitUndoReview(); userMenu(); };
 async function boot() {
   if (corruptStartup.length) {
     // 不允许空白内存状态同步或覆盖损坏槽位；由用户先导出、再决定是否清除。
-    ["#btnUser", "#btnSettings", "#btnStats"].forEach(id => { const el = $(id); if (el) el.disabled = true; });
+    ["#btnUser", "#btnSettings", "#btnStats", "#syncStatus"].forEach(id => { const el = $(id); if (el) el.disabled = true; });
     $("#app").innerHTML = `<div class="card center"><h2>本机数据无法读取</h2>
       <p>原始数据仍保留在浏览器中。请先导出损坏的学习数据；清除后可重新登录并尝试从服务器恢复。</p>
       <div class="row"><button class="ghost" id="bExportCorrupt">导出原始学习数据</button></div>

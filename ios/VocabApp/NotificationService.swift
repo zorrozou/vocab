@@ -14,7 +14,7 @@ enum NotificationService {
     static func scheduleDaily(hour: Int) {
         let content = UNMutableNotificationContent()
         content.title = "词航"
-        content.body = "今天还没背单词吗？来 10 分钟，把今天的词记住。"
+        content.body = "今天的学习时间到了，打开词航查看学习计划。"
         content.sound = .default
         var dc = DateComponents()
         dc.hour = hour
