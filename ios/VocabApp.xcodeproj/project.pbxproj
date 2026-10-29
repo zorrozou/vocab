@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		A31B5E8483624D7FAD13C170 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A31B5E8483624D7FAD13C171 /* Assets.xcassets */; };
 		000151C7D3334E8C5ED5521A /* PlacementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE5C2C058B8161F7EFBA5F26 /* PlacementView.swift */; };
 		06E4987454384F4C7DA706D7 /* SpeechService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 479F54AD39DB2C3FC05AD82E /* SpeechService.swift */; };
 		11E84D96424260DDE43030DD /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C55ADD069F1A3763B8BFEA82 /* HomeView.swift */; };
@@ -39,6 +40,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		A31B5E8483624D7FAD13C171 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		04F52F05D0467A25F754C17E /* Keychain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Keychain.swift; sourceTree = "<group>"; };
 		3208F3D855D300A027FF03C8 /* APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = APIClient.swift; sourceTree = "<group>"; };
 		3D4F8B2A41EA6D83B9F5D37D /* StatsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StatsView.swift; sourceTree = "<group>"; };
@@ -113,6 +115,7 @@
 		BA937C66CA68193F75E915B2 /* VocabApp */ = {
 			isa = PBXGroup;
 			children = (
+				A31B5E8483624D7FAD13C171 /* Assets.xcassets */,
 				3208F3D855D300A027FF03C8 /* APIClient.swift */,
 				AFB6A7E6F213B7F638C3D2C8 /* AppState.swift */,
 				528CE37515870A27DF461AEB /* AudioService.swift */,
@@ -160,6 +163,7 @@
 			buildConfigurationList = 4A42D102D693F4CAFE20EAFA /* Build configuration list for PBXNativeTarget "VocabApp" */;
 			buildPhases = (
 				A339BEA09BAC2E6C06ECEDC3 /* Sources */,
+				A31B5E8483624D7FAD13C172 /* App Resources */,
 			);
 			buildRules = (
 			);
@@ -224,6 +228,14 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		A31B5E8483624D7FAD13C172 /* App Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A31B5E8483624D7FAD13C170 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		4D64F0D8FEFF18F45C5C3BB2 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;

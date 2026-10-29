@@ -54,6 +54,17 @@ scenarios=(
   server/test_snapshot_retry_http.py
   server/test_snapshot_limits_http.py
   tests/web_study_e2e.cjs
+  tests/web_daily_budget_e2e.cjs
+  tests/web_today_plan_check.cjs
+  tests/web_today_plan_e2e.cjs
+  tests/web_fsrs_check.cjs
+  tests/web_undo_check.cjs
+  tests/web_shadow_score_check.cjs
+  tests/fsrs_replay_check.py
+  tests/fsrs_learning_intervals_http.py
+  tests/web_sentence_alternatives_e2e.cjs
+  tests/web_sentence_race_e2e.cjs
+  tests/web_sentence_layout_e2e.cjs
   tests/web_early_consolidation_e2e.cjs
   tests/web_ux_regression_e2e.cjs
   tests/web_conflict_preservation_e2e.cjs

@@ -153,11 +153,8 @@ final class SpeechService: NSObject {
 
     private func score(_ text: String,
                        segments: [SFTranscriptionSegment]? = nil) -> ShadowResult {
-        // 完整度：与 web 一致（目标句词集合命中率）
-        let exp = wordTokens(target)
-        let got = Set(wordTokens(text))
-        let hit = exp.filter { got.contains($0) }.count
-        let pct = exp.isEmpty ? 0 : Int(Double(hit) / Double(exp.count) * 100)
+        // Each recognized occurrence can cover only one target occurrence.
+        let pct = shadowCompleteness(target: target, recognized: text)
         // 置信度：词级置信度均值（0~1）；同时产出逐词置信度用于标色
         var conf = 70
         var words: [(text: String, confidence: Float)] = []

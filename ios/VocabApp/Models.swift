@@ -1,4 +1,5 @@
 import Foundation
+import Observation
 
 // MARK: - 学习状态（与 Web 端 vocab_v1 完全同构，跨端无损同步）
 // 字段清单与 web/index.html 的 defaultState() + 运行期扩展字段一一对应。
@@ -480,6 +481,41 @@ struct QuizOption: Codable, Equatable {
     var ok: Bool
 }
 
+/// Owns the brief answer highlight. Leaving or replacing a question cancels
+/// its pending callback before it can change another question or account.
+@MainActor @Observable
+final class QuizAnswerFeedback {
+    private(set) var picked: Int?
+    private var revision: UInt64 = 0
+    private var delivery: Task<Void, Never>?
+    private let wait: () async throws -> Void
+
+    init(wait: @escaping () async throws -> Void = { try await Task.sleep(nanoseconds: 650_000_000) }) {
+        self.wait = wait
+    }
+
+    func choose(_ index: Int, correct: Bool, commit: @escaping (Bool) -> Void) {
+        guard picked == nil else { return }
+        picked = index
+        revision &+= 1
+        let current = revision
+        delivery = Task {
+            do { try await wait() } catch { return }
+            guard !Task.isCancelled, current == revision else { return }
+            picked = nil
+            delivery = nil
+            commit(correct)
+        }
+    }
+
+    func cancel() {
+        revision &+= 1
+        delivery?.cancel()
+        delivery = nil
+        picked = nil
+    }
+}
+
 struct Quiz: Codable {
     var word: String
     var pos: Int
@@ -656,4 +692,16 @@ func wordTokens(_ t: String) -> [String] {
         .split(separator: #/[^a-z']+/#)
         .map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "'")) }
         .filter { !$0.isEmpty }
+}
+
+func shadowCompleteness(target: String, recognized: String) -> Int {
+    let expected = wordTokens(target)
+    guard !expected.isEmpty else { return 0 }
+    var remaining = Dictionary(wordTokens(recognized).map { ($0, 1) }, uniquingKeysWith: +)
+    var hits = 0
+    for word in expected where (remaining[word] ?? 0) > 0 {
+        hits += 1
+        remaining[word, default: 0] -= 1
+    }
+    return Int((Double(hits) / Double(expected.count) * 100).rounded())
 }

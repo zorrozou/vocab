@@ -10,8 +10,8 @@ enum Theme {
     static let accentLight = Color(.sRGB, red: 0.373, green: 0.612, blue: 0.925, opacity: 1) // #5f9cec
     static let ok = Color(.sRGB, red: 0.203, green: 0.780, blue: 0.540, opacity: 1)
     static let warn = Color(.sRGB, red: 0.910, green: 0.580, blue: 0.220, opacity: 1)
-    static let bad = Color(.sRGB, red: 0.860, green: 0.290, blue: 0.290, opacity: 1)
-    static let muted = Color(.sRGB, red: 0.480, green: 0.520, blue: 0.580, opacity: 1)
+    static let bad = Color(.sRGB, red: 0.941, green: 0.467, blue: 0.467, opacity: 1)
+    static let muted = Color(.sRGB, red: 0.580, green: 0.620, blue: 0.680, opacity: 1)
     static let text = Color(.sRGB, red: 0.910, green: 0.930, blue: 0.960, opacity: 1)
 }
 
@@ -180,7 +180,9 @@ struct BigWord: View {
     let word: String
     var body: some View {
         Text(word)
-            .font(.system(size: 38, weight: .bold))
+            .font(.largeTitle.weight(.bold))
+            .lineLimit(2)
+            .minimumScaleFactor(0.7)
             .foregroundStyle(Theme.text)
     }
 }
@@ -264,13 +266,16 @@ struct SentenceRow: View {
                         }
                     }
                 } label: {
-                    if swapping {
-                        ProgressView().scaleEffect(0.7)
-                    } else {
-                        Image(systemName: "arrow.clockwise")
-                            .font(.system(size: 16))
-                            .foregroundStyle(Theme.muted)
+                    Group {
+                        if swapping {
+                            ProgressView().scaleEffect(0.7)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                                .font(.system(size: 16))
+                                .foregroundStyle(Theme.muted)
+                        }
                     }
+                    .frame(minWidth: 44, minHeight: 44)
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("换一句：\(word)")
@@ -296,18 +301,13 @@ struct SentenceRow: View {
 struct QuizOptionsView: View {
     let options: [QuizOption]
     let onPick: (Bool) -> Void
-    @State private var picked: Int? = nil
+    @State private var feedback = QuizAnswerFeedback()
 
     var body: some View {
         VStack(spacing: 8) {
             ForEach(Array(options.enumerated()), id: \.offset) { i, o in
                 Button {
-                    guard picked == nil else { return }
-                    picked = i
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.65) {
-                        onPick(o.ok)
-                        picked = nil
-                    }
+                    feedback.choose(i, correct: o.ok, commit: onPick)
                 } label: {
                     Text(o.text)
                         .font(.system(size: 16))
@@ -318,13 +318,15 @@ struct QuizOptionsView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
                 .accessibilityIdentifier("quiz-option-\(i)")
-                .disabled(picked != nil)
+                .disabled(feedback.picked != nil)
             }
         }
+        .onChange(of: options) { _, _ in feedback.cancel() }
+        .onDisappear { feedback.cancel() }
     }
 
     private func bg(for i: Int, ok: Bool) -> Color {
-        guard let p = picked else { return Theme.cardDeep }
+        guard let p = feedback.picked else { return Theme.cardDeep }
         if ok { return Theme.ok.opacity(0.35) }
         if p == i { return Theme.bad.opacity(0.35) }
         return Theme.cardDeep.opacity(0.5)
