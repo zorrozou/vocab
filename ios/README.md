@@ -66,9 +66,19 @@ VocabApp/
 
 - M1.5：跟读升级 SpeechAnalyzer（iOS 26+ 无时长限制 + 词级时间戳 → 流利度子分）
 - M2：离线模式（`/api/v1/lexicon/download` 整包起包 + 本地调度）、本地通知提醒
-- 当前无单元测试（调度逻辑与 Web 对拍验证过；Xcode 就位后补 StudyEngine 单测）
+- 逻辑回归包含学习日期、时区及调度等检查；更多场景通过隔离模拟器验证。
 - 首次 Xcode 构建如遇小问题（签名/版本警告类），按提示处理或找我修
 
 ### 隔离的模拟器界面回归
 
 在安装了 Xcode、iOS 模拟器运行时和服务端依赖的环境中，先启动 `python tests/ui_stub_server.py`。该服务复制词库到临时目录并使用替身生成服务，不读写项目用户库。确认目标模拟器已启动后，在另一个终端执行 `tests/run_ios_ui_regression.sh <模拟器 UDID> guest` 或 `tests/run_ios_ui_regression.sh <模拟器 UDID> account` 或 `tests/run_ios_ui_regression.sh <模拟器 UDID> offline` 或 `tests/run_ios_ui_regression.sh <模拟器 UDID> recovery`。离线用例模拟评分和状态上传服务不可用，并在恢复后核对重放结果；它不模拟设备网络切换。脚本使用临时 Xcode 项目和独立应用标识，测试仅连接本机隔离服务；运行结束会卸载该测试应用。
+
+学习日期和本地时区的独立回归（在仓库根目录执行）：
+
+```sh
+xcrun swiftc ios/VocabApp/Models.swift tests/ios_local_noon_regression.swift -o /tmp/vocab-local-noon-test
+TZ=Asia/Shanghai /tmp/vocab-local-noon-test 2026-10-29 2026-10-29T04:00:00Z
+TZ=America/New_York /tmp/vocab-local-noon-test 2026-03-08 2026-03-08T16:00:00Z
+TZ=America/New_York /tmp/vocab-local-noon-test 2026-11-01 2026-11-01T17:00:00Z
+TZ=Pacific/Kiritimati /tmp/vocab-local-noon-test 2026-10-29 2026-10-28T22:00:00Z
+```

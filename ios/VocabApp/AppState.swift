@@ -1111,7 +1111,7 @@ final class AppState {
 
     /// 该词上一次学习/复习日期（从日志推导，含历史老卡），用于 FSRS 计算真实经过天数
     private func lastReviewDate(_ word: String) -> String? {
-        S.log.last { $0.word == word && ($0.kind == "learn" || $0.kind == "review") }?.d
+        S.lastStudyDay(for: word)
     }
 
     /// 对同一张卡按原始发生时间重算；只有全部成功才替换卡片，失败保留完整队列。
@@ -1471,8 +1471,8 @@ final class AppState {
             let (w, c) = pair
             guard !completed.contains(w) else { return false }
             guard !StudyEngine.isMastered(c), let dueD = DayUtil.parseISO(c.due), dueD > now else { return false }
-            guard let last = S.log.reversed().first(where: { $0.word == w }) else { return false }
-            guard let lastD = DayUtil.parseISO(last.d + "T12:00:00Z") else { return false }
+            guard let last = lastReviewDate(w) else { return false }
+            guard let lastD = DayUtil.localNoon(last) else { return false }
             let elapsed = now.timeIntervalSince(lastD) / 86400
             guard elapsed >= 1, elapsed <= 7 else { return false }
             let r = StudyEngine.retrievability(c, elapsedDays: elapsed)

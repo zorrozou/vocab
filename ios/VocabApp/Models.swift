@@ -567,6 +567,13 @@ struct FsrsResponse: Codable {
 // MARK: - 日期工具（"今天"用设备本地日期——UTC 日期会让 UTC+8 用户上午被错判成"昨天"，
 // 导致验收测试/streak/每日上限全部按错误的日界工作。log/due 的历史 UTC 日期戳向前兼容）
 
+extension LearningState {
+    /// Exposure and pronunciation events do not change the last study day.
+    func lastStudyDay(for word: String) -> String? {
+        log.last { $0.word == word && ($0.kind == "learn" || $0.kind == "review") }?.d
+    }
+}
+
 enum DayUtil {
     private static let dayFmt: DateFormatter = {
         let f = DateFormatter()
@@ -588,6 +595,13 @@ enum DayUtil {
 
     static func today() -> String { dayFmt.string(from: Date()) }
     static func localDay(_ date: Date) -> String { dayFmt.string(from: date) }
+
+    /// Match Web's local-noon interpretation of a learning day.
+    static func localNoon(_ day: String) -> Date? {
+        guard day.range(of: #"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"#, options: .regularExpression) != nil,
+              let start = dayFmt.date(from: day), dayFmt.string(from: start) == day else { return nil }
+        return Calendar.current.date(bySettingHour: 12, minute: 0, second: 0, of: start)
+    }
 
     static func addDays(_ d: String, _ n: Int) -> String {
         guard let base = dayFmt.date(from: d) else { return d }

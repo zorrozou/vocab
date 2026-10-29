@@ -967,9 +967,9 @@ async function buildQueue(stillOnPage = () => true) {
   const nowD = new Date();
   const earlyPool = Object.entries(S.cards).filter(([w, c]) => {
     if (completed.has(w) || isMastered(c) || new Date(c.due) <= nowD) return false;
-    const last = [...S.log].reverse().find(l => l.word === w);
+    const last = lastReviewDate(w);
     if (!last) return false;
-    const elapsed = (nowD - new Date(last.d + "T12:00:00")) / 86400000;
+    const elapsed = (nowD - new Date(last + "T12:00:00")) / 86400000;
     if (elapsed > 7 || elapsed < 1) return false;   // 昨天刚过的才进入概率池
     const S0 = c.fsrs ? Math.max(0.2, c.fsrs.stability) : 2;
     const R = Math.pow(1 + 0.9805 * elapsed / S0, -0.1542);
