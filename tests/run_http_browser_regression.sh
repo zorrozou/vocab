@@ -23,6 +23,7 @@ if curl --max-time 2 --silent http://127.0.0.1:18765/ >/dev/null; then
 fi
 scenarios=(
   tests/test_ui_fixture_cleanup.py
+  server/test_scheduled_backup.py
   server/test_restore_api.py
   server/test_guarded_restore_receipt_http.py
   server/test_guarded_checkpoint_receipt_http.py

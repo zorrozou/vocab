@@ -1,0 +1,10 @@
+[Unit]
+Description=Create a verified local vocab data backup
+After=local-fs.target
+
+[Service]
+Type=oneshot
+User=ubuntu
+UMask=0077
+Nice=10
+ExecStart=/usr/bin/python3 /home/ubuntu/vocab-api/maintenance/scheduled_backup.py --data /home/ubuntu/vocab-api/data --root /home/ubuntu/vocab-auto-backups --keep 30
