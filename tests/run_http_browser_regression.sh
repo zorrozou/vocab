@@ -53,6 +53,7 @@ scenarios=(
   server/test_snapshot_limits_http.py
   tests/web_study_e2e.cjs
   tests/web_ux_regression_e2e.cjs
+  tests/web_conflict_preservation_e2e.cjs
   tests/web_large_local_store_e2e.cjs
   tests/web_normal_durable_store_e2e.cjs
   tests/web_normal_v5_upgrade_e2e.cjs

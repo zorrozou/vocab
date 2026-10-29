@@ -350,6 +350,20 @@ function trimLearningLog(log, day = today()) {
   return log.filter((_, index) => index >= start || keep.has(index));
 }
 const save = () => {
+  // A blocked or stale page must retain its exact in-memory state for export.
+  // In particular, don't trim its history before rejecting a conflicting write.
+  if (!largeActive && !normalActive) {
+    try {
+      const slot = accountSlot(AUTH);
+      if (deltaConcurrentSlots.has(slot) || (observedSlotValues.has(slot) && localStorage.getItem(slot) !== observedSlotValues.get(slot))) {
+        if (!deltaConcurrentSlots.has(slot)) blockConcurrentSlotChange(slot);
+        localSaveFailed = true;
+        clearTimeout(save._t);
+        renderUserTag();
+        return;
+      }
+    } catch (_) { localSaveFailed = true; clearTimeout(save._t); renderUserTag(); return; }
+  }
   // 限制日志条数；卡片和事件仍会增长，网络同步还有独立的字节上限。
   if (S.log.length > 1200) S.log = trimLearningLog(S.log);
   if (largeActive) return queueLargeSave(largeActive);
@@ -7113,12 +7127,15 @@ async function syncFromServer(stillCurrent = () => true) {
 function renderUserTag() {
   const status = $("#syncStatus");
   const saving = !!(largeActive?.pending || normalActive?.pending);
+  let concurrent = false;
+  try { concurrent = deltaConcurrentSlots.has(accountSlot(AUTH)); } catch (_) {}
   const settingsStatus = $("#settingsSaveStatus");
-  if (settingsStatus) settingsStatus.textContent = saving ? "正在保存本机设置…" : localSaveFailed ? "本机保存失败，请导出进度并检查存储空间。" : "学习设置更改后会自动保存。";
+  if (settingsStatus) settingsStatus.textContent = saving ? "正在保存本机设置…" : concurrent ? "本机存档与本页面不一致，请先导出当前页面进度并核对，再重新加载。" : localSaveFailed ? "本机保存失败，请导出进度并检查存储空间。" : "学习设置更改后会自动保存。";
   if (status) {
     let message = "";
     if (saving) message = "正在保存本机进度…";
     else if (largeActive?.syncing || normalActive?.syncing) message = "正在同步…";
+    else if (concurrent) message = "本机进度存在冲突，打开设置导出当前页面进度";
     else if (localSaveFailed) message = "本机保存失败，打开设置导出进度";
     else if (AUTH && !AUTH.accountId) message = "需要重新登录，打开账号查看";
     else if (syncFailed) message = "同步未完成，打开账号查看详情";
