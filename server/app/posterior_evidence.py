@@ -15,6 +15,46 @@ def valid_id(value):
     return isinstance(value, str) and bool(re.fullmatch(r'[a-zA-Z0-9_-]{1,100}', value))
 
 
+def study_scope(key):
+    match = re.fullmatch(r'([pr])1_(\d{4}-\d{2}-\d{2})_([0-9a-f]{32})_[0-9a-f]{32}', key)
+    return match.groups() if match else None
+
+
+def preserve_study_budget(state):
+    """Persist a conservative used-weight counter before history compaction."""
+    per_word = {}
+    for key, event in (state.get('posteriorHistory') or {}).get('events', {}).items():
+        scope = study_scope(key)
+        if scope and scope[0] == 'r':
+            per_word[scope] = max(per_word.get(scope, 0), event['weight'])
+    totals = {}
+    for (_, day, _), weight in per_word.items():
+        totals[day] = min(1.5, totals.get(day, 0) + weight)
+    if not totals:
+        return state
+    raw_track = state.get('track')
+    if raw_track is not None and not isinstance(raw_track, dict):
+        fail(422, '水平追踪记录格式无效')
+    track = dict(raw_track or {})
+    previous_day = track.get('dayWDay') or ''
+    if not isinstance(previous_day, str):
+        fail(422, '水平证据日期无效')
+    if previous_day:
+        try:
+            if date.fromisoformat(previous_day).isoformat() != previous_day:
+                raise ValueError()
+        except ValueError:
+            fail(422, '水平证据日期无效')
+    day = max(totals)
+    if day < previous_day:
+        return state
+    prior = (track.get('dayW') or 0) if previous_day == day else 0
+    if not isinstance(prior, (int, float)) or isinstance(prior, bool) or not math.isfinite(prior) or prior < 0:
+        fail(422, '水平证据权重无效')
+    track.update(dayWDay=day, dayW=max(prior, totals[day]))
+    return {**state, 'track': track}
+
+
 def replay(history, *, client_arithmetic=False):
     events = history['events']
     degree = {key: len(event['parents']) for key, event in events.items()}
@@ -30,11 +70,31 @@ def replay(history, *, client_arithmetic=False):
     post = list(post) if post is not None else None
     count = history['baseCount']
     diffused, visited = set(), 0
+    observed, passive_weight = set(), {}
     while ready:
         _, key = heapq.heappop(ready)
         event = events[key]
         visited += 1
         if event['kind'] == 'update':
+            weight = event['weight']
+            scope = study_scope(key)
+            if scope:
+                if scope in observed:
+                    weight = 0
+                else:
+                    observed.add(scope)
+                    if scope[0] == 'r':
+                        used = passive_weight.get(event['day'], 0)
+                        weight = min(weight, max(0, 1.5 - used))
+                        passive_weight[event['day']] = used + weight
+            # Preserve legacy UUID evidence exactly. Only the new namespace
+            # participates in cross-device deduplication and the passive budget.
+            if scope and weight <= 1e-12:
+                for child in children[key]:
+                    degree[child] -= 1
+                    if degree[child] == 0:
+                        heapq.heappush(ready, (events[child]['day'], child))
+                continue
             post = post if post is not None else [1 / 49] * 49
             result = []
             for i, value in enumerate(post):
@@ -46,7 +106,7 @@ def replay(history, *, client_arithmetic=False):
                           else (1 - event['guess']) / denominator)
                 pk = event['guess'] + scaled
                 likelihood = event['resp'] * pk + (1 - event['resp']) * (1 - pk)
-                result.append(value * likelihood ** event['weight'])
+                result.append(value * likelihood ** weight)
             total = sum(result)
             if total <= 0 or not math.isfinite(total):
                 fail(422, '后验证据计算失败')
@@ -85,6 +145,9 @@ def validate(state):
     for key, event in events.items():
         if not valid_id(key) or not isinstance(event, dict) or event.get('kind') not in ('update', 'diffuse') or not valid_id(event.get('device')) or not isinstance(event.get('at'), str) or len(event['at']) > 64:
             fail(422, '后验证据事件无效')
+        scope = study_scope(key)
+        if key.startswith(('p1_', 'r1_')) and (not scope or event['kind'] != 'update' or scope[1] != event.get('day')):
+            fail(422, '学习证据身份或日期无效')
         parents = event.get('parents')
         if not isinstance(parents, list) or any(not valid_id(p) for p in parents) or len(parents) != len(set(parents)):
             fail(422, '后验证据因果关系无效')
@@ -97,6 +160,8 @@ def validate(state):
             rank, resp, weight, guess = (event.get(k) for k in ('rank', 'resp', 'weight', 'guess'))
             if not isinstance(rank, int) or isinstance(rank, bool) or not 0 <= rank <= 12000 or resp not in (0, 1) or isinstance(resp, bool) or any(not isinstance(x, (int, float)) or isinstance(x, bool) or not math.isfinite(x) for x in (weight, guess)) or not 0 <= weight <= 10 or not 0 <= guess < 1:
                 fail(422, '后验答题事件无效')
+            if scope and (weight <= 0 or (scope[0] == 'p' and (weight != 1 or guess != .25)) or (scope[0] == 'r' and weight > .4)):
+                fail(422, '学习证据权重无效')
     post, n = replay(history)
     actual = state.get('posterior')
     if n != state.get('probeCount', 0) or (post is None) != (actual is None):
@@ -125,7 +190,7 @@ def canonicalize(state):
     if history is None:
         return state
     post, count = replay(history)
-    return {**state, 'posterior': post, 'probeCount': count}
+    return preserve_study_budget({**state, 'posterior': post, 'probeCount': count})
 
 
 def anchor(state):

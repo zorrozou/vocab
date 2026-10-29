@@ -220,6 +220,7 @@ struct SharedStudyPlan: Codable, Equatable {
     struct Item: Codable, Equatable {
         var word, kind: String
         var new_word, probe_word, completed, from_pending: Bool
+        var probe_evidence_key, review_evidence_key: String
     }
     var account_id, day: String
     var cap, new_target: Int
@@ -229,16 +230,26 @@ struct SharedStudyPlan: Codable, Equatable {
     var over_limit, requires_sync: Bool
 
     func valid(account: String, day: String) -> Bool {
-        account_id == account && self.day == day && (0...10000).contains(cap) &&
+        func validKey(_ key: String, _ source: String) -> Bool {
+            key.hasPrefix(source + "1_" + day + "_") && key.count == 47 && key.hasSuffix("_") &&
+            key.dropFirst(14).dropLast().allSatisfy { "0123456789abcdef".contains($0) }
+        }
+        return account_id == account && self.day == day && (0...10000).contains(cap) &&
         (0...10000).contains(configured_cap) && (0...10000).contains(configured_new_per_day) &&
         (0...cap).contains(new_target) && items.count <= 10000 &&
         Set(items.map(\.word)).count == items.count &&
-        items.allSatisfy { !$0.word.isEmpty && $0.word.count <= 100 && ["learn","review","probe"].contains($0.kind) }
+        Set(items.map(\.probe_evidence_key)).count == items.count && Set(items.map(\.review_evidence_key)).count == items.count &&
+        items.allSatisfy { !$0.word.isEmpty && $0.word.count <= 100 && ["learn","review","probe"].contains($0.kind) &&
+            validKey($0.probe_evidence_key,"p") && validKey($0.review_evidence_key,"r") }
     }
 
     func permits(word: String, kind: String) -> Bool {
         guard let item = items.first(where: { $0.word == word }) else { return false }
         return kind == "learn" ? item.new_word : kind == "probe" ? item.probe_word : kind == "review"
+    }
+    func evidenceKey(word: String, kind: String) -> String? {
+        guard let item = items.first(where: { $0.word == word }) else { return nil }
+        return kind == "probe" ? item.probe_evidence_key : item.review_evidence_key
     }
 }
 

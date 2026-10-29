@@ -709,12 +709,16 @@ function admitStudy(word, kind) {
 
 let sharedStudyPlan = null;
 function validSharedPlan(plan, account, day) {
+  const evidenceKey = (key, kind) => typeof key === "string" && new RegExp("^"+kind+"1_"+day+"_[a-f0-9]{32}_$").test(key);
   return plan && plan.account_id === account && plan.day === day && Number.isSafeInteger(plan.cap) && plan.cap >= 0 && plan.cap <= 10000 &&
     Number.isSafeInteger(plan.new_target) && plan.new_target >= 0 && plan.new_target <= plan.cap && Array.isArray(plan.items) && plan.items.length <= 10000 &&
     [plan.configured_cap,plan.configured_new_per_day].every(n=>Number.isSafeInteger(n)&&n>=0&&n<=10000) &&
     Array.isArray(plan.approved) && typeof plan.over_limit === "boolean" && typeof plan.requires_sync === "boolean" &&
     new Set(plan.items.map(i => i.word)).size === plan.items.length && plan.items.every(i => typeof i.word === "string" && i.word.length > 0 && i.word.length <= 100 &&
-      ["learn","review","probe"].includes(i.kind) && [i.new_word,i.probe_word,i.completed,i.from_pending].every(x => typeof x === "boolean"));
+      ["learn","review","probe"].includes(i.kind) && [i.new_word,i.probe_word,i.completed,i.from_pending].every(x => typeof x === "boolean") &&
+      evidenceKey(i.probe_evidence_key,"p") && evidenceKey(i.review_evidence_key,"r")) &&
+    new Set(plan.items.map(i=>i.probe_evidence_key)).size === plan.items.length &&
+    new Set(plan.items.map(i=>i.review_evidence_key)).size === plan.items.length;
 }
 function cachedSharedPlan() {
   const account = AUTH?.accountId, day = today();
@@ -729,6 +733,10 @@ function cachedSharedPlan() {
 function sharedPlanPermits(plan, word, kind) {
   const item = plan?.items.find(i => i.word === word);
   return !!item && (kind === "learn" ? item.new_word : kind === "probe" ? item.probe_word : kind === "review");
+}
+function sharedEvidenceKey(word, kind) {
+  const item = cachedSharedPlan()?.items.find(i=>i.word===word);
+  return kind === "probe" ? item?.probe_evidence_key : item?.review_evidence_key;
 }
 function sharedStudyIssue(word, kind) {
   if (!AUTH) return null;
@@ -902,11 +910,13 @@ async function review(word, rating, allowUndo = false, acceptance = false, verif
   if (S.calibrated && p && delayedEvidence) {
     const tr = S.track || {};
     if (tr.dayWDay !== today()) { tr.dayW = 0; tr.dayWDay = today(); }
+    tr.dayW = Math.max(tr.dayW || 0, passiveEvidenceWeight(S,today()));
     let w = 0, resp = 1;
     if (rating === 1) { w = preStab >= 21 ? 0.4 : 0.2; resp = 0; }
     else if (p > postMean()) { w = 0.15; }
-    if (w > 0 && (tr.dayW || 0) + w <= 1.5) {
-      posteriorUpdate(p, resp, w, Number.isSafeInteger(verifiedPos) && verifiedPos > 0 ? 0.25 : 0);
+    const evidenceKey = AUTH ? sharedEvidenceKey(word,"review") : null;
+    if (w > 0 && (tr.dayW || 0) + w <= 1.5 && (!AUTH || evidenceKey) &&
+        posteriorUpdate(p, resp, w, Number.isSafeInteger(verifiedPos) && verifiedPos > 0 ? 0.25 : 0, evidenceKey)) {
       tr.dayW = (tr.dayW || 0) + w;
       S.track = tr;
     }
@@ -941,22 +951,36 @@ function posteriorCalc(post, rank, resp, weight = 1.0, guess = 0) {
   });
   return out.map(v => v / sum);
 }
-function recordPosterior(kind, extra = {}) {
+function passiveEvidenceWeight(state, day) {
+  const weights = new Map();
+  for (const [id,event] of Object.entries(state.posteriorHistory?.events || {})) {
+    if (id.startsWith("r1_"+day+"_") && event.kind === "update") {
+      const key = id.slice(0,id.lastIndexOf("_")+1);
+      weights.set(key,Math.max(weights.get(key)||0,event.weight||0));
+    }
+  }
+  return Math.min(1.5,[...weights.values()].reduce((a,b)=>a+b,0));
+}
+function recordPosterior(kind, extra = {}, evidenceKey = null) {
   if (!S.posteriorHistory) {
     const empty = !S.posterior && !S.probeCount;
     S.posteriorHistory = {algorithm:"bayes-grid-1", baseId:empty ? "empty" : (crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")), base:structuredClone(S.posterior || null), baseCount:S.probeCount || 0, events:{}};
   }
   const history = S.posteriorHistory, events = history.events;
+  if (evidenceKey && Object.keys(events).some(id=>id.startsWith(evidenceKey))) return false;
   const parents = new Set(Object.values(events).flatMap(event => event.parents));
   const heads = Object.keys(events).filter(id => !parents.has(id)).sort();
-  const id = (crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join(""));
+  const uuid = (crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join(""));
+  const id = evidenceKey ? evidenceKey + uuid.replaceAll("-","") : uuid;
   let device; try { device = versionDevice(); } catch (_) { device = id; }
   events[id] = {kind, device, at:new Date().toISOString(), day:today(), parents:heads, ...extra};
+  return true;
 }
-function posteriorUpdate(rank, resp, weight = 1.0, guess = 0) {
-  recordPosterior("update", {rank, resp, weight, guess});
+function posteriorUpdate(rank, resp, weight = 1.0, guess = 0, evidenceKey = null) {
+  if (!recordPosterior("update", {rank, resp, weight, guess}, evidenceKey)) return false;
   S.posterior = posteriorCalc(S.posterior, rank, resp, weight, guess);
   S.probeCount++;
+  return true;
 }
 const posteriorMean = post => post ? post.reduce((a, p, i) => a + GRID[i] * p, 0) : 0;
 const posteriorStd = post => {
@@ -1566,7 +1590,8 @@ async function showProbe(item) {
 /* v1.4 探测作答：全额证据；正反向均为四选一，猜测率 0.25；答错 → 进明日新词候选 */
 function answerProbe(w, ok) {
   if (!admitStudy(w.word, "probe")) return false;
-  posteriorUpdate(w.pos || S.pointer, ok ? 1 : 0, 1.0, 0.25);
+  const evidenceKey = AUTH ? sharedEvidenceKey(w.word,"probe") : null;
+  if (!AUTH || evidenceKey) posteriorUpdate(w.pos || S.pointer, ok ? 1 : 0, 1.0, 0.25, evidenceKey);
   S.log.push({ eventId: (crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")), d: today(), word: w.word, rating: ok ? 4 : 1, kind: "probe", reverse: !!w.reverse });
   if (!ok && !S.cards[w.word] && !S.pendingNew.find(x => x.word === w.word)) {
     S.pendingNew.push({ word: w.word, pos: w.pos });

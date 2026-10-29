@@ -495,26 +495,43 @@ enum StudyEngine {
         return sum > 0 ? out.map { $0 / sum } : out
     }
 
-    static func recordPosterior(_ s: inout LearningState, kind: String, rank: Int? = nil, resp: Double? = nil, weight: Double? = nil, guess: Double? = nil) {
+    static func passiveEvidenceWeight(_ s: LearningState, day: String) -> Double {
+        var weights: [String:Double] = [:]
+        for (id,event) in s.posteriorHistory?.events ?? [:] where id.hasPrefix("r1_" + day + "_") && event.kind == "update" {
+            guard let end = id.lastIndex(of:"_") else { continue }
+            let key = String(id[...end])
+            weights[key] = max(weights[key] ?? 0,event.weight ?? 0)
+        }
+        return min(1.5,weights.values.reduce(0,+))
+    }
+
+    @discardableResult
+    static func recordPosterior(_ s: inout LearningState, kind: String, rank: Int? = nil, resp: Double? = nil, weight: Double? = nil, guess: Double? = nil, evidenceKey: String? = nil) -> Bool {
         if s.posteriorHistory == nil {
             let empty = s.posterior == nil && s.probeCount == 0
             s.posteriorHistory = PosteriorHistory(baseId: empty ? "empty" : UUID().uuidString.lowercased(), base: s.posterior, baseCount: s.probeCount)
         }
-        guard var history = s.posteriorHistory else { return }
+        guard var history = s.posteriorHistory else { return false }
+        if let evidenceKey, history.events.keys.contains(where: { $0.hasPrefix(evidenceKey) }) { return false }
         let parents = Set(history.events.values.flatMap { $0.parents })
         let heads = history.events.keys.filter { !parents.contains($0) }.sorted()
         let defaults = UserDefaults.standard, key = "vocab_settings_device"
         let device = defaults.string(forKey: key) ?? UUID().uuidString.lowercased()
         defaults.set(device, forKey: key)
         let event = PosteriorEvent(kind: kind, device: device, at: ISO8601DateFormatter().string(from: Date()), day: DayUtil.today(), parents: heads, rank: rank, resp: resp, weight: weight, guess: guess)
-        history.events[UUID().uuidString.lowercased()] = event
+        let uuid = UUID().uuidString.lowercased()
+        let id = evidenceKey.map { $0 + uuid.replacingOccurrences(of:"-",with:"") } ?? uuid
+        history.events[id] = event
         s.posteriorHistory = history
+        return true
     }
 
-    static func posteriorUpdate(_ s: inout LearningState, rank: Int, resp: Double, weight: Double = 1.0, guess: Double = 0) {
-        recordPosterior(&s, kind: "update", rank: rank, resp: resp, weight: weight, guess: guess)
+    @discardableResult
+    static func posteriorUpdate(_ s: inout LearningState, rank: Int, resp: Double, weight: Double = 1.0, guess: Double = 0, evidenceKey: String? = nil) -> Bool {
+        guard recordPosterior(&s, kind: "update", rank: rank, resp: resp, weight: weight, guess: guess, evidenceKey: evidenceKey) else { return false }
         s.posterior = posteriorCalc(s.posterior, rank: rank, resp: resp, weight: weight, guess: guess)
         s.probeCount += 1
+        return true
     }
 
     static func posteriorMean(_ p: [Double]?) -> Double {

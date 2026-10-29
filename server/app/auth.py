@@ -13,7 +13,7 @@ from pathlib import Path
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
-from app.posterior_evidence import anchor as anchor_posterior, validate as validate_posterior, merge as merge_posterior, replay as replay_posterior, canonicalize as canonicalize_posterior
+from app.posterior_evidence import anchor as anchor_posterior, validate as validate_posterior, merge as merge_posterior, replay as replay_posterior, canonicalize as canonicalize_posterior, preserve_study_budget
 from app.streak_evidence import anchor as anchor_streak, validate as validate_streak, merge as merge_streak, calculate as calculate_streak
 from app.limits import check_rate
 from app import daily_study, delta_staging, state_segments, state_verification_cache
@@ -1339,7 +1339,7 @@ def merge_learning_states(old, new):
     else:
         out.pop("streakEvidence", None)
     out["v"] = max(int(old.get("v", 1)), int(new.get("v", 1)))
-    return out
+    return preserve_study_budget(out)
 
 
 def checkpoint_learning_state(state):

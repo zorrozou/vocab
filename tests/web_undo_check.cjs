@@ -9,7 +9,7 @@ let failWrites = false, pulls = 0;
 const values = {};
 values['vocab_daily_plan_v1:'+'a'.repeat(32)] = JSON.stringify({account_id:'a'.repeat(32),day:'2026-10-27',cap:100,new_target:10,
   configured_cap:100,configured_new_per_day:10,approved:[],requires_sync:false,over_limit:false,
-  items:[{word:'apple',kind:'review',new_word:false,probe_word:false,completed:false,from_pending:false}]});
+  items:[{word:'apple',kind:'review',new_word:false,probe_word:false,completed:false,from_pending:false,probe_evidence_key:'p1_2026-10-27_'+'a'.repeat(32)+'_',review_evidence_key:'r1_2026-10-27_'+'a'.repeat(32)+'_'}]});
 const ctx = {
   AUTH: {userId: 1, accountId:'a'.repeat(32)}, S: {cards: {apple: {pos: 1, fsrs: {state: 2, stability: 5, difficulty: 4,
     due: '2026-10-28', lastReview: '2026-10-20T00:00:00Z'}}}, log: [], knowledge: {}, posterior: [1],

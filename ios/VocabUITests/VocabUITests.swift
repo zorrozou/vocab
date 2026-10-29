@@ -1478,6 +1478,37 @@ final class VocabUITests: XCTestCase {
         }
     }
 
+    @MainActor func testSharedProbeCountsEvidenceOnce() async throws {
+        continueAfterFailure = false
+        let format = DateFormatter(); format.locale = Locale(identifier:"en_US_POSIX"); format.dateFormat = "yyyy-MM-dd"
+        let seed = try await fixtureRequest("/api/v1/__ui_fixture/shared-probe-case",method:"POST",
+            body:["day":format.string(from:Date()),"offset_minutes":TimeZone.current.secondsFromGMT()/60])
+        let username = try XCTUnwrap(seed["username"] as? String), password = try XCTUnwrap(seed["password"] as? String)
+        let token = try XCTUnwrap(seed["token"] as? String)
+        let app = XCUIApplication(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
+        XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30)); app.buttons["登录"].tap()
+        let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
+        XCTAssertTrue(user.waitForExistence(timeout:20)); user.tap(); user.typeText(username)
+        pass.tap(); pass.typeText(password); app.buttons["登录"].tap()
+        XCTAssertTrue(app.buttons["start-today"].waitForExistence(timeout:30)); app.buttons["start-today"].tap()
+        XCTAssertTrue(app.staticTexts["apple"].waitForExistence(timeout:30))
+        XCTAssertTrue(app.buttons["quiz-option-0"].waitForExistence(timeout:20))
+        _ = try await fixtureRequest("/api/v1/__ui_fixture/shared-probe-other-answer",method:"POST")
+        app.buttons["quiz-option-0"].tap()
+        var state: [String:Any] = [:]
+        for _ in 0..<300 {
+            state = (try await fixtureRequest("/api/v1/me/state",token:token))["state"] as? [String:Any] ?? [:]
+            if (state["log"] as? [[String:Any]] ?? []).filter({ ($0["kind"] as? String)=="probe" }).count == 2 { break }
+            try await Task.sleep(for:.milliseconds(100))
+        }
+        let logs = try XCTUnwrap(state["log"] as? [[String:Any]])
+        XCTAssertEqual(logs.filter { ($0["kind"] as? String)=="probe" }.count,2)
+        XCTAssertEqual(state["probeCount"] as? Int,1)
+        let history = try XCTUnwrap(state["posteriorHistory"] as? [String:Any])
+        let events = try XCTUnwrap(history["events"] as? [String:Any])
+        XCTAssertEqual(events.count,2); XCTAssertTrue(events.keys.allSatisfy { $0.hasPrefix("p1_") })
+    }
+
     @MainActor func testSharedDailyPlanSurvivesRestart() async throws {
         continueAfterFailure = false
         let format = DateFormatter(); format.locale = Locale(identifier: "en_US_POSIX"); format.dateFormat = "yyyy-MM-dd"

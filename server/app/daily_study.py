@@ -5,6 +5,7 @@ an earlier response. Settings reductions therefore cannot revoke issued slots.
 Actual historical grades are imported even if an old client exceeded the cap;
 this freezes further admission instead of deleting real learning history.
 """
+import hashlib
 import json
 import sqlite3
 from contextlib import closing
@@ -133,4 +134,12 @@ def mount(app, db_path, identity_by_token, load_state):
                 (account, body.day, plan["cap"], plan["new_target"], json.dumps(plan["items"], ensure_ascii=False, separators=(",", ":"))))
             conn.execute("DELETE FROM daily_study_plan WHERE account_id=? AND day<?", (account, (now.date()-timedelta(days=30)).isoformat()))
         # The identity binds an offline cache to this account, not a reusable uid.
+        # A versioned namespace in the event ID carries source/day/word identity
+        # without adding fields that older clients would drop on serialization.
+        # The random suffix remains client generated, preserving the causal DAG
+        # and every actual answer even when two devices grade the same word.
+        for item in plan["items"]:
+            scope = hashlib.sha256((account + "\0" + body.day + "\0" + item["word"]).encode()).hexdigest()[:32]
+            item["probe_evidence_key"] = "p1_" + body.day + "_" + scope + "_"
+            item["review_evidence_key"] = "r1_" + body.day + "_" + scope + "_"
         return {"account_id": account, **plan}

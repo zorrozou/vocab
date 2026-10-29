@@ -1316,9 +1316,10 @@ final class AppState {
     }
 
     /// 水平观测（v1.2）：每次反馈都是对词汇量后验的一次带权观测
-    func observeLevel(pos: Int, known: Bool, weight: Double, guess: Double = 0) {
-        guard S.calibrated else { return }
-        StudyEngine.posteriorUpdate(&S, rank: pos, resp: known ? 1 : 0, weight: weight, guess: guess)
+    @discardableResult
+    func observeLevel(pos: Int, known: Bool, weight: Double, guess: Double = 0, evidenceKey: String? = nil) -> Bool {
+        guard S.calibrated else { return false }
+        return StudyEngine.posteriorUpdate(&S, rank: pos, resp: known ? 1 : 0, weight: weight, guess: guess, evidenceKey: evidenceKey)
     }
 
     func review(word: String, rating: Int, allowUndo: Bool = false, acceptance: Bool = false, verifiedPos: Int? = nil) async {
@@ -1354,12 +1355,14 @@ final class AppState {
         if let pos = S.cards[word]?.pos, S.calibrated, delayedEvidence {
             var tr = S.track ?? TrackState()
             if tr.dayWDay != today { tr.dayW = 0; tr.dayWDay = today }
+            tr.dayW = max(tr.dayW ?? 0,StudyEngine.passiveEvidenceWeight(S,day:today))
             var w = 0.0
             var known = true
             if rating == 1 { w = preStab >= 21 ? 0.4 : 0.2; known = false }
             else if Double(pos) > StudyEngine.postMean(S) { w = 0.15 }
-            if w > 0 && (tr.dayW ?? 0) + w <= 1.5 {
-                observeLevel(pos: pos, known: known, weight: w, guess: (verifiedPos ?? 0) > 0 ? 0.25 : 0)
+            let evidenceKey = auth == nil ? nil : cachedSharedPlan()?.evidenceKey(word:word,kind:"review")
+            if w > 0 && (tr.dayW ?? 0) + w <= 1.5 && (auth == nil || evidenceKey != nil) &&
+                observeLevel(pos: pos, known: known, weight: w, guess: (verifiedPos ?? 0) > 0 ? 0.25 : 0,evidenceKey:evidenceKey) {
                 tr.dayW = (tr.dayW ?? 0) + w
                 S.track = tr
             }
@@ -1468,7 +1471,10 @@ final class AppState {
     @discardableResult
     func answerProbe(_ w: NewWord, ok: Bool, reverse: Bool) -> Bool {
         guard admitStudy(word: w.word, kind: "probe") else { return false }
-        StudyEngine.posteriorUpdate(&S, rank: w.pos, resp: ok ? 1 : 0, weight: 1.0, guess: 0.25)
+        let evidenceKey = auth == nil ? nil : cachedSharedPlan()?.evidenceKey(word:w.word,kind:"probe")
+        if auth == nil || evidenceKey != nil {
+            StudyEngine.posteriorUpdate(&S, rank: w.pos, resp: ok ? 1 : 0, weight: 1.0, guess: 0.25,evidenceKey:evidenceKey)
+        }
         S.log.append(LogEntry(d: DayUtil.today(), word: w.word, rating: ok ? 4 : 1, kind: "probe", reverse: reverse))
         if !ok, S.cards[w.word] == nil, !S.pendingNew.contains(where: { $0.word == w.word }) {
             S.pendingNew.append(NewWord(word: w.word, pos: w.pos))

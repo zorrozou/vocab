@@ -825,6 +825,41 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
         fixture.update(study_plan_offline=bool(body['enabled']))
         return {'ok':True}
 
+    @main.app.post('/api/v1/__ui_fixture/shared-probe-case')
+    def seed_shared_probe_case(body: dict):
+        from app.daily_study import PlanRequest
+        username, password = 'probe_' + uuid.uuid4().hex[:10], 'test_password_123'
+        register = next(r.endpoint for r in main.app.routes if getattr(r,'path',None)=='/api/v1/auth/register')
+        response = register(auth.RegisterIn(username=username,password=password),None)
+        account = {'username':username,'password':password,'token':response['token']}
+        token = 'Bearer ' + account['token']
+        put = next(r.endpoint for r in main.app.routes if getattr(r,'path',None)=='/api/v1/me/state' and 'PUT' in getattr(r,'methods',set()))
+        reserve = next(r.endpoint for r in main.app.routes if getattr(r,'path',None)=='/api/v1/me/study-plan')
+        state = {'v':1,'calibrated':True,'frontier':1,'pointer':1,'probeCount':0,'cards':{},'log':[],
+                 'pendingNew':[],'settings':{'newPerDay':0,'dailyCap':1}}
+        put(state,token)
+        plan = reserve(PlanRequest(day=body['day'],offset_minutes=body['offset_minutes'],candidates=[{'word':'apple','kind':'probe'}]),token)
+        assert len(plan['items']) == 1 and plan['items'][0]['word'] == 'apple'
+        fixture.update(shared_probe_account=account,shared_probe_plan=plan,fsrs_offline=False,study_plan_offline=False,fixed_quiz=True)
+        return account
+
+    @main.app.post('/api/v1/__ui_fixture/shared-probe-other-answer')
+    def other_device_probe_answer():
+        from app.posterior_evidence import replay
+        token = 'Bearer ' + fixture['shared_probe_account']['token']
+        get = next(r.endpoint for r in main.app.routes if getattr(r,'path',None)=='/api/v1/me/state' and 'GET' in getattr(r,'methods',set()))
+        put = next(r.endpoint for r in main.app.routes if getattr(r,'path',None)=='/api/v1/me/state' and 'PUT' in getattr(r,'methods',set()))
+        state = get(token)['state']; plan = fixture['shared_probe_plan']; day = plan['day']
+        history = state.get('posteriorHistory') or {'algorithm':'bayes-grid-1','baseId':'empty','base':None,'baseCount':0,'events':{}}
+        events = history['events']; parents = set(p for e in events.values() for p in e['parents'])
+        identity = plan['items'][0]['probe_evidence_key'] + uuid.uuid4().hex
+        events[identity] = {'kind':'update','device':'fixture-web','at':day+'T00:00:00Z','day':day,
+            'parents':sorted(set(events)-parents),'rank':main.POS_OF[main.WORD2ID['apple']],'resp':1,'weight':1.,'guess':.25}
+        state['posteriorHistory'] = history; state['posterior'],state['probeCount'] = replay(history)
+        state['log'].append({'d':day,'word':'apple','kind':'probe','rating':4,'eventId':uuid.uuid4().hex})
+        put(state,token)
+        return {'ok':True}
+
     @main.app.post('/api/v1/__ui_fixture/same-day-relearning-case')
     def seed_same_day_relearning_case(body: dict):
         day = body.get('day', '')
