@@ -82,9 +82,12 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
     fixture['large_restore_write_failure'] = False
     fixture['delta_stage_legacy_cap'] = False
     fixture['guarded_merge_successes'] = 0
+    fixture['study_plan_offline'] = False
 
     @main.app.middleware('http')
     async def fixture_controls(request: Request, call_next):
+        if fixture['study_plan_offline'] and request.url.path == '/api/v1/me/study-plan':
+            return JSONResponse({'detail':'fixture study plan unavailable'}, status_code=503)
         if fixture['static_swap_case'] and request.url.path == '/api/v1/lexicon/word' and request.query_params.get('word') == 'apple':
             return JSONResponse({'word':'apple', 'pos':1, 'senses':[{'pos':'n', 'text':'苹果'}], 'sentences':[
                 {'tier':1,'text':'An apple is here.','zh':'苹果在这里。'},
@@ -159,7 +162,7 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
         if state_upload and fixture['fsrs_offline']:
             fixture['sync_failures'] += 1
             return JSONResponse({'detail': 'test fixture: sync unavailable'}, status_code=503)
-        if request.url.path == '/api/v1/fsrs/review' and fixture['fsrs_offline']:
+        if request.url.path == '/api/v1/fsrs/review' and (fixture['fsrs_offline'] or fixture.get('study_plan_offline')):
             fixture['fsrs_failures'] += 1
             return JSONResponse({'detail': 'test fixture: FSRS unavailable'}, status_code=503)
         if request.url.path == '/api/v1/quiz' and fixture['fixed_quiz']:
@@ -794,6 +797,33 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
         lexicon_release.clear()
         fixture.update(lexicon_hold=True, lexicon_delay=0, lexicon_attempts=0, lexicon_completed=0)
         return account
+
+    @main.app.post('/api/v1/__ui_fixture/shared-plan-case')
+    def seed_shared_plan_case(body: dict):
+        from app.daily_study import PlanRequest
+        account = seed_offline_case()
+        get_state = next(r.endpoint for r in main.app.routes if getattr(r,'path',None)=='/api/v1/me/state' and 'GET' in getattr(r,'methods',set()))
+        put_state = next(r.endpoint for r in main.app.routes if getattr(r,'path',None)=='/api/v1/me/state' and 'PUT' in getattr(r,'methods',set()))
+        reserve = next(r.endpoint for r in main.app.routes if getattr(r,'path',None)=='/api/v1/me/study-plan')
+        token = 'Bearer '+account['token']; state = get_state(token)['state']
+        state['cards'] = {}; state['settings'] = {'newPerDay':10,'dailyCap':100}
+        state['pointer'] = 5000; state['frontier'] = 1; state['posterior'] = [1.] + [0.]*48
+        state['pendingNew'] = [{'word':'dog','pos':main.POS_OF[main.WORD2ID['dog']]}]
+        state['log'] = [{'d':body['day'],'word':'prior'+str(i),'kind':'review','rating':3,'eventId':uuid.uuid4().hex} for i in range(99)]
+        put_state(state, token)
+        plan = reserve(PlanRequest(day=body['day'],offset_minutes=body['offset_minutes'],
+            candidates=[{'word':'cat','kind':'learn','from_pending':True}],
+            completed=[{'word':e['word'],'kind':e['kind']} for e in state['log']]), token)
+        assert len(plan['items']) == 100
+        fixture.update(study_plan_offline=False, fsrs_offline=False, fixed_quiz=True, personal_offline=False)
+        return account
+
+    @main.app.post('/api/v1/__ui_fixture/study-plan-offline')
+    def set_study_plan_offline(body: dict):
+        # Allocation and FSRS fail independently of state upload. The ordinary
+        # offline fixture separately covers a completely unavailable sync API.
+        fixture.update(study_plan_offline=bool(body['enabled']))
+        return {'ok':True}
 
     @main.app.post('/api/v1/__ui_fixture/same-day-relearning-case')
     def seed_same_day_relearning_case(body: dict):

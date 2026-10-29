@@ -11,6 +11,10 @@ async function api(path,method='GET',body,token){const r=await fetch(base+path,{
  const browser=await chromium.launch({headless:true,...(process.env.VOCAB_BROWSER?{executablePath:process.env.VOCAB_BROWSER}:{})});
  try{
   const page=await browser.newPage();await page.goto(base);await page.evaluate(a=>onAuthed(a,false),auth);await page.locator('#awaitSaveSnapshot').click();await page.waitForFunction(()=>document.querySelector('#awaitMsg')?.textContent.includes('同步基线已保存'));await page.locator('#awaitUseSnapshot').click();await page.locator('#bStart, #bPlace').first().waitFor();
+  await page.evaluate(async()=>{
+   const queue=await prepareSharedQueue(['pear','grape','kiwi'].map(word=>({kind:'learn',word,detail:{word}})),false,()=>true,false);
+   if(queue.length!==3)throw Error('Failed to reserve the three test words');
+  });
   let reviewArrived,releaseReview,uploadArrived,releaseUpload;
   const reviewSeen=new Promise(r=>reviewArrived=r),reviewGate=new Promise(r=>releaseReview=r),uploadSeen=new Promise(r=>uploadArrived=r),uploadGate=new Promise(r=>releaseUpload=r);
   await page.route('**/api/v1/fsrs/review',async route=>{reviewArrived();await reviewGate;await route.continue();});

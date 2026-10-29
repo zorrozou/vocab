@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from app.posterior_evidence import anchor as anchor_posterior, validate as validate_posterior, merge as merge_posterior, replay as replay_posterior, canonicalize as canonicalize_posterior
 from app.streak_evidence import anchor as anchor_streak, validate as validate_streak, merge as merge_streak, calculate as calculate_streak
 from app.limits import check_rate
-from app import delta_staging, state_segments, state_verification_cache
+from app import daily_study, delta_staging, state_segments, state_verification_cache
 from app.fsrs_config import fsrs_config_key, normalize_fsrs_config
 from app.state_changes import PAGE_BYTES as CHANGE_PAGE_BYTES, MAX_STAGED_OPERATIONS, apply_upload_ops, record_change, validate_upload_ops
 
@@ -43,6 +43,7 @@ DELTA_RECEIPT_TTL = 7 * 86400
 def init_users():
     conn = sqlite3.connect(USERS_DB, timeout=15)
     conn.execute("BEGIN IMMEDIATE")
+    daily_study.initialize(conn)
     conn.execute("""CREATE TABLE IF NOT EXISTS users(
         id INTEGER PRIMARY KEY, username TEXT UNIQUE COLLATE NOCASE,
         nickname TEXT, password_hash TEXT, salt TEXT,
@@ -1377,6 +1378,7 @@ def checkpoint_learning_state(state):
 
 def mount_auth(app: FastAPI):
     init_users()
+    daily_study.mount(app, lambda: USERS_DB, identity_by_token, load_verified_state)
 
     @app.post("/api/v1/auth/register")
     def register(body: RegisterIn, request: Request):

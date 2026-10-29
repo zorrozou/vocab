@@ -84,6 +84,7 @@ final class AppState {
     private(set) var routeGeneration: UInt64 = 0
     var session = Session()
     var studyNotice = ""
+    private var sharedStudyPlan: SharedStudyPlan?
     var validation: ValidationSession?
     var placementSet: PlacementSet?
     var placementSession = UUID()   // 每次重新定级更换，强制清空已考集合与 CAT 位置
@@ -1201,11 +1202,98 @@ final class AppState {
     }
 
     private func admitStudy(word: String, kind: String) -> Bool {
-        guard let issue = StudyEngine.studyAdmissionIssue(S, word: word, kind: kind, sessionDay: session.day, day: DayUtil.today()) else { return true }
+        let localIssue = StudyEngine.studyAdmissionIssue(S, word: word, kind: kind, sessionDay: session.day, day: DayUtil.today())
+        let alreadyCounted = kind == "review" && StudyEngine.completedDailyWords(S.log, day: DayUtil.today()).contains(word)
+        let sharedIssue: String? = auth == nil || alreadyCounted || cachedSharedPlan()?.permits(word: word, kind: kind) == true
+            ? nil : "请联网重新加载今日任务，领取两端共享的单词名额。"
+        guard let issue = localIssue ?? sharedIssue else { return true }
         studyNotice = issue
         session = Session()
         route = .home
         return false
+    }
+
+    private func cachedSharedPlan() -> SharedStudyPlan? {
+        guard let account = auth?.accountId else { return nil }
+        let day = DayUtil.today()
+        if let plan = sharedStudyPlan, plan.valid(account: account, day: day) { return plan }
+        if let data = UserDefaults.standard.data(forKey: "vocab_daily_plan_v1:" + account),
+           let plan = try? JSONDecoder().decode(SharedStudyPlan.self, from: data), plan.valid(account: account, day: day) {
+            sharedStudyPlan = plan
+            return plan
+        }
+        return nil
+    }
+
+    private func prepareSharedQueue(_ proposed: [Session.Item], newExhausted: Bool = false, adoptPool: Bool = true,
+                                    active: () -> Bool) async throws -> [Session.Item] {
+        guard let owner = auth else { return proposed }
+        guard let account = owner.accountId else { throw APIError(message: "请重新登录后领取今日名额。") }
+        let day = DayUtil.today(), state = S
+        func info(_ item: Session.Item) -> SharedStudyWord {
+            switch item {
+            case .review(let word): return SharedStudyWord(word: word, kind: "review")
+            case .learn(let word): return SharedStudyWord(word: word.word, kind: "learn", from_pending: word.fromPending ?? false)
+            case .probe(let word, _): return SharedStudyWord(word: word.word, kind: "probe")
+            }
+        }
+        var completedEvents: [String:SharedStudyWord] = [:]
+        for event in S.log where event.d == day && ["learn","review","probe"].contains(event.kind) {
+            completedEvents[event.word + "\u{0}" + event.kind] = SharedStudyWord(word: event.word, kind: event.kind)
+        }
+        let completed = Set(completedEvents.values.map(\.word))
+        let plan: SharedStudyPlan
+        var fromCache = false
+        do {
+            let response = try await api.reserveStudyPlan(day: day, candidates: proposed.map(info), completed: Array(completedEvents.values), newExhausted: newExhausted)
+            guard response.valid(account: account, day: day) else { throw APIError(message: "共享学习计划校验失败，请重新加载。", statusCode: 409) }
+            guard active(), auth == owner, DayUtil.today() == day else { throw APIError(message: "账号或日期已变化，请重新开始。", statusCode: 409) }
+            sharedStudyPlan = response
+            if let data = try? JSONEncoder().encode(response) { UserDefaults.standard.set(data, forKey: "vocab_daily_plan_v1:" + account) }
+            plan = response
+        } catch {
+            if let code = (error as? APIError)?.statusCode, (400..<500).contains(code) { throw error }
+            guard active(), auth == owner else { throw error }
+            guard let cached = cachedSharedPlan() else { throw APIError(message: "请联网加载一次今日任务，之后可继续已预留的词。") }
+            plan = cached
+            fromCache = true
+        }
+        if plan.requires_sync || (!fromCache && (plan.configured_cap != max(0,min(10000,S.settings.dailyCap)) ||
+            plan.configured_new_per_day != max(0,min(10000,S.settings.newPerDay)))) {
+            let synced = await syncFromServer()
+            throw APIError(message: synced ? "进度与设置已同步，正在重新准备今日任务。" : "进度或设置尚未同步，请先同步后继续。", code: synced ? "shared-plan-synced" : nil)
+        }
+        guard active(), S == state, DayUtil.today() == day else { throw APIError(message: "进度或日期已变化，请重新加载今日任务。") }
+        var queue: [Session.Item] = [], seen = Set<String>()
+        var slots = max(0, min(S.settings.dailyCap, plan.cap) - completed.count)
+        let learned = Set(completedEvents.values.filter { $0.kind == "learn" }.map(\.word))
+        var newSlots = max(0, min(S.settings.newPerDay, plan.new_target) - learned.count)
+        var probes = max(0, 3 - completedEvents.values.filter { $0.kind == "probe" }.count)
+        func append(_ item: Session.Item) {
+            let entry = info(item)
+            guard !seen.contains(entry.word), plan.permits(word: entry.word, kind: entry.kind),
+                  completed.contains(entry.word) || slots > 0,
+                  entry.kind != "learn" || newSlots > 0, entry.kind != "probe" || probes > 0 else { return }
+            queue.append(item); seen.insert(entry.word)
+            if !completed.contains(entry.word) { slots -= 1 }
+            if entry.kind == "learn" { newSlots -= 1 }
+            if entry.kind == "probe" { probes -= 1 }
+        }
+        for item in proposed { append(item) }
+        if adoptPool { for item in plan.items where !seen.contains(item.word) && !completed.contains(item.word) && !item.completed && slots > 0 {
+            if let card = S.cards[item.word] {
+                let due = DayUtil.parseISO(StudyEngine.scheduledDue(card, configurations: S.fsrsSchedulers ?? [:])) ?? .distantFuture
+                let earlier = item.kind == "review" && StudyEngine.delayedReviewEvidence(S, word: item.word)
+                if !StudyEngine.isMastered(card), due <= Date() || earlier { append(.review(word: item.word)) }
+            } else if item.new_word && newSlots > 0 || item.probe_word && probes > 0 {
+                var detail = try await api.lexiconWord(item.word)
+                guard active(), S == state, DayUtil.today() == day else { throw APIError(message: "进度或日期已变化，请重新加载今日任务。") }
+                guard detail.word == item.word else { throw APIError(message: "共享名单词条不匹配，请重试。") }
+                detail.fromPending = item.from_pending
+                append(item.new_word ? .learn(word: detail) : .probe(word: detail, reverse: false))
+            }
+        } }
+        return queue.filter { info($0).kind != "learn" } + queue.filter { info($0).kind == "learn" }
     }
 
     func learn(word: String, pos: Int, rating: Int, fromPending: Bool = false) async {
@@ -1424,13 +1512,25 @@ final class AppState {
 
     /// 顽固词特训：把 ≥2 次没记住的词单独组一队复习（不进新词，纯歼灭战）
     @discardableResult
-    func startStubbornDrill() -> Int {
+    func startStubbornDrill() async -> Int {
+        let owner = auth, generation = routeGeneration, state = S
+        func active() -> Bool { auth == owner && routeGeneration == generation && !Task.isCancelled }
+        studyNotice = ""
         let words = StudyEngine.stubbornDrillWords(S, day: DayUtil.today(), now: Date())
         guard !words.isEmpty else { return 0 }
+        let queue: [Session.Item]
+        do { queue = try await prepareSharedQueue(words.map { .review(word: $0) }, adoptPool: false, active: active) }
+        catch {
+            if active() { studyNotice = (error as? APIError)?.code == "shared-plan-synced"
+                ? "进度与设置已同步，请再次开始巩固练习。" : error.localizedDescription }
+            return 0
+        }
+        guard active(), S == state else { return 0 }
+        guard !queue.isEmpty else { studyNotice = "今日共享名额已预留，请回首页继续今日任务。"; return 0 }
         session = Session()
-        session.queue = words.map { .review(word: $0) }
+        session.queue = queue
         route = .session
-        return words.count
+        return queue.count
     }
 
     /// 已掌握词不再显示旧个性化例句
@@ -1455,7 +1555,8 @@ final class AppState {
     // MARK: 每日队列（到期复习 + 提前巩固概率池 + 新词）
 
     @discardableResult
-    func buildQueue() async -> Bool {
+    func buildQueue(retrySharedSync: Bool = true) async -> Bool {
+        studyNotice = ""
         let owner = auth, slot = slotKey, generation = routeGeneration
         func active() -> Bool { auth == owner && slotKey == slot && routeGeneration == generation && !Task.isCancelled }
         await flushPendingFsrs()
@@ -1558,12 +1659,25 @@ final class AppState {
             studyNotice = "进度或日期已变化，请重新加载今天的任务。"
             return false
         }
+        let queue: [Session.Item]
+        do { queue = try await prepareSharedQueue(revBlock + news.map { .learn(word: $0) }, newExhausted: exhausted, active: active) }
+        catch {
+            if active(), retrySharedSync, (error as? APIError)?.code == "shared-plan-synced" { return await buildQueue(retrySharedSync: false) }
+            if active() { studyNotice = error.localizedDescription }
+            return false
+        }
+        guard active(), S == planState, DayUtil.today() == planDay else {
+            studyNotice = "进度或日期已变化，请重新加载今天的任务。"
+            return false
+        }
         studyNotice = ""
         session = Session()
         session.day = planDay
-        session.queue = revBlock + news.map { .learn(word: $0) }
+        session.queue = queue
         save()
-        prefetchDay(news: news, reviewWords: reviewsAll)
+        let chosenNew = queue.compactMap { item -> NewWord? in if case .learn(let word) = item { return word }; return nil }
+        let chosenReviews = queue.compactMap { item -> String? in if case .review(let word) = item { return word }; return nil }
+        prefetchDay(news: chosenNew, reviewWords: chosenReviews)
         return true
     }
 

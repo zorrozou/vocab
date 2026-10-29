@@ -23,7 +23,9 @@ async function api(path,method='GET',body,token){const r=await fetch(base+path,{
   const saved=await reopened.evaluate(async slot=>{const x=await largeReadVerifiedSnapshot(slot);return {setting:JSON.parse(x.baseline.baseRaw).settings.newPerDay,revision:x.revision,pending:(await largeReadRawSnapshot(slot)).uploads};},slot);assert.equal(saved.setting,15);assert.equal(saved.pending,null);
   await reopened.locator('#mBack').click();
   let reviews=0;await reopened.route('**/api/v1/fsrs/review',route=>{reviews++;return route.continue();});
-  await reopened.evaluate(()=>{const item={kind:'learn',word:'pear',detail:{word:'pear',pos:2,senses:[{text:'梨'}]}};session={queue:[item],idx:0,reviewedToday:0,learnedToday:0};void showLearn(item);});
+  await reopened.evaluate(async()=>{const item={kind:'learn',word:'pear',detail:{word:'pear',pos:2,senses:[{text:'梨'}]}};
+   const queue=await prepareSharedQueue([item],false,()=>true,false);if(queue.length!==1)throw Error('Test word not reserved');
+   session={day:today(),queue,idx:0,reviewedToday:0,learnedToday:0};void showLearn(item);});
   await reopened.locator('#bNext').waitFor();
   await reopened.evaluate(()=>{window.holdJournal=true;const original=IDBObjectStore.prototype.put;window.originalPut=original;IDBObjectStore.prototype.put=function(...args){const result=original.apply(this,args);if(this.name==='journals'){const store=this;const keep=()=>{if(!window.holdJournal)return;const request=store.get('__hold_test__');request.onsuccess=keep;};keep();window.journalWaiting=true;}return result;};});
   await reopened.locator('#bNext').click();try{await reopened.waitForFunction(()=>window.journalWaiting===true,null,{timeout:10000});}catch(e){throw Error('journal not reached: '+JSON.stringify(await reopened.evaluate(()=>({error:largeActive?.error?.message,failed:localSaveFailed,pending:largeActive?.pending,card:!!S.cards.pear,log:S.log.length,tag:document.querySelector('#userTag')?.textContent})))+' reviews='+reviews);}assert.equal(reviews,0,'FSRS must wait for durable journal');

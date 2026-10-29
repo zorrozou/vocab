@@ -699,12 +699,116 @@ function studyAdmissionIssue(state, word, kind, sessionDay, day = today()) {
   return null;
 }
 function admitStudy(word, kind) {
-  const issue = studyAdmissionIssue(S, word, kind, session.day);
+  const issue = studyAdmissionIssue(S, word, kind, session.day) || sharedStudyIssue(word, kind);
   if (!issue) return true;
   studyNotice = issue;
   session = {day: today(), queue: [], idx: 0, learnedToday: 0, reviewedToday: 0};
   home();
   return false;
+}
+
+let sharedStudyPlan = null;
+function validSharedPlan(plan, account, day) {
+  return plan && plan.account_id === account && plan.day === day && Number.isSafeInteger(plan.cap) && plan.cap >= 0 && plan.cap <= 10000 &&
+    Number.isSafeInteger(plan.new_target) && plan.new_target >= 0 && plan.new_target <= plan.cap && Array.isArray(plan.items) && plan.items.length <= 10000 &&
+    [plan.configured_cap,plan.configured_new_per_day].every(n=>Number.isSafeInteger(n)&&n>=0&&n<=10000) &&
+    Array.isArray(plan.approved) && typeof plan.over_limit === "boolean" && typeof plan.requires_sync === "boolean" &&
+    new Set(plan.items.map(i => i.word)).size === plan.items.length && plan.items.every(i => typeof i.word === "string" && i.word.length > 0 && i.word.length <= 100 &&
+      ["learn","review","probe"].includes(i.kind) && [i.new_word,i.probe_word,i.completed,i.from_pending].every(x => typeof x === "boolean"));
+}
+function cachedSharedPlan() {
+  const account = AUTH?.accountId, day = today();
+  if (!account) return null;
+  if (validSharedPlan(sharedStudyPlan, account, day)) return sharedStudyPlan;
+  try {
+    const saved = JSON.parse(localStorage.getItem("vocab_daily_plan_v1:" + account) || "null");
+    if (validSharedPlan(saved, account, day)) return sharedStudyPlan = saved;
+  } catch (_) {}
+  return null;
+}
+function sharedPlanPermits(plan, word, kind) {
+  const item = plan?.items.find(i => i.word === word);
+  return !!item && (kind === "learn" ? item.new_word : kind === "probe" ? item.probe_word : kind === "review");
+}
+function sharedStudyIssue(word, kind) {
+  if (!AUTH) return null;
+  // An already recorded word consumes no further distinct-word slot.
+  if (kind === "review" && S.log.some(e => e.d === today() && e.word === word && ["learn","review","probe"].includes(e.kind))) return null;
+  return sharedPlanPermits(cachedSharedPlan(), word, kind) ? null : "请联网重新加载今日任务，领取两端共享的单词名额。";
+}
+
+async function prepareSharedQueue(proposed, newExhausted, active, adoptPool = true) {
+  if (!AUTH) return proposed;
+  const owner = AUTH, state = S, day = today(), account = owner.accountId;
+  if (!account) throw new Error("请重新登录后领取今日名额。");
+  const completedEvents = new Map(S.log.filter(e => e.d === day && ["learn","review","probe"].includes(e.kind))
+    .map(e => [JSON.stringify([e.word,e.kind]), {word:e.word,kind:e.kind}]));
+  const completed = new Set([...completedEvents.values()].map(e => e.word));
+  let plan, fromCache = false;
+  try {
+    const resp = await fetch(`${API}/api/v1/me/study-plan`, {method:"POST", cache:"no-store", signal:AbortSignal.timeout(15000),
+      headers:{...authHeaders(),"Content-Type":"application/json"},body:JSON.stringify({day,offset_minutes:-new Date().getTimezoneOffset(),
+        candidates:proposed.map(i => ({word:i.word,kind:i.kind,from_pending:!!i.detail?.fromPending})),
+        completed:[...completedEvents.values()],new_exhausted:!!newExhausted})});
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({}));
+      const error = new Error(typeof body.detail === "string" ? body.detail : "无法领取今日共享名额，请稍后重试。");
+      error.authoritative = resp.status < 500; throw error;
+    }
+    plan = await resp.json();
+    if (!validSharedPlan(plan,account,day)) throw Object.assign(new Error("共享学习计划校验失败，请重新加载。"),{authoritative:true});
+    if (!active() || AUTH !== owner || today() !== day) throw Object.assign(new Error("账号或日期已变化，请重新开始。"),{authoritative:true});
+    sharedStudyPlan = plan;
+    try { localStorage.setItem("vocab_daily_plan_v1:"+account,JSON.stringify(plan)); } catch (_) {} // In-memory permits remain usable; a restart must fetch again.
+  } catch (e) {
+    if (!active() || AUTH !== owner || e.authoritative) throw e;
+    plan = cachedSharedPlan();
+    if (!plan) throw new Error("请联网加载一次今日任务，之后可继续已预留的词。");
+    fromCache = true;
+  }
+  if (plan.requires_sync || (!fromCache && (plan.configured_cap !== Math.max(0,Math.min(10000,S.settings.dailyCap)) ||
+      plan.configured_new_per_day !== Math.max(0,Math.min(10000,S.settings.newPerDay))))) {
+    const synced = await syncFromServer(active);
+    throw Object.assign(new Error(synced || S !== state ? "进度与设置已同步，正在重新准备今日任务。" : "进度或设置尚未同步，请先同步后继续。"),
+      {retrySharedSync:!!synced || S !== state});
+  }
+  if (!active() || S !== state || today() !== day) throw new Error("进度或日期已变化，请重新加载今日任务。");
+  const queue = [], seen = new Set(), learned = new Set([...completedEvents.values()].filter(e=>e.kind==="learn").map(e=>e.word));
+  let slots = Math.max(0, Math.min(S.settings.dailyCap,plan.cap)-completed.size);
+  let newSlots = Math.max(0, Math.min(S.settings.newPerDay,plan.new_target)-learned.size);
+  let probes = Math.max(0,3-[...completedEvents.values()].filter(e=>e.kind==="probe").length);
+  function append(item) {
+    if (seen.has(item.word) || !sharedPlanPermits(plan,item.word,item.kind) || (!completed.has(item.word) && !slots) ||
+        (item.kind==="learn" && !newSlots) || (item.kind==="probe" && !probes)) return false;
+    queue.push(item);seen.add(item.word);
+    if (!completed.has(item.word)) slots--;
+    if (item.kind==="learn") newSlots--;
+    if (item.kind==="probe") probes--;
+    return true;
+  }
+  // Keep the normal order where it belongs to the shared pool. If another
+  // device reserved different words, use those same words instead of spending
+  // a second set of slots. Unavailable details fail visibly, never fake "done".
+  for (const item of proposed) append(item);
+  if (adoptPool) for (const item of plan.items) {
+    if (seen.has(item.word) || completed.has(item.word) || item.completed || slots <= 0) continue;
+    const card = S.cards[item.word];
+    if (card) {
+      const due = new Date(scheduledDue(card,S.fsrsSchedulers));
+      if (!isMastered(card) && (due <= new Date() || (item.kind==="review" && delayedReviewEvidence(S,item.word)))) append({kind:"review",word:item.word});
+    } else if ((item.new_word && newSlots > 0) || (item.probe_word && probes > 0)) {
+      const r = await fetch(`${API}/api/v1/lexicon/word?word=${encodeURIComponent(item.word)}`);
+      if (!active() || S !== state || today() !== day) throw new Error("进度或日期已变化，请重新加载今日任务。");
+      if (!r.ok) throw new Error("共享名单中的词条尚未加载，请联网后重试。");
+      const detail = await r.json();
+      if (detail?.word !== item.word) throw new Error("共享名单词条不匹配，请重试。");
+      detail.fromPending = item.from_pending;
+      append({kind:item.new_word?"learn":"probe",word:item.word,detail});
+    }
+  }
+  // A previously reserved review can become mastered on this device, and then
+  // legitimately disappear from the queue without releasing its offline slot.
+  return queue.filter(i=>i.kind!=="learn").concat(queue.filter(i=>i.kind==="learn"));
 }
 
 async function learn(word, pos, rating = 3, fromPending = false) {
@@ -1057,7 +1161,8 @@ async function pickProbes(reviewsAll, news, active = () => true) {
 }
 
 /* ---------------- 队列 ---------------- */
-async function buildQueue(stillOnPage = () => true) {
+async function buildQueue(stillOnPage = () => true, retrySharedSync = true) {
+  studyNotice = "";
   const state = S, owner = AUTH, currentSession = session;
   const active = () => S === state && AUTH === owner && session === currentSession && stillOnPage();
   await flushPendingFsrs();
@@ -1146,15 +1251,20 @@ async function buildQueue(stillOnPage = () => true) {
     revBlock.splice(at, 0, { kind: "probe", word: w.word, detail: w });
   }
   if (today() !== planDay || JSON.stringify(S) !== planState) return false;
+  let queue;
+  try { queue = await prepareSharedQueue([...revBlock,...news.map(w=>({kind:"learn",word:w.word,detail:w}))], exhausted, active); }
+  catch (e) {
+    if (e.retrySharedSync && retrySharedSync && AUTH === owner && session === currentSession && stillOnPage()) return buildQueue(stillOnPage,false);
+    if (AUTH === owner && stillOnPage()) studyNotice = e.message;
+    throw e;
+  }
+  if (!active() || today() !== planDay || JSON.stringify(S) !== planState) return false;
   studyNotice = "";
   session.day = planDay;
-  session.queue = [
-    ...revBlock,
-    ...news.map(w => ({ kind: "learn", word: w.word, detail: w }))
-  ];
+  session.queue = queue;
   session.idx = 0;
   save();
-  prefetchDay(news, reviewsAll);
+  prefetchDay(queue.filter(i=>i.kind==="learn").map(i=>i.detail),queue.filter(i=>i.kind==="review").map(i=>i.word));
   return true;
 }
 
@@ -1244,7 +1354,7 @@ function home() {
     catch (e) {
       if (!current()) return;
       b.disabled = false; b.textContent = "重新加载";
-      $("#startHint").textContent = "任务加载失败，请检查网络后重试";
+      $("#startHint").textContent = studyNotice || (e.message === "plan changed" ? "进度已变化，请重新加载今日任务。" : "任务加载失败，请检查网络后重试");
     }
   };
   const gb = $("#gBanner");
@@ -2151,11 +2261,19 @@ function showStats() {
     <div class="row"><button class="act ghost" id="bBack">返回</button></div>
   </div>`;
   $("#bBack").onclick = home;
-  if ($("#bDrill")) $("#bDrill").onclick = () => {
+  if ($("#bDrill")) $("#bDrill").onclick = async () => {
+    const button = $("#bDrill"), current = viewGuard(false), state = S;
     const words = stubbornDrillWords(S, stubborn);
     if (!words.length) return;
-    session = {day: today(), queue: words.map(word => ({kind:"review", word})), idx:0, learnedToday:0, reviewedToday:0};
-    step();
+    button.disabled = true;
+    try {
+      const queue = await prepareSharedQueue(words.map(word=>({kind:"review",word})),false,current,false);
+      if (!current()) return;
+      if (S !== state) throw new Error("进度已更新，请重新加载巩固练习。");
+      if (!queue.length) throw new Error("今日共享名额已预留，请回首页继续今日任务。");
+      session = {day: today(), queue, idx:0, learnedToday:0, reviewedToday:0};
+      step();
+    } catch (e) { if (current()) { button.disabled=false; button.textContent=e.retrySharedSync ? "进度已同步，点击开始巩固练习" : (e.message || "加载失败，点击重试"); } }
   };
 }
 
@@ -2279,6 +2397,7 @@ function showSettings() {
     <div class="row">${[5, 10, 15, 20].map(n => `<button class="ghost" style="flex:1;padding:9px;${st.newPerDay === n ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-new="${n}">${n}</button>`).join("")}</div>
     <p class="muted" style="margin-top:12px">每日总上限（复习、新词和探测的不同单词）</p>
     <div class="row">${[30, 60, 100, 130, 200, 300].map(n => `<button class="ghost" style="flex:1 1 27%;padding:9px;${st.dailyCap === n ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-cap="${n}">${n}</button>`).join("")}</div>
+    ${AUTH ? '<p class="muted">两端共用今日名单。已发出的词会继续占用名额，降低数量或调整新词比例可能从明天生效；提高总上限可增加今天的名额。</p>' : ''}
     <p class="setting-heading">朗读嗓音</p>
     <div class="row">${[["en-US-AriaNeural", "Aria 女声"], ["en-US-GuyNeural", "Guy 男声"], ["en-US-JennyNeural", "Jenny 女声"], ["en-GB-SoniaNeural", "Sonia 英音"]].map(([v, name]) => `<button class="ghost" style="flex:1 1 40%;padding:9px;${(st.voice || "en-US-AriaNeural") === v ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-voice="${v}">${name}</button>`).join("")}</div>
     <p class="setting-heading">定级与校验</p>

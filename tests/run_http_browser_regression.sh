@@ -37,6 +37,7 @@ scenarios=(
   server/test_state_capacity.py
   server/test_state_segments_http.py
   server/test_state_revision_http.py
+  server/test_daily_study_http.py
   server/test_streak_write_validation_http.py
   server/test_state_changes_http.py
   server/test_delta_upload_http.py
@@ -56,6 +57,7 @@ scenarios=(
   tests/web_study_e2e.cjs
   tests/web_daily_budget_e2e.cjs
   tests/web_daily_budget_sync_e2e.cjs
+  tests/web_shared_daily_plan_e2e.cjs
   tests/web_stale_daily_plan_e2e.cjs
   tests/web_choice_evidence_e2e.cjs
   tests/web_delayed_evidence_e2e.cjs

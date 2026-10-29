@@ -1478,6 +1478,56 @@ final class VocabUITests: XCTestCase {
         }
     }
 
+    @MainActor func testSharedDailyPlanSurvivesRestart() async throws {
+        continueAfterFailure = false
+        let format = DateFormatter(); format.locale = Locale(identifier: "en_US_POSIX"); format.dateFormat = "yyyy-MM-dd"
+        let day = format.string(from: Date())
+        let seed = try await fixtureRequest("/api/v1/__ui_fixture/shared-plan-case", method: "POST",
+            body: ["day":day,"offset_minutes":TimeZone.current.secondsFromGMT()/60])
+        let username = try XCTUnwrap(seed["username"] as? String), password = try XCTUnwrap(seed["password"] as? String)
+        let token = try XCTUnwrap(seed["token"] as? String)
+        let app = XCUIApplication(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
+        app.launch()
+        XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30)); app.buttons["登录"].tap()
+        let user=app.textFields["auth-username"], pass=app.secureTextFields["auth-password"]
+        XCTAssertTrue(user.waitForExistence(timeout:20)); user.tap(); user.typeText(username)
+        pass.tap(); pass.typeText(password); app.buttons["登录"].tap()
+        XCTAssertTrue(app.buttons["start-today"].waitForExistence(timeout:30)); app.buttons["start-today"].tap()
+        XCTAssertTrue(app.staticTexts["cat"].waitForExistence(timeout:30), "use the other device's reserved final word, not the local dog candidate")
+        XCTAssertFalse(app.staticTexts["dog"].exists)
+        XCTAssertTrue(app.buttons["退出"].waitForExistence(timeout:10)); app.buttons["退出"].tap()
+        _ = try await fixtureRequest("/api/v1/__ui_fixture/study-plan-offline", method:"POST", body:["enabled":true])
+        let credentialWarning = app.staticTexts["⚠️ 登录凭证未保存，重启后需重新登录"].exists
+        app.terminate(); app.launch()
+        if !app.buttons["start-today"].waitForExistence(timeout:8) {
+            XCTAssertTrue(credentialWarning, "session vanished without a credential warning")
+            XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:15)); app.buttons["登录"].tap()
+            XCTAssertTrue(user.waitForExistence(timeout:15)); user.tap(); user.typeText(username)
+            pass.tap(); pass.typeText(password); app.buttons["登录"].tap()
+        }
+        XCTAssertTrue(app.buttons["start-today"].waitForExistence(timeout:30)); app.buttons["start-today"].tap()
+        XCTAssertTrue(app.staticTexts["cat"].waitForExistence(timeout:30), "persisted reservations survive a process restart and allocation service outage")
+        XCTAssertTrue(app.buttons["学会了 →"].waitForExistence(timeout:20)); app.buttons["学会了 →"].tap()
+        let acceptance = app.staticTexts.matching(NSPredicate(format:"label BEGINSWITH %@","验收测试 1/1")).firstMatch
+        XCTAssertTrue(acceptance.waitForExistence(timeout:30)); XCTAssertTrue(app.buttons["quiz-option-0"].waitForExistence(timeout:20))
+        app.buttons["quiz-option-0"].tap()
+        var state: [String:Any] = [:]
+        for _ in 0..<100 {
+            state = (try await fixtureRequest("/api/v1/me/state",token:token))["state"] as? [String:Any] ?? [:]
+            if (state["quizCompleted"] as? [String] ?? []).contains("cat") { break }
+            try await Task.sleep(for:.milliseconds(100))
+        }
+        let logs = try XCTUnwrap(state["log"] as? [[String:Any]])
+        let todayLogs = logs.filter { ($0["d"] as? String)==day && ["learn","review","probe"].contains($0["kind"] as? String ?? "") }
+        XCTAssertEqual(Set(todayLogs.compactMap { $0["word"] as? String }).count,100)
+        XCTAssertEqual(todayLogs.filter { ($0["kind"] as? String)=="learn" }.count,1)
+        let cards = try XCTUnwrap(state["cards"] as? [String:[String:Any]])
+        XCTAssertNil(cards["dog"]); let cat = try XCTUnwrap(cards["cat"])
+        let pending = try XCTUnwrap(cat["pendingFsrs"] as? [String:Any])
+        XCTAssertEqual((pending["events"] as? [Any])?.count,2,"learning and acceptance must survive FSRS unavailability")
+        _ = try await fixtureRequest("/api/v1/__ui_fixture/study-plan-offline", method:"POST", body:["enabled":false])
+    }
+
     @MainActor func testMasteredWordsExcludedAndNewTargetReserved() async throws {
         continueAfterFailure = false
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/mastery-budget-case", method: "POST")

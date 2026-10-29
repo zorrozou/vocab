@@ -176,6 +176,10 @@ struct SettingsView: View {
                                    current: app.S.settings.dailyCap) { n in
                         if app.S.settings.dailyCap != n && app.markSettingChanged("dailyCap") { app.S.settings.dailyCap = n; app.save() }
                     }
+                    if app.auth != nil {
+                        Text("两端共用今日名单。已发出的词会继续占用名额，降低数量或调整新词比例可能从明天生效；提高总上限可增加今天的名额。")
+                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    }
                     Text("朗读嗓音").font(.system(size: 13)).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {

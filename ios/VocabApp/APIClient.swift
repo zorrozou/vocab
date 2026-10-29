@@ -1281,6 +1281,18 @@ actor APIClient {
 
     // MARK: 认证与状态同步
 
+    func reserveStudyPlan(day: String, candidates: [SharedStudyWord], completed: [SharedStudyWord], newExhausted: Bool) async throws -> SharedStudyPlan {
+        struct In: Encodable {
+            let day: String
+            let offset_minutes: Int
+            let candidates, completed: [SharedStudyWord]
+            let new_exhausted: Bool
+        }
+        return try await request("POST", "/api/v1/me/study-plan",
+            body: In(day: day, offset_minutes: TimeZone.current.secondsFromGMT() / 60,
+                     candidates: candidates, completed: completed, new_exhausted: newExhausted), timeout: 15)
+    }
+
     func register(username: String, password: String, nickname: String) async throws -> AuthResponse {
         struct In: Encodable { let username, password, nickname: String }
         return try await request("POST", "/api/v1/auth/register",

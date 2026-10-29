@@ -55,7 +55,7 @@ struct HomeView: View {
                                     if app.session.queue.isEmpty { app.markDayDone() }
                                     app.route = .session
                                 } else {
-                                    startError = "任务加载失败，请检查网络后重试"
+                                    startError = app.studyNotice.isEmpty ? "任务加载失败，请检查网络后重试" : app.studyNotice
                                 }
                             }
                         }.accessibilityIdentifier("start-today")

@@ -4,6 +4,8 @@ async function api(path,method='GET',body,token){const r=await fetch(base+path,{
 (async()=>{
  if(!process.env.VOCAB_IOS_STAGED_CHECK)throw Error('VOCAB_IOS_STAGED_CHECK is required');
  await api('/api/v1/__ui_fixture/experimental-large-deltas','POST',{enabled:true});const seed=await api('/api/v1/__ui_fixture/recovery-case','POST',{}),auth=await api('/api/v1/auth/login','POST',{username:seed.username,password:seed.password});
+ const initial=await api('/api/v1/me/state','GET',undefined,seed.token);initial.state.settings.newPerDay=10;
+ await api('/api/v1/me/state','PUT',initial.state,seed.token);
  await api('/api/v1/__ui_fixture/oversize-stored-state','POST',{token:seed.token,size:8*1024*1024+65536});
  const browser=await chromium.launch({headless:true,...(process.env.VOCAB_BROWSER?{executablePath:process.env.VOCAB_BROWSER}:{})});
  try{
@@ -11,7 +13,9 @@ async function api(path,method='GET',body,token){const r=await fetch(base+path,{
   const slot=await page.evaluate(()=>accountSlot(AUTH));await page.locator('#awaitUseSnapshot').click();await page.locator('#bStart, #bPlace').first().waitFor();
   const swift=await run(process.env.VOCAB_IOS_STAGED_CHECK,['--large-web-interop',auth.user.account_id],{env:{...process.env,VOCAB_FIXTURE_TOKEN:seed.token},timeout:120000,maxBuffer:1024*1024});assert(swift.stdout.includes('PASS Swift uploads into Web-origin large state'));
   await page.locator('#btnUser').click();await page.locator('#mSync').click();await page.waitForFunction(()=>document.querySelector('#mMsg')?.textContent.includes('✓ 已同步'),null,{timeout:60000});assert(await page.evaluate(()=>!!S.cards.swift_large));await page.locator('#mBack').click();
-  await page.evaluate(()=>{const item={kind:'learn',word:'web_large',detail:{word:'web_large',pos:2,senses:[{text:'测试'}]}};session={queue:[item],idx:0,reviewedToday:0,learnedToday:0};void showLearn(item);});await page.locator('#bNext').click();
+  await page.evaluate(async()=>{const item={kind:'learn',word:'web_large',detail:{word:'web_large',pos:2,senses:[{text:'测试'}]}};
+   const queue=await prepareSharedQueue([item],false,()=>true,false);if(queue.length!==1)throw Error('Test word not reserved');
+   session={day:today(),queue,idx:0,reviewedToday:0,learnedToday:0};void showLearn(item);});await page.locator('#bNext').click();
   await page.waitForFunction(()=>S.cards.web_large?.fsrs&&!S.cards.web_large.pendingFsrs&&largeActive&&!largeActive.pending&&!localSaveFailed,null,{timeout:60000});await page.evaluate(()=>clearTimeout(save._t));
   await page.locator('#btnUser').click();await page.locator('#mSync').click();await page.waitForFunction(()=>document.querySelector('#mMsg')?.textContent.includes('✓ 已同步'),null,{timeout:60000});
   const latest=await page.evaluate(async slot=>{const x=await largeReadVerifiedSnapshot(slot);return {revision:x.revision,generation:x.generation,swift:!!JSON.parse(x.raw).cards.swift_large,web:!!JSON.parse(x.raw).cards.web_large};},slot);assert(latest.swift&&latest.web);

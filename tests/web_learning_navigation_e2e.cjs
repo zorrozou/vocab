@@ -110,7 +110,14 @@ const question = {word:'apple',pos:1,mode:'forward',options:[{text:'yes',ok:true
       const page=await browser.newPage(); await page.goto(base);
       await page.evaluate(async account => { await onAuthed(account,false); },authA);
       const gate=await hold(page,'**/api/v1/fsrs/review',null);
-      await page.evaluate(() => { S.settings.newPerDay=1; const item={kind:'learn',word:'pear',detail:{word:'pear',pos:1,senses:[{text:'x'}]}}; session={queue:[item],idx:0,reviewedToday:0,learnedToday:0}; void showLearn(item); });
+      await page.evaluate(async() => {
+        S.settings.newPerDay=1;markSettingChanged('newPerDay');save();clearTimeout(save._t);
+        if(!await syncFromServer())throw Error('Failed to sync the new-word setting');
+        const item={kind:'learn',word:'pear',detail:{word:'pear',pos:1,senses:[{text:'x'}]}};
+        const queue=await prepareSharedQueue([item],false,()=>true,false);
+        if(queue.length!==1)throw Error('Failed to reserve the test word');
+        session={day:today(),queue,idx:0,reviewedToday:0,learnedToday:0};void showLearn(item);
+      });
       await page.locator('#bNext').click(); await gate.started;
       await page.evaluate(async account => { await onAuthed(account,false); },authB);
       gate.release(); await gate.done; await page.waitForTimeout(400);

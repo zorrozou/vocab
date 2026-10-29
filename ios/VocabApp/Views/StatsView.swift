@@ -3,6 +3,8 @@ import SwiftUI
 /// 学习统计：记忆保持率分布 + 未来 14 天负载 + 顽固词（移植自 web showStats）
 struct StatsView: View {
     @Environment(AppState.self) private var app
+    @State private var preparingDrill = false
+    @State private var drillError = ""
 
     private var mastered: Int { app.S.cards.values.filter { StudyEngine.isMastered($0) }.count }
 
@@ -87,10 +89,19 @@ struct StatsView: View {
                             .font(.system(size: 12)).foregroundStyle(Theme.muted)
                         // 顽固词特训：单独组队歼灭（纯复习队列，不进新词）
                         PrimaryButton(title: "🔥 顽固词特训（\(drillWords.count) 词）", color: Theme.warn) {
-                            app.startStubbornDrill()
+                            guard !preparingDrill else { return }
+                            preparingDrill = true; drillError = ""
+                            let owner = app.auth, generation = app.routeGeneration
+                            Task {
+                                let count = await app.startStubbornDrill()
+                                guard app.auth == owner, app.routeGeneration == generation else { return }
+                                preparingDrill = false
+                                if count == 0 { drillError = app.studyNotice }
+                            }
                         }
-                        .disabled(drillWords.isEmpty)
+                        .disabled(drillWords.isEmpty || preparingDrill)
                         .padding(.top, 4)
+                        if !drillError.isEmpty { Text(drillError).font(.system(size: 12)).foregroundStyle(Theme.bad) }
                         if drillWords.count < stubborn.count {
                             Text("已为今日新词预留名额；超过上限的词暂不安排。")
                                 .font(.system(size: 12)).foregroundStyle(Theme.muted)

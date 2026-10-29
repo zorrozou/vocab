@@ -208,6 +208,40 @@ struct TrackState: Codable, Equatable {
     var dayWDay: String?      // dayW 对应日期
 }
 
+/// Separate from LearningState: a server-issued daily reservation is not a
+/// learning grade, and restoring a progress backup must not release its slots.
+struct SharedStudyWord: Codable, Equatable {
+    var word: String
+    var kind: String
+    var from_pending: Bool = false
+}
+
+struct SharedStudyPlan: Codable, Equatable {
+    struct Item: Codable, Equatable {
+        var word, kind: String
+        var new_word, probe_word, completed, from_pending: Bool
+    }
+    var account_id, day: String
+    var cap, new_target: Int
+    var configured_cap, configured_new_per_day: Int
+    var items: [Item]
+    var approved: [String]
+    var over_limit, requires_sync: Bool
+
+    func valid(account: String, day: String) -> Bool {
+        account_id == account && self.day == day && (0...10000).contains(cap) &&
+        (0...10000).contains(configured_cap) && (0...10000).contains(configured_new_per_day) &&
+        (0...cap).contains(new_target) && items.count <= 10000 &&
+        Set(items.map(\.word)).count == items.count &&
+        items.allSatisfy { !$0.word.isEmpty && $0.word.count <= 100 && ["learn","review","probe"].contains($0.kind) }
+    }
+
+    func permits(word: String, kind: String) -> Bool {
+        guard let item = items.first(where: { $0.word == word }) else { return false }
+        return kind == "learn" ? item.new_word : kind == "probe" ? item.probe_word : kind == "review"
+    }
+}
+
 struct EvalReport: Codable, Equatable {
     var date: String
     var mean: Int
