@@ -1939,4 +1939,37 @@ final class VocabUITests: XCTestCase {
         let warning = app.staticTexts["系统通知权限未开启，请在系统设置中允许词航发送通知。"]
         XCTAssertTrue(warning.waitForExistence(timeout: 20), "Denied notification permission was not reported")
     }
+
+    @MainActor func testSyncedReminderAppliesImmediately() async throws {
+        continueAfterFailure = false
+        let seed = try await fixtureRequest("/api/v1/__ui_fixture/recovery-case", method: "POST")
+        let username = try XCTUnwrap(seed["username"] as? String)
+        let password = try XCTUnwrap(seed["password"] as? String)
+        let token = try XCTUnwrap(seed["token"] as? String)
+        let app = XCUIApplication()
+        app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
+        app.launch()
+        XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
+        let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
+        XCTAssertTrue(user.waitForExistence(timeout: 20)); user.tap(); user.typeText(username)
+        XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
+        app.buttons["登录"].tap()
+        XCTAssertTrue(app.buttons["account-menu"].waitForExistence(timeout: 30))
+        let response = try await fixtureRequest("/api/v1/me/state", token: token)
+        var state = try XCTUnwrap(response["state"] as? [String: Any])
+        var settings = try XCTUnwrap(state["settings"] as? [String: Any])
+        settings["notifyEnabled"] = true; settings["notifyHour"] = 20; state["settings"] = settings
+        _ = try await fixtureRequest("/api/v1/me/state", method: "PUT", token: token, body: state)
+        app.buttons["account-menu"].tap()
+        XCTAssertTrue(app.buttons["立即同步"].waitForExistence(timeout: 20)); app.buttons["立即同步"].tap()
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        let deny = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Don’t Allow", "Don't Allow", "不允许"])).firstMatch
+        XCTAssertTrue(deny.waitForExistence(timeout: 30), "Synced reminder did not request notification permission")
+        deny.tap()
+        XCTAssertTrue(app.buttons["返回学习"].waitForExistence(timeout: 20)); app.buttons["返回学习"].tap()
+        XCTAssertTrue(app.buttons["settings-menu"].waitForExistence(timeout: 20)); app.buttons["settings-menu"].tap()
+        let warning = app.staticTexts["系统通知权限未开启，请在系统设置中允许词航发送通知。"]
+        for _ in 0..<8 where !warning.isHittable { app.swipeUp() }
+        XCTAssertTrue(warning.waitForExistence(timeout: 20), "Synced setting or denied-permission warning is missing")
+    }
 }
