@@ -334,7 +334,7 @@ final class VocabUITests: XCTestCase {
         for _ in 0..<5 where !export.isHittable { app.swipeUp() }
         XCTAssertTrue(export.waitForExistence(timeout: 10)); export.tap()
         let save = app.buttons["DOCPicker.actionButton"]
-        XCTAssertTrue(save.waitForExistence(timeout: 45))
+        XCTAssertTrue(save.waitForExistence(timeout: 45), "Export picker did not appear: \(app.debugDescription)")
         var filename = "vocab-ui-\(UUID().uuidString)"
         let nameField = app.textFields["DOCPicker.filenameTextField"]
         if !nameField.waitForExistence(timeout: 5) {
