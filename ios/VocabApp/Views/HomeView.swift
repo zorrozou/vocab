@@ -135,17 +135,26 @@ struct TopBar: View {
                     .lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 4)
                 Button { app.route = .stats } label: {
-                    Image(systemName: "chart.bar").foregroundStyle(Theme.accentLight)
+                    Image(systemName: "chart.bar").foregroundStyle(Theme.accentLight).frame(width: 44, height: 44)
                 }.accessibilityLabel("统计").accessibilityIdentifier("stats-menu")
                 Button { app.route = .settings } label: {
-                    Image(systemName: "gearshape").foregroundStyle(Theme.accentLight).padding(.leading, 8)
+                    Image(systemName: "gearshape").foregroundStyle(Theme.accentLight).frame(width: 44, height: 44)
                 }.accessibilityLabel("设置").accessibilityIdentifier("settings-menu")
                 Button { app.route = app.isGuest ? .welcome : .userMenu } label: {
-                    Image(systemName: "person.circle").foregroundStyle(Theme.accentLight).padding(.leading, 8)
+                    Image(systemName: "person.circle").foregroundStyle(Theme.accentLight).frame(width: 44, height: 44)
                 }.accessibilityLabel("账号").accessibilityIdentifier("account-menu")
             }
             if app.syncFailed {
-                Text("⚠️ 同步失败").font(.system(size: 11)).foregroundStyle(Theme.warn)
+                Button { app.route = app.isGuest ? .welcome : .userMenu } label: {
+                    HStack {
+                        Text("同步未完成，请查看详情")
+                        Image(systemName: "chevron.right")
+                    }
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Theme.warn)
+                    .frame(minHeight: 44, alignment: .leading)
+                }
+                .accessibilityIdentifier("sync-status")
             }
             if app.credentialSaveFailed {
                 Text("⚠️ 登录凭证未保存，重启后需重新登录").font(.system(size: 11)).foregroundStyle(Theme.warn)

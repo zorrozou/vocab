@@ -626,6 +626,9 @@ struct AnswerCardView: View {
                         GhostButton(title: "记得") { rate(3) }
                         PrimaryButton(title: "熟练", color: Theme.ok) { rate(4) }
                     }
+                    Text("困难：费力想起 · 记得：正常想起 · 熟练：轻松想起")
+                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .multilineTextAlignment(.center)
                 } else {
                     PrimaryButton(title: "继续 →") { app.commitUndoReview(); onNext() }
                     Text("已记为「忘记」，降级并明天再见")

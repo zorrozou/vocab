@@ -10,7 +10,7 @@
   body {
     font-family: -apple-system, "PingFang SC", "Noto Sans SC", sans-serif;
     background: #0e1013; color: #e8e9eb; min-height: 100vh;
-    max-width: 480px; margin: 0 auto; padding: 0 16px 90px; line-height: 1.55;
+    max-width: 720px; margin: 0 auto; padding: 0 16px 90px; line-height: 1.6;
   }
   header { padding: 18px 0 8px; display: flex; align-items: baseline; justify-content: space-between; }
   .logo { font-size: 20px; font-weight: 700; }
@@ -65,6 +65,20 @@
   .opt.wrong { border-color: #a33; background: #3a1d1d; color: #f0a0a0; }
   .opt:disabled { cursor: default; }
   .plays.bad { right: 8px; top: 44px; color: #8b8f96; }
+  button, input { font: inherit; }
+  button:not(.plays):not(.playw) { min-height: 44px; cursor: pointer; }
+  button:focus-visible, input:focus-visible { outline: 3px solid #8ab8ff; outline-offset: 2px; }
+  header { align-items: center; gap: 8px; }
+  header .row { flex-wrap: nowrap; }
+  header button.icon { border: 1px solid #343b46; color: #e8e9eb; }
+  .logo { min-width: 0; }
+  .logo small { display: inline-block; }
+  .today-title { color: #e8e9eb; font-size: 21px; font-weight: 700; margin-bottom: 8px; }
+  .today-progress-label { display: flex; justify-content: space-between; gap: 12px; margin-top: 16px; }
+  .today-progress { margin-top: 6px; height: 6px; }
+  .setting-heading { color: #e8e9eb; font-size: 16px; font-weight: 650; margin: 24px 0 8px; padding-top: 16px; border-top: 1px solid #303641; }
+  @media (max-width: 380px) { .logo small, #dateStr { display: none; } #userTag { display: block; margin-left: 0 !important; } .stat { padding: 10px 4px; } }
+  @media (prefers-reduced-motion: reduce) { .progress i { transition: none; } }
 </style>
 </head>
 <body>
@@ -72,9 +86,9 @@
   <div class="logo">词航<small>艾宾浩斯背单词</small><span id="userTag" style="font-size:11px;color:#5f6670;margin-left:8px"></span></div>
   <div class="row" style="margin:0;gap:6px;align-items:center">
     <span class="muted" id="dateStr"></span>
-    <button class="icon" id="btnUser" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px">👤</button>
-    <button class="icon" id="btnStats" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px">📊</button>
-    <button class="icon" id="btnSettings" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px">⚙️</button>
+    <button class="icon" id="btnUser" aria-label="账号与同步" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px">👤</button>
+    <button class="icon" id="btnStats" aria-label="统计" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px">📊</button>
+    <button class="icon" id="btnSettings" aria-label="设置" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px">⚙️</button>
   </div>
 </header>
 <div class="chips" id="chips"></div>
@@ -1058,7 +1072,9 @@ function home() {
   }
   const plan = dailyPlanSummary(S);
   el.innerHTML = guestBanner + `<div class="card center">
-    <h2>今日任务</h2>
+    <h2 class="today-title">今日任务</h2>
+    <div class="today-progress-label muted"><span>今日进度</span><strong>${plan.completed} / ${plan.totalPlanned}</strong></div>
+    <div class="progress today-progress" role="progressbar" aria-label="今日进度" aria-valuemin="0" aria-valuemax="${Math.max(1, plan.totalPlanned)}" aria-valuetext="${plan.completed} / ${plan.totalPlanned}" aria-valuenow="${plan.completed}"><i style="width:${plan.totalPlanned ? Math.min(100, 100 * plan.completed / plan.totalPlanned) : 0}%"></i></div>
     <div class="stat-grid">
       <div class="stat"><b>${plan.dueAvailable}</b><span>待复习</span></div>
       <div class="stat"><b>${plan.newPlanned}</b><span>新词上限</span></div>
@@ -1625,7 +1641,7 @@ async function answerCard(item, quizOk, wrongRecorded = false) {
           <button class="act ghost" id="r2">困难</button>
           <button class="act ghost" id="r3">记得</button>
           <button class="act ok" id="r4">熟练</button>
-        </div>`
+        </div><p class="muted center" style="margin-top:8px">困难：费力想起 · 记得：正常想起 · 熟练：轻松想起</p>`
       : `<div class="row" style="margin-top:14px"><button class="ghost" id="rUndo">撤销忘记</button><button class="act" id="rNext">继续 →</button></div>
          <p class="muted center" style="margin-top:8px">已记为「忘记」，降级并明天再见；误点可撤销重答</p>`}
   </div>`;
@@ -2019,21 +2035,22 @@ function unverifiedKeys(auth) {
 function showSettings() {
   const st = S.settings;
   $("#app").innerHTML = `<div class="card">
-    <h2>设置</h2>
+    <h2 class="today-title">设置</h2>
+    <p class="setting-heading" style="border:0;padding-top:0;margin-top:8px">每日学习</p>
     ${fsrsReplayWarning ? `<p class="muted">${escapeHTML(fsrsReplayWarning)}。请先导出进度。</p>` : ""}
     <p class="muted">每日新词数</p>
     <div class="row">${[5, 10, 15, 20].map(n => `<button class="ghost" style="flex:1;padding:9px;${st.newPerDay === n ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-new="${n}">${n}</button>`).join("")}</div>
     <p class="muted" style="margin-top:12px">每日总上限（复习、新词和探测的不同单词）</p>
     <div class="row">${[30, 60, 100, 130].map(n => `<button class="ghost" style="flex:1;padding:9px;${st.dailyCap === n ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-cap="${n}">${n}</button>`).join("")}</div>
-    <p class="muted" style="margin-top:12px">朗读嗓音</p>
+    <p class="setting-heading">朗读嗓音</p>
     <div class="row">${[["en-US-AriaNeural", "Aria 女声"], ["en-US-GuyNeural", "Guy 男声"], ["en-US-JennyNeural", "Jenny 女声"], ["en-GB-SoniaNeural", "Sonia 英音"]].map(([v, name]) => `<button class="ghost" style="flex:1 1 40%;padding:9px;${(st.voice || "") === v ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-voice="${v}">${name}</button>`).join("")}</div>
-    <p class="muted" style="margin-top:12px">定级</p>
+    <p class="setting-heading">定级与校验</p>
     <div class="row"><button class="ghost" style="flex:1;padding:9px" id="bReplace">重新定级（30 题重测词汇边界）</button></div>
     <p class="muted" style="font-size:12px">随时可测。已学单词、复习进度、连续天数全部保留，只更新词汇边界和后续新词起点。</p>
     <p class="muted" style="margin-top:12px">估值校验</p>
     <div class="row"><button class="ghost" style="flex:1;padding:9px" id="bValidation">独立水平校验（24 题，不影响学习计划）</button></div>
     ${S.evalReport ? `<p class="muted" style="font-size:12px">上次 ${escapeHTML(S.evalReport.date)}：独立 ≈${escapeHTML(S.evalReport.mean)}，当前 ≈${escapeHTML(S.evalReport.appMean)}，差值 ${S.evalReport.delta > 0 ? "+" : ""}${escapeHTML(S.evalReport.delta)}</p>` : ""}
-    <p class="muted" style="margin-top:12px">学习数据</p>
+    <p class="setting-heading">学习数据与备份</p>
     ${normalActive ? `<p class="muted">可靠本机存储已启用。备份恢复、整理历史和重新加载服务器进度需要联网。</p>` : AUTH && AUTH.accountId && !largeActive ? `<div class="row"><button class="ghost" id="bPrepareNormal">启用可靠本机存储（实验）</button></div><p class="muted">启用后可继续学习和同步；备份恢复与历史整理需要联网。</p>` : ""}
     ${new Blob([JSON.stringify(S)]).size > 6 * 1024 * 1024 ? `<p class="muted">学习状态接近同步大小上限，请先同步其他设备，再整理已同步的历史。</p>` : ""}
     <div class="row"><button class="ghost" id="bExport">导出本机学习进度</button></div>
@@ -7487,7 +7504,7 @@ async function userMenu() {
     <div class="row"><button class="act ghost" id="mSwitch">切换账号 / 游客模式</button></div>
     <div class="row"><button class="act warn" id="mLogout">退出登录</button></div>
     <div class="row"><button class="act ghost" id="mBack">返回学习</button></div>
-    <div class="muted" id="mMsg"></div>
+    <div class="muted" id="mMsg" role="status">${syncFailed ? escapeHTML(syncFailureMessage || "同步未完成，本地进度已保留，请稍后重试。") : ""}</div>
   </div>`;
   $("#mBack").onclick = home;
   $("#mSync").onclick = async () => {

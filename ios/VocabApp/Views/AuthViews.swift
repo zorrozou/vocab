@@ -102,6 +102,10 @@ struct UserMenuView: View {
                 if let a = app.auth {
                     Text(a.nickname).font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
                     Text("@\(a.username)\(app.syncFailed ? " · 同步失败" : "")").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    if app.syncFailed && msg.isEmpty {
+                        Text((app.syncMsg.isEmpty || app.syncMsg == "✓ 已同步") ? "同步未完成，请重试或查看账号状态。" : app.syncMsg)
+                            .font(.system(size: 13)).foregroundStyle(Theme.warn)
+                    }
                     if !app.fsrsReplayError.isEmpty {
                         Text(app.fsrsReplayError).font(.system(size: 13)).foregroundStyle(Theme.warn)
                     }
