@@ -632,7 +632,7 @@ struct AnswerCardView: View {
                         .multilineTextAlignment(.center)
                 } else {
                     PrimaryButton(title: "继续 →") { app.commitUndoReview(); onNext() }
-                    Text("已记为「忘记」，降级并明天再见")
+                    Text("已记为「忘记」，将按记忆间隔再次出现")
                         .font(.system(size: 12)).foregroundStyle(Theme.muted)
                     // 手滑误点救星：撤销这次「忘记」，回到本题重来
                     Button("点错了？撤销这次「忘记」") { onUndo() }
@@ -782,7 +782,7 @@ struct AcceptanceQuizView: View {
                     PrimaryButton(title: "重试本题") { Task { await load() } }
                     GhostButton(title: "稍后再做") { app.markDayDone(); app.route = .home }
                 }
-                Text("答对 → 明天复习见 · 答错 → 进入薄弱词，今晚就定制例句")
+                Text("答对 → 按记忆间隔复习 · 答错 → 进入薄弱词，定制例句")
                     .font(.system(size: 12)).foregroundStyle(Theme.muted)
             }
             .padding(.horizontal, 14)

@@ -1365,7 +1365,7 @@ async function quizRound(words, i) {
     <div><span class="big">${escapeHTML(w)}</span><button class="playw" aria-label="朗读单词" data-t="${escapeHTML(w)}">▶</button></div>
     <div style="text-align:left;margin-top:10px">${q.options.map((o, k) => `<button class="opt" data-i="${k}">${escapeHTML(o.text)}</button>`).join("")}</div>
     <div class="progress"><i style="width:${i / words.length * 100}%"></i></div>
-    <p class="muted" style="margin-top:10px">答对 → 明天复习见 · 答错 → 进入薄弱词，今晚就定制例句</p>
+    <p class="muted" style="margin-top:10px">答对 → 按记忆间隔复习 · 答错 → 进入薄弱词，定制例句</p>
   </div>`;
   bindPlays();
   playText(w);
@@ -1712,7 +1712,7 @@ async function answerCard(item, quizOk, wrongRecorded = false) {
           <button class="act ok" id="r4">熟练</button>
         </div><p class="muted center" style="margin-top:8px">困难：费力想起 · 记得：正常想起 · 熟练：轻松想起</p>`
       : `<div class="row" style="margin-top:14px"><button class="ghost" id="rUndo">撤销忘记</button><button class="act" id="rNext">继续 →</button></div>
-         <p class="muted center" style="margin-top:8px">已记为「忘记」，降级并明天再见；误点可撤销重答</p>`}
+         <p class="muted center" style="margin-top:8px">已记为「忘记」，将按记忆间隔再次出现；误点可撤销重答</p>`}
   </div>`;
   bindPlays();
   if ($("#bRetryDetail")) $("#bRetryDetail").onclick = () => answerCard(item, quizOk, true);
