@@ -114,6 +114,10 @@ struct SentenceItem: Codable, Equatable {
 }
 
 extension Array where Element == SentenceItem {
+    func firstAlternative(excluding texts: [String]) -> SentenceItem? {
+        first { !texts.contains($0.text) }
+    }
+
     // An async replacement may complete after another row was removed or refreshed.
     mutating func replaceSentence(_ original: SentenceItem, with replacement: SentenceItem?) {
         guard let index = firstIndex(of: original) else { return }

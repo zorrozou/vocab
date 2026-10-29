@@ -150,7 +150,8 @@ struct LearnCardView: View {
             }
             ForEach(Array(sentences.enumerated()), id: \.offset) { i, s in
                 SentenceRow(word: item.word, tag: tierLabel(s.tier), tagColor: Theme.accentLight,
-                            sentence: s, kind: "static") { fresh in
+                            sentence: s, kind: "static", displayedSentences: sentences.map(\.text) + [personal?.text, weave?.text].compactMap { $0 }) { fresh in
+                    if let fresh, sentences.contains(where: { $0.text == fresh.text }) { return }
                     sentences.replaceSentence(s, with: fresh)
                 }
             }
@@ -659,7 +660,8 @@ struct AnswerCardView: View {
             }
             ForEach(Array(sentences.enumerated()), id: \.offset) { i, s in
                 SentenceRow(word: word, tag: { switch s.tier { case 2: return "进阶"; case 3: return "挑战"; default: return "基础" } }(),
-                            tagColor: Theme.accentLight, sentence: s, kind: "static") { fresh in
+                            tagColor: Theme.accentLight, sentence: s, kind: "static", displayedSentences: sentences.map(\.text) + [personal?.text].compactMap { $0 }) { fresh in
+                    if let fresh, sentences.contains(where: { $0.text == fresh.text }) { return }
                     sentences.replaceSentence(s, with: fresh)
                 }
             }

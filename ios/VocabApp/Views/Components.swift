@@ -235,10 +235,12 @@ struct SentenceRow: View {
     let tagColor: Color
     let sentence: SentenceItem
     let kind: String          // "static" / "personal" / "weave"
+    var displayedSentences: [String] = []
     var recallNote: String? = nil
     var onSwap: (SentenceItem?) -> Void
 
     @State private var swapping = false
+    @State private var swapError = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -252,10 +254,12 @@ struct SentenceRow: View {
                 Button {
                     guard !swapping else { return }
                     swapping = true
+                    swapError = false
                     Task {
-                        let fresh = await app.swapSentence(word: word, oldText: sentence.text, kind: kind)
+                        let fresh = await app.swapSentence(word: word, oldText: sentence.text, kind: kind, displayedSentences: displayedSentences)
                         await MainActor.run {
-                            onSwap(fresh)
+                            if kind == "static" && fresh == nil { swapError = true }
+                            else { onSwap(fresh) }
                             swapping = false
                         }
                     }
@@ -278,6 +282,10 @@ struct SentenceRow: View {
             }
             if let zh = sentence.zh, !zh.isEmpty {
                 Text(zh).font(.system(size: 13)).foregroundStyle(Theme.muted)
+            }
+            if swapError {
+                Text("暂时无法换句，请稍后重试。")
+                    .font(.system(size: 13)).foregroundStyle(Theme.muted)
             }
         }
         .opacity(swapping ? 0.35 : 1)

@@ -67,6 +67,35 @@ const assert = require('assert');
       assert.equal(await page.locator('#app .sent').count(), 3);
       await page.close();
     }
+    {
+      const page = await browser.newPage();
+      const messages = [];
+      page.on('dialog', async dialog => { messages.push(dialog.message()); await dialog.accept(); });
+      let reportFails = false;
+      await page.route('**/api/v1/sentence/report?**', route => route.fulfill(reportFails ? {status:503, body:'offline'} : {json:{ok:true}}));
+      await page.route('**/api/v1/sentence/trio?**', route => route.fulfill({json:{sentences:[]}}));
+      await page.route('**/api/v1/lexicon/at?**', route => route.fulfill({json:{words:[{word:'apple',sentences:[{tier:1,text:'Original'}, {tier:2,text:'Already visible'}]}]}}));
+      await page.goto(process.env.VOCAB_TEST_BASE || 'http://127.0.0.1:18765/');
+      await page.locator('#wGuest').click();
+      await page.evaluate(async () => {
+        autoPlaySequence = () => {};
+        const item = {kind:'learn',word:'apple',detail:{word:'apple',pos:1,senses:[{text:'苹果'}],sentences:[{tier:1,text:'Original'}, {tier:2,text:'Already visible'}, {tier:3,text:'Third sentence'}]}};
+        session.queue = [item]; session.idx = 0;
+        await showLearn(item);
+      });
+      const swap = page.locator('.bad[data-t="Original"]');
+      await swap.click();
+      await page.waitForFunction(() => document.querySelector('.bad[data-t="Original"]').closest('.sent').style.opacity === '');
+      assert.equal(await page.getByText('Already visible').count(), 1, 'replacement must not duplicate another visible sentence');
+      assert.equal(await page.getByText('Original', {exact:false}).count() > 0, true, 'original remains when no alternative exists');
+      assert.match(messages[0], /没有其他例句/);
+      reportFails = true;
+      await swap.click();
+      await page.waitForFunction(() => document.querySelector('.bad[data-t="Original"]').closest('.sent').style.opacity === '');
+      assert.match(messages[1], /无法换句/);
+      assert.equal(await page.locator('#app .sent').count(), 3, 'failed report must preserve the sentence');
+      await page.close();
+    }
     console.log('PASS trio and weave survive both response orders');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

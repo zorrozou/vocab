@@ -1756,7 +1756,7 @@ final class AppState {
 
     // MARK: ↻ 换一句
 
-    func swapSentence(word: String, oldText: String, kind: String) async -> SentenceItem? {
+    func swapSentence(word: String, oldText: String, kind: String, displayedSentences: [String] = []) async -> SentenceItem? {
         let slot = slotKey, token = auth?.token
         do {
             if kind == "static" {
@@ -1767,7 +1767,7 @@ final class AppState {
                 let r = try await api.lexiconAt(pos: pos, n: 20)
                 guard slotKey == slot else { return nil }
                 if let wd = r.words.first(where: { $0.word == word }),
-                   let fresh = (wd.sentences ?? []).first(where: { $0.text != oldText }) {
+                   let fresh = (wd.sentences ?? []).firstAlternative(excluding: displayedSentences + [oldText]) {
                     return fresh
                 }
                 return nil

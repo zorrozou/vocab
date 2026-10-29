@@ -26,7 +26,7 @@
   .sense { margin-top: 10px; font-size: 14.5px; color: #cfd4da; }
   .sense span { display: block; margin-top: 2px; }
   .sense i { color: #5f9cec; font-style: normal; font-size: 12px; margin-right: 5px; }
-  .sent { margin-top: 12px; padding: 10px 46px 10px 12px; background: #12151a; border-radius: 10px; font-size: 15px; position: relative; }
+  .sent { margin-top: 12px; min-height: 82px; padding: 10px 46px 10px 12px; background: #12151a; border-radius: 10px; font-size: 15px; position: relative; }
   .sent .tag { display: inline-block; font-size: 10px; border-radius: 4px; padding: 1px 6px; margin-right: 7px; vertical-align: 2px; }
   .tag.s { color: #8b8f96; border: 1px solid #2c323b; }
   .tag.p { color: #8fd0a8; background: #14301f; }
@@ -1576,8 +1576,16 @@ function bindPlays() {
       if (sentEl) sentEl.style.opacity = ".35";
       try {
         if (kind !== "static") { rejectPersonalSentence(w, text); save(); }
-        else { await fetch(`${API}/api/v1/sentence/report?word=${encodeURIComponent(w)}&text=${encodeURIComponent(text)}`, { method: "POST", headers: authHeaders() }); }
-      } catch (e) { if (kind !== "static") { alert("无法保存例句修改，请先释放本机空间并导出进度。"); return; } }
+        else {
+          const report = await fetch(`${API}/api/v1/sentence/report?word=${encodeURIComponent(w)}&text=${encodeURIComponent(text)}`, { method: "POST", headers: authHeaders() });
+          if (!report.ok) throw new Error("report failed");
+        }
+      } catch (e) {
+        if (sentEl) sentEl.style.opacity = "";
+        if (kind !== "static") alert("无法保存例句修改，请先释放本机空间并导出进度。");
+        else if (sentEl && sentEl.isConnected) alert("暂时无法换句，请稍后重试。");
+        return;
+      }
       try {
         if (kind === "static") {
           // 触发补档并重取该词条
@@ -1585,12 +1593,16 @@ function bindPlays() {
           const pos = (S.cards[w] && S.cards[w].pos) || S.pointer;
           const r2 = await fetch(`${API}/api/v1/lexicon/at?pos=${pos}&n=20`).then(r => r.json());
           const wd = r2.words.find(x => x.word === w);
-          const fresh = wd && (wd.sentences || []).find(x => x.text !== text);
+          const displayed = new Set([...document.querySelectorAll("#app .sent .plays:not(.bad)")].map(x => x.dataset.t));
+          const fresh = wd && (wd.sentences || []).find(x => x.text !== text && !displayed.has(x.text));
           if (fresh && sentEl) {
             const TIER = { 1: "基础", 2: "进阶", 3: "挑战" };
             sentEl.outerHTML = `<div class="sent base-sentence"><span class="tag s">${TIER[fresh.tier] || "例句"}</span>${escapeHTML(fresh.text)}<button class="plays" aria-label="朗读例句" data-t="${escapeHTML(fresh.text)}">▶</button><button class="plays bad" data-t="${escapeHTML(fresh.text)}" data-w="${escapeHTML(w)}" data-kind="static" title="换一句">↻</button>${fresh.zh ? `<div class="zh">${escapeHTML(fresh.zh)}</div>` : ""}</div>`;
             bindPlays();
-          } else if (sentEl) sentEl.remove();
+          } else if (sentEl && sentEl.isConnected) {
+            sentEl.style.opacity = "";
+            alert("暂时没有其他例句，请稍后重试。");
+          }
         } else {
           // 换句也持久化任务，超时后仍能在回到主页时取回。
           const state = S, owner = deviceId();
@@ -1607,7 +1619,12 @@ function bindPlays() {
             bindPlays();
           } else if (sentEl) sentEl.remove();
         }
-      } catch (e) { if (sentEl) sentEl.remove(); }
+      } catch (e) {
+        if (kind === "static" && sentEl && sentEl.isConnected) {
+          sentEl.style.opacity = "";
+          alert("暂时无法换句，请稍后重试。");
+        } else if (sentEl) sentEl.remove();
+      }
     };
   });
 }
