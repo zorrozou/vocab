@@ -607,8 +607,8 @@ final class VocabUITests: XCTestCase {
         XCTAssertEqual(twenty.value as? String, "已选择")
         _ = try await fixtureRequest("/api/v1/__ui_fixture/state-expired-release", method: "POST")
         app.buttons["返回"].tap()
-        XCTAssertTrue(app.staticTexts["⚠️ 本机保存失败，请导出进度"].waitForExistence(timeout: 20))
-        XCTAssertTrue(app.staticTexts["⚠️ 同步失败"].waitForExistence(timeout: 20), "held 401 was not handled")
+        XCTAssertTrue(app.buttons["本机保存失败，打开设置导出进度"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.buttons["同步未完成，请查看详情"].waitForExistence(timeout: 20), "held 401 was not handled")
         XCTAssertTrue(learned.exists, "expired response lost the active account")
         app.buttons["account-menu"].tap()
         let switchAccount = app.buttons["切换账号 / 游客模式"]

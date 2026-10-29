@@ -365,6 +365,7 @@ const save = () => {
     } catch (_) { localSaveFailed = true; clearTimeout(save._t); renderUserTag(); return; }
   }
   // 限制日志条数；卡片和事件仍会增长，网络同步还有独立的字节上限。
+  const originalLog = S.log;
   if (S.log.length > 1200) S.log = trimLearningLog(S.log);
   if (largeActive) return queueLargeSave(largeActive);
   if (normalActive) return queueNormalSave(normalActive);
@@ -385,7 +386,7 @@ const save = () => {
     localStorage.setItem("vocab_write_ts", stamp);
     localStorage.setItem(slotClock(slot, "write"), stamp);
     localSaveFailed = false;
-  } catch (e) { localSaveFailed = true; }
+  } catch (e) { S.log = originalLog; localSaveFailed = true; }
   clearTimeout(save._t);
   if (AUTH && AUTH.accountId && !undoSnapshot && !localSaveFailed) {
     const owner = AUTH.userId, slot = accountSlot(AUTH), snapshot = JSON.parse(JSON.stringify(S));

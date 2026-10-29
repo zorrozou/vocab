@@ -621,8 +621,11 @@ final class AppState {
     /// 保存 = 本地立即 + 登录后防抖 2s 推服务器（与 web 一致）
     func save() {
         // 限制日志条数；卡片和事件仍会增长，网络同步还有独立的字节上限。
+        // 若写入失败，导出的内存进度必须保留裁剪前的完整日志。
+        let originalLog = S.log
         if S.log.count > 1200 { S.log = StudyEngine.trimLearningLog(S.log, day: DayUtil.today()) }
         saveLocal()
+        if localSaveFailed { S.log = originalLog }
         pushTask?.cancel()
         guard undoSnapshot == nil, !localSaveFailed else { return } // 撤销窗口及本机保存失败时不上传。
         guard let active = auth, let account = active.accountId else { return }
