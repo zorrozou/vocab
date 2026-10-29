@@ -3,8 +3,10 @@
 
 运行：python3 server/test_api_regression.py [BASE]
 默认 BASE=http://127.0.0.1:8000。会创建随机测试账号，不接触真实用户数据。
+无音频生成服务的隔离测试可设置 VOCAB_TEST_SKIP_TTS=1；默认仍验证真实音频。
 """
 import json
+import os
 import sys
 import time
 import urllib.error
@@ -110,7 +112,7 @@ def main():
     assert ensured.get("text")
     ok("缺句补齐")
 
-    weaved = req("/api/v1/sentence/weave?word=assert&weak=apple&cap=5000&device=regression", timeout=240)
+    weaved = req("/api/v1/sentence/weave?word=assert&weak=apple&cap=5000&device=regression", token=tokens[0], timeout=240)
     assert "text" in weaved
     ok("巩固句端点可用", f"len={len(weaved.get('text') or '')}")
 
@@ -119,20 +121,23 @@ def main():
     req("/api/v1/personalize", {
         "device": device, "date": "2026-10-26", "new_words": [],
         "weak_words": ["apple"], "learned_max_pos": 5000,
-        "sync": True, "replace": True}, timeout=240)
+        "sync": True, "replace": True}, token=tokens[0], timeout=240)
     rows = []
     for _ in range(18):
-        rows = req(f"/api/v1/personalized?device={device}&date=2026-10-26", timeout=240)["sentences"]
+        rows = req(f"/api/v1/personalized?device={device}&date=2026-10-26", token=tokens[0], timeout=240)["sentences"]
         if rows:
             break
         time.sleep(5)
     assert rows and all(r.get("text") and r.get("zh") for r in rows)
     ok("个性化例句生成与中文翻译")
 
-    text = urllib.parse.quote("Regression checks keep the learning app reliable.")
-    audio = urllib.request.urlopen(BASE + f"/api/v1/tts?text={text}", timeout=120).read()
-    assert len(audio) > 500 and audio[:2] in (b"ID", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")
-    ok("TTS 新文本音频生成")
+    if os.environ.get("VOCAB_TEST_SKIP_TTS") == "1":
+        print("SKIP TTS 新文本音频生成（测试环境未配置音频生成）", flush=True)
+    else:
+        text = urllib.parse.quote("Regression checks keep the learning app reliable.")
+        audio = urllib.request.urlopen(BASE + f"/api/v1/tts?text={text}", timeout=120).read()
+        assert len(audio) > 500 and audio[:2] in (b"ID", b"\xff\xfb", b"\xff\xf3", b"\xff\xf2")
+        ok("TTS 新文本音频生成")
 
     req("/api/v1/auth/logout", {}, token=tokens[1])
     try:
@@ -142,7 +147,7 @@ def main():
         assert e.code == 401
     ok("注销与 token 失效")
 
-    print(f"\n全部 {len(PASS)} 组 API 回归通过")
+    print(f"\n{len(PASS)} 组 API 回归通过")
 
 
 if __name__ == "__main__":
