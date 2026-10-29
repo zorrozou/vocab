@@ -28,6 +28,12 @@ struct FsrsCodingCheck {
                      LogEntry(d: "2026-10-29", word: "banana", rating: 1, kind: "placement"),
                      LogEntry(d: "2026-10-29", word: "banana", rating: 1, kind: "shadow")]
         precondition(StudyEngine.stubbornWords(drill).map(\.0) == ["apple"])
+        drill.log.append(contentsOf: [LogEntry(d:"2026-10-28",word:"banana",rating:1,kind:"review"),
+                                      LogEntry(d:"2026-10-28",word:"banana",rating:1,kind:"review")])
+        drill.settings.dailyCap = 1; drill.settings.newPerDay = 0
+        precondition(StudyEngine.stubbornDrillWords(drill, day:"2026-10-29", now:Date()) == ["apple"], "drill must not exceed the daily cap")
+        drill.settings.dailyCap = 2; drill.settings.newPerDay = 2
+        precondition(StudyEngine.stubbornDrillWords(drill, day:"2026-10-29", now:Date()) == ["apple"], "drill must reserve remaining capacity for new words")
         precondition(LocalAccountSlot.name(userId: 7, username: "Alice") == LocalAccountSlot.name(userId: 7, username: "alice"))
         precondition(LocalAccountSlot.name(userId: 7, username: "alice") != LocalAccountSlot.name(userId: 7, username: "bob"))
         let firstIdentity = String(repeating: "a", count: 32), secondIdentity = String(repeating: "b", count: 32)
@@ -187,10 +193,30 @@ struct FsrsCodingCheck {
                            "due2": CardState(stage: 1, due: "2000-01-01T00:00:00Z", lt: nil, pos: 3),
                            "due3": CardState(stage: 1, due: "2000-01-01T00:00:00Z", lt: nil, pos: 4)]
         let plan = StudyEngine.dailyPlanSummary(planState, day: day, now: Date())
-        precondition(plan.completed == 2 && plan.dueAvailable == 3 && plan.duePlanned == 2 && plan.newPlanned == 0 && plan.totalPlanned == 4)
+        precondition(plan.completed == 2 && plan.dueAvailable == 3 && plan.duePlanned == 0 && plan.newPlanned == 2 && plan.totalPlanned == 4)
         planState.settings.dailyCap = 20
         let largerPlan = StudyEngine.dailyPlanSummary(planState, day: day, now: Date())
         precondition(largerPlan.newPlanned == 4 && largerPlan.totalPlanned == 9)
+        planState.cards["mastered"] = CardState(stage: 6, due: "2000-01-01T00:00:00Z", lt: nil, pos: 5)
+        precondition(StudyEngine.dailyPlanSummary(planState, day: day, now: Date()).dueAvailable == 3)
+        var offlineForgotten = CardState(stage:6,due:"2000-01-01T00:00:00Z",lt:nil,pos:6)
+        offlineForgotten.pendingFsrs = PendingFsrs(base:.init(),events:[PendingFsrsEvent(id:"offline-fail",rating:1,at:"2026-10-29T00:00:00Z")])
+        precondition(!StudyEngine.isMastered(offlineForgotten), "pending forgotten rating must override stale mastery")
+        var longRelearning = CardState(stage:nil,due:"2000-01-01T00:00:00Z",lt:nil,pos:7,
+            fsrs:FsrsState(state:3,stability:200,difficulty:5,due:"2000-01-01T00:00:00Z",scheduled_days:nil,step:0,lastReview:nil))
+        precondition(!StudyEngine.isMastered(longRelearning), "relearning state must override old stability")
+        longRelearning.fsrs?.state = 2
+        precondition(StudyEngine.isMastered(longRelearning))
+        planState.cards["offlineForgotten"] = offlineForgotten
+        precondition(StudyEngine.dailyPlanSummary(planState, day:day, now:Date()).dueAvailable == 4)
+        var repeatState = LearningState()
+        repeatState.settings.dailyCap = 1; repeatState.settings.newPerDay = 1
+        repeatState.log = [LogEntry(d:day,word:"again",rating:1,kind:"review")]
+        repeatState.cards["again"] = CardState(stage:nil,due:"2000-01-01T00:00:00Z",lt:nil,pos:1,
+            fsrs:FsrsState(state:3,stability:1,difficulty:5,due:"2000-01-01T00:00:00Z",scheduled_days:nil,step:0,lastReview:nil))
+        let repeatPlan = StudyEngine.dailyPlanSummary(repeatState, day:day, now:Date())
+        precondition(repeatPlan.repeatPlanned == 1 && repeatPlan.duePlanned == 1 && repeatPlan.totalPlanned == 1,
+                     "same-day relearning must fit within the existing distinct-word cap")
         let longLog = loadLog + (0..<1400).map { _ in LogEntry(d: day, word: "noise", rating: 3, kind: "exposure") }
         precondition(StudyEngine.completedDailyWords(StudyEngine.trimLearningLog(longLog, day: day), day: day) == Set(["apple", "banana"]))
         let historic = ["2026-10-24", "2026-10-25", "2026-10-26", "2026-10-27"].map { LogEntry(d: $0, word: "apple", rating: 3, kind: "review") }

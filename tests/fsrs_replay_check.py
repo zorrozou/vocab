@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Replay the same offline history twice against an isolated API instance."""
 import json
+import os
 import urllib.request
 
-BASE = 'http://127.0.0.1:18765'
+BASE = os.environ.get('VOCAB_TEST_BASE', 'http://127.0.0.1:18765').rstrip('/')
 
 def post(body):
     req = urllib.request.Request(BASE + '/api/v1/fsrs/review',

@@ -855,6 +855,9 @@ struct DoneView: View {
     private var remainingCapacity: Int {
         StudyEngine.remainingDailyCapacity(app.S.log, day: DayUtil.today(), cap: app.S.settings.dailyCap)
     }
+    private func todayCount(_ kind: String) -> Int {
+        Set(app.S.log.filter { $0.d == DayUtil.today() && $0.kind == kind }.map(\.word)).count
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -862,13 +865,21 @@ struct DoneView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     Card {
-                        Text("今日完成 🎉").font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
+                        Text(remainingCapacity == 0 && dailyPlan.dueAvailable > 0 ? "今日已达上限" : "本轮学习完成 🎉").font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
                         HStack(spacing: 0) {
-                            StatCell(number: "\(app.session.reviewedToday)", label: "复习")
+                            StatCell(number: "\(todayCount("review"))", label: "今日复习")
                                 .accessibilityElement(children: .combine)
                                 .accessibilityIdentifier("session-reviewed")
-                            StatCell(number: "\(app.session.learnedToday)", label: "新词")
+                            StatCell(number: "\(todayCount("learn"))", label: "今日新词")
                             StatCell(number: "\(app.S.streak)", label: "连续天数")
+                        }
+                        if todayCount("probe") > 0 {
+                            Text("每日上限还计入 \(todayCount("probe")) 个水平探测词；同一单词当天只计一次。")
+                                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        }
+                        if dailyPlan.repeatPlanned > 0 {
+                            Text("还有 \(dailyPlan.repeatPlanned) 个今天学过的词需要按间隔再复习，不增加今日单词数。")
+                                .font(.system(size: 12)).foregroundStyle(Theme.muted)
                         }
                         // v2.0 词级知识预测：预计认识词数 + 滞回级别 + 今日证据
                         if app.S.calibrated, app.S.posterior != nil {
@@ -885,8 +896,8 @@ struct DoneView: View {
                                 Text(note).font(.system(size: 12)).foregroundStyle(Theme.muted)
                             }
                         }
-                        if remainingCapacity > 0 && app.dueLaterTodayCount() > 0 && dailyPlan.dueAvailable == 0 {
-                            Text("⏰ 今天晚些时候还有 \(app.dueLaterTodayCount()) 个词到期，记得回来")
+                        if app.dueLaterTodayCount(onlyCompleted: remainingCapacity == 0) > 0 && dailyPlan.duePlanned == 0 {
+                            Text("⏰ 今天晚些时候还有 \(app.dueLaterTodayCount(onlyCompleted: remainingCapacity == 0)) 个词到期，记得回来")
                                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
                         }
                     }
@@ -917,8 +928,8 @@ struct DoneView: View {
         // 底部行动区钉死拇指区
         .safeAreaInset(edge: .bottom) {
             VStack(spacing: 8) {
-                if dailyPlan.duePlanned > 0 {
-                    PrimaryButton(title: "继续复习 \(dailyPlan.duePlanned) 词 →") {
+                if dailyPlan.duePlanned > 0 || dailyPlan.newPlanned > 0 {
+                    PrimaryButton(title: "继续今日任务（复习 \(dailyPlan.duePlanned) · 新词 \(dailyPlan.newPlanned)）→") {
                         let generation = app.routeGeneration, owner = app.auth
                         Task {
                             let ready = await app.buildQueue()
@@ -930,6 +941,8 @@ struct DoneView: View {
                 } else if dailyPlan.dueAvailable > 0 && remainingCapacity == 0 {
                     Text("今日已达上限，还有 \(dailyPlan.dueAvailable) 词到期；可在设置中调整上限。")
                         .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    GhostButton(title: "调整每日上限", color: Theme.accentLight) { app.route = .settings }
+                        .accessibilityIdentifier("adjust-daily-cap")
                 }
                 GhostButton(title: "返回主页", color: Theme.muted) { app.route = .home }
             }

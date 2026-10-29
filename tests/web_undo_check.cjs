@@ -10,7 +10,7 @@ const ctx = {
   AUTH: {userId: 1, accountId:'a'.repeat(32)}, S: {cards: {apple: {pos: 1, fsrs: {state: 2, stability: 5, difficulty: 4,
     due: '2026-10-28', lastReview: '2026-10-20T00:00:00Z'}}}, log: [], knowledge: {}, posterior: [1],
     probeCount: 0, track: null, calibrated: false},
-  session: {reviewedToday: 0}, largeActive:null, normalActive:null, observedSlotValues:new Map(), deltaBlockedSlots:new Set(),
+  session: {reviewedToday: 0}, largeActive:null, normalActive:null, observedSlotValues:new Map(), deltaBlockedSlots:new Set(), deltaConcurrentSlots:new Set(),
   normalTransitionMarker:slot=>`${slot}:normal-transition`, awaitingServerSlot:slot=>`${slot}:awaiting-server`, deltaRecoveryBlock:slot=>`${slot}:delta-recovery-block`,
   $:()=>({firstElementChild:null}), structuredClone, Date, Math, crypto: require("crypto").webcrypto,
   accountSlot: () => 'slot', slotClock: (slot,name) => `${slot}:${name}`,

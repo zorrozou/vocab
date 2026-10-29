@@ -84,7 +84,8 @@ enum StudyEngine {
         let dueAvailable: Int
         let duePlanned: Int
         let newPlanned: Int
-        var totalPlanned: Int { completed + duePlanned + newPlanned }
+        let repeatPlanned: Int
+        var totalPlanned: Int { completed + duePlanned + newPlanned - repeatPlanned }
     }
 
     /// Recent retained learning and review records with repeated difficulty.
@@ -103,18 +104,32 @@ enum StudyEngine {
         return Array(result.prefix(8))
     }
 
-    /// 与建队列相同的去重、复习优先和每日容量规则；不预估随机探测和提前复习。
+    static func stubbornDrillWords(_ s: LearningState, day: String, now: Date) -> [String] {
+        let completed = completedDailyWords(s.log, day: day)
+        let remaining = max(0, s.settings.dailyCap - completed.count)
+        var newSlots = max(0, remaining - dailyPlanSummary(s, day: day, now: now).newPlanned)
+        return stubbornWords(s).map(\.0).filter { word in
+            if completed.contains(word) { return true }
+            guard newSlots > 0 else { return false }
+            newSlots -= 1
+            return true
+        }
+    }
+
+    /// 与建队列相同的去重、新词目标及每日容量规则；不预估随机探测和提前复习。
     static func dailyPlanSummary(_ s: LearningState, day: String, now: Date) -> DailyPlanSummary {
         let completed = completedDailyWords(s.log, day: day)
         let remaining = max(0, s.settings.dailyCap - completed.count)
-        let due = s.cards.filter { word, card in
-            !completed.contains(word) && (DayUtil.parseISO(card.due) ?? .distantFuture) <= now
-        }.count
-        let plannedDue = min(due, remaining)
+        let dueCards = s.cards.filter { word, card in
+            !isMastered(card) && (!completed.contains(word) || [1, 3].contains(card.fsrs?.state ?? 0)) &&
+                (DayUtil.parseISO(card.due) ?? .distantFuture) <= now
+        }
+        let repeats = dueCards.filter { completed.contains($0.key) }.count
+        let due = dueCards.count
         let learned = Set(s.log.filter { $0.d == day && $0.kind == "learn" }.map(\.word)).count
-        let target = s.track?.throttle == true ? 5 : s.settings.newPerDay
-        let plannedNew = min(max(0, target - learned), max(0, remaining - plannedDue))
-        return DailyPlanSummary(completed: completed.count, dueAvailable: due, duePlanned: plannedDue, newPlanned: plannedNew)
+        let plannedNew = min(max(0, s.settings.newPerDay - learned), remaining)
+        let plannedDue = repeats + min(due - repeats, max(0, remaining - plannedNew))
+        return DailyPlanSummary(completed: completed.count, dueAvailable: due, duePlanned: plannedDue, newPlanned: plannedNew, repeatPlanned: repeats)
     }
 
     /// Group actual due instants by the device's calendar day; old date-only
@@ -124,6 +139,7 @@ enum StudyEngine {
         var result = (0..<days).map { (DayUtil.addDays(day, $0), 0) }
         let indices = Dictionary(uniqueKeysWithValues: result.enumerated().map { ($0.element.0, $0.offset) })
         for card in cards.values {
+            if isMastered(card) { continue }
             guard let due = DayUtil.parseISO(card.due) else { continue }
             let localDay = DayUtil.localDay(due)
             if localDay < day { result[0].1 += 1 }
@@ -281,7 +297,9 @@ enum StudyEngine {
     }
 
     static func isMastered(_ c: CardState) -> Bool {
-        c.stage == 6 || (c.fsrs.map { $0.stability >= 180 } ?? false)
+        if c.pendingFsrs?.events.contains(where: { $0.rating == 1 }) == true { return false }
+        if [1, 3].contains(c.fsrs?.state ?? 0) { return false }
+        return c.stage == 6 || (c.fsrs.map { $0.stability >= 180 } ?? false)
     }
 
     // MARK: FSRS 请求构造（新卡 / FSRS 卡 / 旧阶梯卡迁移）

@@ -1408,6 +1408,49 @@ final class VocabUITests: XCTestCase {
         XCTAssertEqual(Set(cards.keys), Set(["banana", "cherry"]))
     }
 
+    @MainActor func testSameDayRelearningAtDailyCapacity() async throws {
+        continueAfterFailure = false
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier:"en_US_POSIX")
+        formatter.calendar = Calendar(identifier:.gregorian); formatter.timeZone = .current; formatter.dateFormat = "yyyy-MM-dd"
+        let seed = try await fixtureRequest("/api/v1/__ui_fixture/same-day-relearning-case", method:"POST", body:["day":formatter.string(from:Date())])
+        let username = try XCTUnwrap(seed["username"] as? String), password = try XCTUnwrap(seed["password"] as? String)
+        let app = XCUIApplication(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
+        XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30)); app.buttons["登录"].tap()
+        let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
+        XCTAssertTrue(user.waitForExistence(timeout:20)); user.tap(); user.typeText(username)
+        XCTAssertTrue(pass.waitForExistence(timeout:20)); pass.tap(); pass.typeText(password); app.buttons["登录"].tap()
+        XCTAssertTrue(app.staticTexts["1 / 1"].waitForExistence(timeout:30))
+        app.buttons["start-today"].tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label BEGINSWITH %@", "复习 1/1")).firstMatch.waitForExistence(timeout:30))
+        XCTAssertTrue(app.staticTexts["apple"].exists, "due relearning must remain available after the distinct-word cap is reached")
+    }
+
+    @MainActor func testMasteredWordsExcludedAndNewTargetReserved() async throws {
+        continueAfterFailure = false
+        let seed = try await fixtureRequest("/api/v1/__ui_fixture/mastery-budget-case", method: "POST")
+        let username = try XCTUnwrap(seed["username"] as? String)
+        let password = try XCTUnwrap(seed["password"] as? String)
+        let app = XCUIApplication()
+        app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
+        app.launch()
+        XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
+        let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
+        XCTAssertTrue(user.waitForExistence(timeout: 20)); user.tap(); user.typeText(username)
+        XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
+        app.buttons["登录"].tap()
+        let plannedNew = app.descendants(matching: .any)["daily-new-planned"]
+        XCTAssertTrue(plannedNew.waitForExistence(timeout: 30)); XCTAssertTrue(plannedNew.label.contains("2"))
+        XCTAssertTrue(app.staticTexts["另有 2 个词已到期，超出今日上限，暂未安排。"].exists)
+        app.buttons["start-today"].tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "复习 1/3")).firstMatch.waitForExistence(timeout: 30))
+        XCTAssertFalse(app.staticTexts["book"].exists, "a mastered card must not be queued")
+        let option = app.buttons["quiz-option-0"]
+        XCTAssertTrue(option.waitForExistence(timeout: 20)); option.tap()
+        let remember = app.buttons["记得"]
+        XCTAssertTrue(remember.waitForExistence(timeout: 20)); remember.tap()
+        XCTAssertTrue(app.staticTexts["dog"].waitForExistence(timeout: 30), "the first reserved new word must be present")
+    }
+
     @MainActor func testDailyCapacityAndDoneScreen() async throws {
         continueAfterFailure = false
         let formatter = DateFormatter()
@@ -1438,9 +1481,19 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(remember.waitForExistence(timeout: 30)); remember.tap()
         let limit = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "今日已达上限，还有 1 词到期")).firstMatch
         XCTAssertTrue(limit.waitForExistence(timeout: 30))
-        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "继续复习")).firstMatch.exists)
-        app.buttons["返回主页"].tap()
-        XCTAssertTrue(app.staticTexts["3 / 3"].waitForExistence(timeout: 20))
+        let todayReviewed = app.descendants(matching: .any)["session-reviewed"]
+        XCTAssertTrue(todayReviewed.waitForExistence(timeout: 10))
+        XCTAssertTrue(todayReviewed.label.contains("3"), "completion screen must show the daily cumulative count")
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "继续今日任务")).firstMatch.exists)
+        let adjust = app.buttons["adjust-daily-cap"]
+        XCTAssertTrue(adjust.waitForExistence(timeout: 10)); adjust.tap()
+        let largerCap = app.buttons["setting-cap-200"]
+        XCTAssertTrue(largerCap.waitForExistence(timeout: 20)); largerCap.tap()
+        XCTAssertEqual(largerCap.value as? String, "已选择")
+        XCTAssertTrue(app.buttons["返回"].waitForExistence(timeout: 10)); app.buttons["返回"].tap()
+        app.buttons["start-today"].tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "复习")).firstMatch.waitForExistence(timeout: 30))
+        app.buttons["退出"].tap()
         let response = try await fixtureRequest("/api/v1/me/state", token: token)
         let state = try XCTUnwrap(response["state"] as? [String: Any])
         let cards = try XCTUnwrap(state["cards"] as? [String: Any])

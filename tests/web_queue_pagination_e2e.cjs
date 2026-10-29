@@ -1,6 +1,6 @@
 const {chromium} = require('playwright');
 const assert = require('assert');
-const base = 'http://127.0.0.1:18765/';
+const base = process.env.VOCAB_TEST_BASE || 'http://127.0.0.1:18765/';
 (async () => {
   const browser = await chromium.launch({headless:true, ...(process.env.VOCAB_BROWSER ? {executablePath:process.env.VOCAB_BROWSER} : {})});
   const word = (name,pos) => ({word:name,pos,senses:[{pos:'n',text:'meaning'}]});

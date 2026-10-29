@@ -1284,6 +1284,11 @@ final class AppState {
     /// v1.3：评估前先做置信度扩散（每日一次）；级别变更须连续 3 天跨边界（滞回防抖）
     func trackLevelDaily() {
         guard S.calibrated, S.posterior != nil else { return }
+        if var track = S.track, track.throttle == true {
+            track.throttle = false; track.lowSince = nil
+            if track.lastNote?.contains("新词临时降到") == true { track.lastNote = nil }
+            S.track = track
+        }
         let today = DayUtil.today()
         if S.track?.evalDay == today { return }   // 每日最多一次
         var track = S.track ?? TrackState()
@@ -1298,16 +1303,7 @@ final class AppState {
             S.pointer = T
             track.lowSince = nil
             track.throttle = false
-        } else if Double(S.pointer - T) > 500 {
-            if track.lowSince == nil { track.lowSince = today }
-            if track.lowSince! <= DayUtil.addDays(today, -1) && track.throttle != true {
-                track.throttle = true
-                track.lastNote = "近期新词偏难（水平估值 ≈\(T)，游标 \(S.pointer)），新词临时降到 5 个/天，先消化存量"
-            }
         } else {
-            if track.throttle == true {
-                track.lastNote = "水平追上来了（≈\(T)），新词恢复 \(S.settings.newPerDay) 个/天"
-            }
             track.lowSince = nil
             track.throttle = false
         }
@@ -1417,7 +1413,7 @@ final class AppState {
     /// 顽固词特训：把 ≥2 次没记住的词单独组一队复习（不进新词，纯歼灭战）
     @discardableResult
     func startStubbornDrill() -> Int {
-        let words = StudyEngine.stubbornWords(S).map(\.0)
+        let words = StudyEngine.stubbornDrillWords(S, day: DayUtil.today(), now: Date())
         guard !words.isEmpty else { return 0 }
         session = Session()
         session.queue = words.map { .review(word: $0) }
@@ -1460,13 +1456,10 @@ final class AppState {
         let remaining = StudyEngine.remainingDailyCapacity(S.log, day: DayUtil.today(), cap: cap)
 
         let due = S.cards
-            .filter { !completed.contains($0.key) && (DayUtil.parseISO($0.value.due) ?? .distantFuture) <= now }
+            .filter { (!completed.contains($0.key) || [1, 3].contains($0.value.fsrs?.state ?? 0)) && !StudyEngine.isMastered($0.value) && (DayUtil.parseISO($0.value.due) ?? .distantFuture) <= now }
             .sorted { (DayUtil.parseISO($0.value.due) ?? .distantFuture) < (DayUtil.parseISO($1.value.due) ?? .distantFuture) }
             .map { $0.key }
-        let reviews = Array(due.prefix(remaining))
-
         // 提前巩固位：1~7 天前碰过、FSRS 未到期、未掌握，P=(1−R)×0.5，≤5 个
-        let reviewSet = Set(reviews)
         let earlyPool = S.cards.filter { pair in
             let (w, c) = pair
             guard !completed.contains(w) else { return false }
@@ -1478,16 +1471,12 @@ final class AppState {
             let r = StudyEngine.retrievability(c, elapsedDays: elapsed)
             return Double.random(in: 0..<1) < (1 - r) * 0.5
         }.map { $0.key }
-        let early = earlyPool.filter { !reviewSet.contains($0) }
-            .prefix(min(5, max(0, remaining - reviews.count)))
-        let reviewsAll = reviews + early
-
         // 新词：pendingNew 优先，然后按 pointer 顺序取
-        // v1.2：先跑水平追踪（可能跳位/减压），新词量用减压后的有效值
+        // 先为用户设置的新词目标留位；词库不足时剩余容量交给复习。
         trackLevelDaily()
-        let newPerDay = (S.track?.throttle == true) ? 5 : S.settings.newPerDay
+        let newPerDay = S.settings.newPerDay
         let learnedToday = Set(S.log.filter { $0.kind == "learn" && $0.d == DayUtil.today() }.map(\.word)).count
-        let nNew = min(max(0, newPerDay - learnedToday), max(0, remaining - reviewsAll.count))
+        let nNew = min(max(0, newPerDay - learnedToday), remaining)
         var news: [NewWord] = []
         // 只清理已经入卡的旧待学项；本次选中但未学完的词必须留在 pendingNew。
         S.pendingNew = S.pendingNew.filter { S.cards[$0.word] == nil }
@@ -1531,6 +1520,13 @@ final class AppState {
             }
         }
         guard news.count == nNew || exhausted else { return false }   // 仅服务端明确词库结束时允许不足额
+        let repeats = due.filter { completed.contains($0) }
+        let freshDue = due.filter { !completed.contains($0) }
+        let reviews = repeats + freshDue.prefix(max(0, remaining - news.count))
+        let reviewSet = Set(reviews)
+        let early = earlyPool.filter { !reviewSet.contains($0) }
+            .prefix(min(5, max(0, remaining - news.count - reviews.count)))
+        let reviewsAll = reviews + early
         // 跳段复核：发生过跳位（pointer 已显著领先定级边界）时，每天从跳过区间随机抽 1 个词
         // 顶替 1 个新词位——给"视为已会"的跳过词一次被抓住的机会。
         // 答对就过（确认真会），答错它会正常进卡片复习，同时水平后验自动回落纠偏。
@@ -1619,13 +1615,13 @@ final class AppState {
     }
 
     /// 今日稍后到期且尚未计入当日学习上限的单词。
-    func dueLaterTodayCount() -> Int {
+    func dueLaterTodayCount(onlyCompleted: Bool = false) -> Int {
         let now = Date()
         let calendar = Calendar.current
         let eod = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now
         let completed = StudyEngine.completedDailyWords(S.log, day: DayUtil.today())
         return S.cards.filter { word, card in
-            guard !completed.contains(word), let d = DayUtil.parseISO(card.due), d > now else { return false }
+            guard (!onlyCompleted || completed.contains(word)), (!completed.contains(word) || [1, 3].contains(card.fsrs?.state ?? 0)), !StudyEngine.isMastered(card), let d = DayUtil.parseISO(card.due), d > now else { return false }
             return d < eod
         }.count
     }

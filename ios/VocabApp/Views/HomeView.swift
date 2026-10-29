@@ -109,7 +109,7 @@ struct HomeView: View {
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("预计今日进度，已完成 \(plan.completed)，共 \(plan.totalPlanned) 词")
             HStack(spacing: 0) {
-                StatCell(number: "\(plan.dueAvailable)", label: "待复习")
+                StatCell(number: "\(plan.duePlanned)", label: "今日待复习")
                 StatCell(number: "\(plan.newPlanned)", label: "新词上限")
                     .accessibilityElement(children: .combine)
                     .accessibilityIdentifier("daily-new-planned")
@@ -121,7 +121,15 @@ struct HomeView: View {
                     StatCell(number: "未定级", label: "预计认识")
                 }
             }
-            Text("优先复习到期单词；实际队列可能包含探测或提前复习。").font(.system(size: 12)).foregroundStyle(Theme.muted)
+            if plan.dueAvailable > plan.duePlanned {
+                Text("另有 \(plan.dueAvailable - plan.duePlanned) 个词已到期，超出今日上限，暂未安排。")
+                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+            }
+            if plan.repeatPlanned > 0 {
+                Text("其中 \(plan.repeatPlanned) 个是今天学过的词，按间隔再复习，不增加今日单词数。")
+                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+            }
+            Text("先预留每日新词名额，再安排到期复习；实际队列可能包含探测或提前复习。").font(.system(size: 12)).foregroundStyle(Theme.muted)
         }
     }
 }

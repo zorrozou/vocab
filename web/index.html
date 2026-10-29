@@ -141,6 +141,7 @@ function forecastDueDates(cards, day0, days = 14) {
   const result = Array.from({length: days}, (_, i) => ({d: addDays(day0, i), n: 0}));
   const byDay = new Map(result.map((entry, index) => [entry.d, index]));
   for (const card of Object.values(cards)) {
+    if (isMastered(card)) continue;
     if (typeof card?.due !== "string" || !card.due) continue;
     const instant = new Date(card.due);
     if (!Number.isFinite(instant.getTime())) continue;
@@ -708,7 +709,9 @@ async function review(word, rating, trackWeight, allowUndo = false) {
   await scheduleFsrs(c, body, rating);
 }
 
-const isMastered = c => c.stage === 6 || (c.fsrs && c.fsrs.stability >= 180);
+const isMastered = c => !c.pendingFsrs?.events?.some(event => event.rating === 1) &&
+  ![1, 3].includes(c.fsrs?.state) &&
+  (c.stage === 6 || (c.fsrs && c.fsrs.stability >= 180));
 
 /* ---------------- 定级（网格贝叶斯） ---------------- */
 const GRID = []; for (let r = 0; r <= 12000; r += 250) GRID.push(r);
@@ -860,6 +863,10 @@ function diffusePosterior() {
 /* ---------------- v1.2/v1.3 自适应水平追踪：每日一次评估与重规划 ---------------- */
 function trackLevelDaily() {
   if (!S.calibrated || !S.posterior) return;
+  if (S.track?.throttle) {
+    S.track.throttle = false; S.track.lowSince = null;
+    if (S.track.lastNote?.includes("新词临时降到")) S.track.lastNote = null;
+  }
   if (S.track && S.track.evalDay === today()) return;   // 每日最多一次
   const track = S.track || {};
   // v1.3：先做置信度扩散（每日一次），再评估
@@ -869,14 +876,7 @@ function trackLevelDaily() {
     track.lastNote = `连续表现超过当前级别，发词位置从 ${S.pointer} 追平到 ≈${T}（${LVL_NAME[lvlOfPos(T)]}），中间词视为已会跳过`;
     S.pointer = T;
     track.lowSince = null; track.throttle = false;
-  } else if (S.pointer - T > 500) {
-    if (!track.lowSince) track.lowSince = today();
-    if (track.lowSince <= addDays(today(), -1) && !track.throttle) {
-      track.throttle = true;
-      track.lastNote = `近期新词偏难（水平估值 ≈${T}，游标 ${S.pointer}），新词临时降到 5 个/天，先消化存量`;
-    }
   } else {
-    if (track.throttle) track.lastNote = `水平追上来了（≈${T}），新词恢复 ${S.settings.newPerDay} 个/天`;
     track.lowSince = null; track.throttle = false;
   }
   // v1.3 级别滞回：后验均值跨边界须连续 3 天，才正式调整展示级别（防单日抖动）
@@ -959,10 +959,9 @@ async function buildQueue(stillOnPage = () => true) {
   const completed = new Set(S.log.filter(l => l.d === today() && ["learn", "review", "probe"].includes(l.kind)).map(l => l.word));
   const remaining = Math.max(0, S.settings.dailyCap - completed.size);
   const due = Object.entries(S.cards)
-    .filter(([w, c]) => !completed.has(w) && c.due && new Date(c.due) <= new Date())
+    .filter(([w, c]) => (!completed.has(w) || [1, 3].includes(c.fsrs?.state)) && !isMastered(c) && c.due && new Date(c.due) <= new Date())
     .sort((a, b) => a[1].due < b[1].due ? -1 : 1)
     .map(([w]) => w);
-  const reviews = due.slice(0, remaining);
   // 提前巩固位：刚学会（≤7天）、FSRS 未到期、未掌握的词，按 P=(1−R)×0.5 概率抽取（≤5个）
   const nowD = new Date();
   const earlyPool = Object.entries(S.cards).filter(([w, c]) => {
@@ -975,13 +974,10 @@ async function buildQueue(stillOnPage = () => true) {
     const R = Math.pow(1 + 0.9805 * elapsed / S0, -0.1542);
     return Math.random() < (1 - R) * 0.5;
   }).map(([w]) => w);
-  const early = earlyPool.filter(w => !reviews.includes(w))
-    .slice(0, Math.min(5, Math.max(0, remaining - reviews.length)));
-  const reviewsAll = [...reviews, ...early];
-  trackLevelDaily();   // v1.2：水平追踪每日一次（可能跳位/减压）
+  trackLevelDaily();   // 水平追踪每日一次
   const learnedToday = new Set(S.log.filter(l => l.kind === "learn" && l.d === today()).map(l => l.word)).size;
-  const newBudget = Math.max(0, (S.track && S.track.throttle ? 5 : S.settings.newPerDay) - learnedToday);
-  const nNew = Math.min(newBudget, Math.max(0, remaining - reviewsAll.length));
+  const newBudget = Math.max(0, S.settings.newPerDay - learnedToday);
+  const nNew = Math.min(newBudget, remaining);
   const news = [];
   // 只清理已入卡项；选中但未学完的词继续保留，退出重进不会丢词。
   S.pendingNew = S.pendingNew.filter(w => !S.cards[w.word]);
@@ -1025,6 +1021,11 @@ async function buildQueue(stillOnPage = () => true) {
       } catch (e) { if (!active()) return false; }
     }
   }
+  const repeats = due.filter(w => completed.has(w));
+  const reviews = [...repeats, ...due.filter(w => !completed.has(w)).slice(0, Math.max(0, remaining - news.length))];
+  const early = earlyPool.filter(w => !reviews.includes(w))
+    .slice(0, Math.min(5, Math.max(0, remaining - news.length - reviews.length)));
+  const reviewsAll = [...reviews, ...early];
   // v1.3 每日主动探测：3 个探测词（2 个后验上方区 / 1 个下方区）随机混入复习段，
   // 4选1 形式与复习测验无差别——用户无感知，证据全额（与定级同级 weight 1.0）
   const probeBudget = Math.max(0, remaining - reviewsAll.length - news.length);
@@ -1062,16 +1063,17 @@ function prefetchDay(news, reviewWords) {
   });
 }
 
-// 主页显示和建队列共用每日去重、复习优先与容量规则。
+// 主页显示和建队列共用每日去重、新词目标与容量规则。
 function dailyPlanSummary(state, day = today(), now = new Date()) {
   const completed = new Set(state.log.filter(x => x.d === day && ["learn", "review", "probe"].includes(x.kind)).map(x => x.word));
   const remaining = Math.max(0, state.settings.dailyCap - completed.size);
-  const dueAvailable = Object.entries(state.cards).filter(([word, card]) => !completed.has(word) && card.due && new Date(card.due) <= now).length;
-  const duePlanned = Math.min(dueAvailable, remaining);
+  const due = Object.entries(state.cards).filter(([word, card]) => (!completed.has(word) || [1, 3].includes(card.fsrs?.state)) && !isMastered(card) && card.due && new Date(card.due) <= now);
+  const dueAvailable = due.length;
+  const repeatPlanned = due.filter(([word]) => completed.has(word)).length;
   const learned = new Set(state.log.filter(x => x.d === day && x.kind === "learn").map(x => x.word)).size;
-  const target = state.track?.throttle ? 5 : state.settings.newPerDay;
-  const newPlanned = Math.min(Math.max(0, target - learned), Math.max(0, remaining - duePlanned));
-  return {completed:completed.size, dueAvailable, duePlanned, newPlanned, totalPlanned:completed.size + duePlanned + newPlanned};
+  const newPlanned = Math.min(Math.max(0, state.settings.newPerDay - learned), remaining);
+  const duePlanned = repeatPlanned + Math.min(dueAvailable - repeatPlanned, Math.max(0, remaining - newPlanned));
+  return {completed:completed.size, dueAvailable, duePlanned, newPlanned, repeatPlanned, totalPlanned:completed.size + duePlanned + newPlanned - repeatPlanned};
 }
 
 /* ---------------- 渲染 ---------------- */
@@ -1113,12 +1115,14 @@ function home() {
     <div class="today-progress-label muted"><span>今日进度（预计）</span><strong>${plan.completed} / ${plan.totalPlanned}</strong></div>
     <div class="progress today-progress" role="progressbar" aria-label="今日进度" aria-valuemin="0" aria-valuemax="${Math.max(1, plan.totalPlanned)}" aria-valuetext="${plan.completed} / ${plan.totalPlanned}" aria-valuenow="${plan.completed}"><i style="width:${plan.totalPlanned ? Math.min(100, 100 * plan.completed / plan.totalPlanned) : 0}%"></i></div>
     <div class="stat-grid">
-      <div class="stat"><b>${plan.dueAvailable}</b><span>待复习</span></div>
+      <div class="stat"><b>${plan.duePlanned}</b><span>今日待复习</span></div>
       <div class="stat"><b>${plan.newPlanned}</b><span>新词上限</span></div>
       <div class="stat"><b>${escapeHTML(S.pointer)}</b><span>学习位置</span></div>
     </div>
+    ${plan.dueAvailable > plan.duePlanned ? `<p class="muted">另有 ${plan.dueAvailable - plan.duePlanned} 个词已到期，超出今日上限，暂未安排。</p>` : ""}
+    ${plan.repeatPlanned ? `<p class="muted">其中 ${plan.repeatPlanned} 个是今天学过的词，按间隔再复习，不增加今日单词数。</p>` : ""}
     <div class="row"><button class="act" id="bStart">${plan.completed ? "继续今天" : "开始今天"}</button></div>
-    <p class="muted" id="startHint" style="margin-top:10px">优先复习到期单词；实际队列可能包含探测或提前复习。</p>
+    <p class="muted" id="startHint" style="margin-top:10px">先预留每日新词名额，再安排到期复习；实际队列可能包含探测或提前复习。</p>
   </div>`;
   $("#bStart").onclick = async () => {
     const b = $("#bStart"); b.disabled = true; b.textContent = "正在准备今日任务…";
@@ -1795,13 +1799,18 @@ function doneDay() {
   if (S.log.some(e => e.d === day && (["learn", "review", "probe", "placement", "shadow"].includes(e.kind) || (e.kind === "exposure" && e.source === "shadow" && e.score != null)))) recordStudyDay(day);
   save(); renderChips();
   if (AUTH) pushState();   // 当日完成立即推服务器（不等防抖），手机端马上同步得到
+  const summary = dailyPlanSummary(S);
+  const capped = summary.completed >= S.settings.dailyCap && summary.dueAvailable > 0;
+  const countToday = kind => new Set(S.log.filter(e => e.d === day && e.kind === kind).map(e => e.word)).size;
   $("#app").innerHTML = `<div class="card center">
-    <h2>今日完成 🎉</h2>
+    <h2>${capped ? "今日已达上限" : "本轮学习完成 🎉"}</h2>
     <div class="stat-grid">
-      <div class="stat"><b>${session.reviewedToday}</b><span>复习</span></div>
-      <div class="stat"><b>${session.learnedToday}</b><span>新词</span></div>
+      <div class="stat"><b>${countToday("review")}</b><span>今日复习</span></div>
+      <div class="stat"><b>${countToday("learn")}</b><span>今日新词</span></div>
       <div class="stat"><b>${escapeHTML(S.streak)}</b><span>连续天数</span></div>
     </div>
+    ${countToday("probe") ? `<p class="muted">每日上限还计入 ${countToday("probe")} 个水平探测词；同一单词当天只计一次。</p>` : ""}
+    ${summary.repeatPlanned ? `<p class="muted">还有 ${summary.repeatPlanned} 个今天学过的词需要按间隔再复习，不增加今日单词数。</p>` : ""}
     ${S.calibrated && S.posterior ? `<p style="font-size:12px;color:#5f9cec;margin-top:8px">预计认识 ${expectedKnown()} 词（${LVL_NAME[(S.track && S.track.shownLevel) || lvlOfPos(S.frontier)]}），明天从 ${escapeHTML(S.pointer)} 附近发词</p><p class="muted" style="font-size:12px;margin-top:4px">今日水平证据：↑${S.log.filter(l => l.d === today() && ["learn", "review", "probe"].includes(l.kind) && l.rating >= 2).length} / ↓${S.log.filter(l => l.d === today() && ["learn", "review", "probe"].includes(l.kind) && l.rating === 1).length}（含 ${S.log.filter(l => l.d === today() && l.kind === "probe").length} 次水平探测）</p>${S.track && S.track.lastNote ? `<p class="muted" style="font-size:12px;margin-top:4px">${escapeHTML(S.track.lastNote)}</p>` : ""}` : ""}
     <div id="laterRow" style="margin-top:10px"></div>
     <div class="card" style="background:#12151a;margin-top:14px">
@@ -1814,9 +1823,9 @@ function doneDay() {
   const completed = new Set(S.log.filter(x => x.d === today() && ["learn", "review", "probe"].includes(x.kind)).map(x => x.word));
   const remaining = Math.max(0, S.settings.dailyCap - completed.size);
   const plan = dailyPlanSummary(S, today(), now);
-  const laterN = Object.entries(S.cards).filter(([word, c]) => !completed.has(word) && c.due && new Date(c.due) > now && new Date(c.due) < eod).length;
-  if (plan.duePlanned > 0) {
-    $("#laterRow").innerHTML = `<div class="row"><button class="act ghost" id="bMore">继续复习 ${plan.duePlanned} 词 →</button></div>`;
+  const laterN = Object.entries(S.cards).filter(([word, c]) => (remaining > 0 || completed.has(word)) && (!completed.has(word) || [1, 3].includes(c.fsrs?.state)) && !isMastered(c) && c.due && new Date(c.due) > now && new Date(c.due) < eod).length;
+  if (plan.duePlanned > 0 || plan.newPlanned > 0) {
+    $("#laterRow").innerHTML = `<div class="row"><button class="act ghost" id="bMore">继续今日任务（复习 ${plan.duePlanned} · 新词 ${plan.newPlanned}）→</button></div>`;
     $("#bMore").onclick = async () => {
       const current = viewGuard(), button = $("#bMore");
       button.disabled = true;
@@ -1824,8 +1833,9 @@ function doneDay() {
       catch (e) { if (current()) { button.disabled = false; button.textContent = "任务加载失败，点击重试"; } }
     };
   } else if (plan.dueAvailable > 0 && remaining === 0) {
-    $("#laterRow").innerHTML = `<p class="muted">今日已达上限，还有 ${plan.dueAvailable} 词到期；可在设置中调整上限。</p>`;
-  } else if (remaining > 0 && laterN > 0) {
+    $("#laterRow").innerHTML = `<p class="muted">今日已达上限，还有 ${plan.dueAvailable} 词到期；可在设置中调整上限。</p><div class="row"><button class="ghost" id="bAdjustCap">调整每日上限</button></div>`;
+    $("#bAdjustCap").onclick = showSettings;
+  } else if (laterN > 0) {
     $("#laterRow").innerHTML = `<p class="muted">⏰ 今天晚些时候还有 ${laterN} 个词到期，记得回来</p>`;
   }
   autoPersonalize();
@@ -1969,6 +1979,17 @@ $("#tReset").onclick = async () => {
 };
 
 /* ---------------- P1：统计 / 设置 / 引导 ---------------- */
+function stubbornDrillWords(state, stubborn) {
+  const completed = new Set(state.log.filter(x => x.d === today() && ["learn", "review", "probe"].includes(x.kind)).map(x => x.word));
+  const plan = dailyPlanSummary(state);
+  let slots = Math.max(0, state.settings.dailyCap - completed.size - plan.newPlanned);
+  return stubborn.map(([word]) => word).filter(word => {
+    if (completed.has(word)) return true;
+    if (slots <= 0) return false;
+    slots--; return true;
+  });
+}
+
 function showStats() {
   stopAudio();
   const words = Object.entries(S.cards);
@@ -1979,6 +2000,7 @@ function showStats() {
   const lapseCount = {};
   S.log.filter(l => ["learn", "review"].includes(l.kind) && l.rating <= 2).forEach(l => lapseCount[l.word] = (lapseCount[l.word] || 0) + 1);
   const stubborn = Object.entries(lapseCount).filter(([word, n]) => n >= 2 && S.cards[word] && !isMastered(S.cards[word])).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).slice(0, 8);
+  const drillWords = stubbornDrillWords(S, stubborn);
   $("#app").innerHTML = `<div class="card">
     <h2>学习统计</h2>
     <div class="stat-grid">
@@ -1997,12 +2019,14 @@ function showStats() {
       ${loads.map(x => `<div style="flex:1;background:#2f6fed;border-radius:3px 3px 0 0;height:${Math.max(3, x.n / maxL * 60)}px" title="${escapeHTML(x.d)}: ${escapeHTML(x.n)}词"></div>`).join("")}
     </div>
     <div class="row" style="gap:3px">${loads.map((x, i) => `<div class="muted" style="flex:1;text-align:center;font-size:9px">${escapeHTML(i % 2 ? "" : x.d.slice(5))}</div>`).join("")}</div>
-    ${stubborn.length ? `<h2 style="margin-top:14px">需要巩固（学习或复习至少 2 次困难／忘记）</h2><p style="font-size:14px">${stubborn.map(([w, n]) => `${escapeHTML(w)} ×${n}`).join(" · ")}</p><p class="muted">根据当前保留的学习记录统计，整理历史后数量可能变化。</p><div class="row"><button class="act" id="bDrill">巩固练习（${stubborn.length} 词）</button></div>` : ""}
+    ${stubborn.length ? `<h2 style="margin-top:14px">需要巩固（学习或复习至少 2 次困难／忘记）</h2><p style="font-size:14px">${stubborn.map(([w, n]) => `${escapeHTML(w)} ×${n}`).join(" · ")}</p><p class="muted">根据当前保留的学习记录统计，整理历史后数量可能变化。</p>${drillWords.length < stubborn.length ? '<p class="muted">已为今日新词预留名额；超过上限的词暂不安排。</p>' : ""}<div class="row"><button class="act" id="bDrill" ${drillWords.length ? "" : "disabled"}>巩固练习（${drillWords.length} 词）</button></div>` : ""}
     <div class="row"><button class="act ghost" id="bBack">返回</button></div>
   </div>`;
   $("#bBack").onclick = home;
   if ($("#bDrill")) $("#bDrill").onclick = () => {
-    session = {queue: stubborn.map(([word]) => ({kind:"review", word})), idx:0, learnedToday:0, reviewedToday:0};
+    const words = stubbornDrillWords(S, stubborn);
+    if (!words.length) return;
+    session = {queue: words.map(word => ({kind:"review", word})), idx:0, learnedToday:0, reviewedToday:0};
     step();
   };
 }
@@ -2126,7 +2150,7 @@ function showSettings() {
     <p class="muted">每日新词数</p>
     <div class="row">${[5, 10, 15, 20].map(n => `<button class="ghost" style="flex:1;padding:9px;${st.newPerDay === n ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-new="${n}">${n}</button>`).join("")}</div>
     <p class="muted" style="margin-top:12px">每日总上限（复习、新词和探测的不同单词）</p>
-    <div class="row">${[30, 60, 100, 130].map(n => `<button class="ghost" style="flex:1;padding:9px;${st.dailyCap === n ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-cap="${n}">${n}</button>`).join("")}</div>
+    <div class="row">${[30, 60, 100, 130, 200, 300].map(n => `<button class="ghost" style="flex:1 1 27%;padding:9px;${st.dailyCap === n ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-cap="${n}">${n}</button>`).join("")}</div>
     <p class="setting-heading">朗读嗓音</p>
     <div class="row">${[["en-US-AriaNeural", "Aria 女声"], ["en-US-GuyNeural", "Guy 男声"], ["en-US-JennyNeural", "Jenny 女声"], ["en-GB-SoniaNeural", "Sonia 英音"]].map(([v, name]) => `<button class="ghost" style="flex:1 1 40%;padding:9px;${(st.voice || "en-US-AriaNeural") === v ? "border:1px solid #2f6fed;color:#5f9cec" : ""}" data-voice="${v}">${name}</button>`).join("")}</div>
     <p class="setting-heading">定级与校验</p>

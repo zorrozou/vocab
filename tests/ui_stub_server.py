@@ -756,9 +756,41 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
         token = 'Bearer ' + account['token']
         state = state_get(token)['state']
         state['cards']['pear'] = {'pos': 2, 'stage': 1, 'due':'2021-01-02T00:00:00Z'}
-        state['settings'] = {'newPerDay':5, 'dailyCap':3}
+        state['settings'] = {'newPerDay':0, 'dailyCap':3}
         state['log'] = [{'d':day, 'word':word, 'kind':'review', 'rating':3, 'eventId':uuid.uuid4().hex} for word in ('doneone', 'donetwo')]
         state_put(state, token)
+        fixture.update(fsrs_offline=False, fixed_quiz=True, personal_offline=False)
+        return account
+
+    @main.app.post('/api/v1/__ui_fixture/mastery-budget-case')
+    def seed_mastery_budget_case():
+        account = seed_offline_case()
+        state_get = next(route.endpoint for route in main.app.routes if getattr(route, 'path', None) == '/api/v1/me/state' and 'GET' in getattr(route, 'methods', set()))
+        state_put = next(route.endpoint for route in main.app.routes if getattr(route, 'path', None) == '/api/v1/me/state' and 'PUT' in getattr(route, 'methods', set()))
+        token = 'Bearer ' + account['token']
+        state = state_get(token)['state']
+        state['cards'] = {word: {'pos': main.POS_OF[main.WORD2ID[word]], 'stage': 6 if word == 'book' else 1,
+                                  'due': '2020-01-01T00:00:00Z'} for word in ('apple','pear','cherry','book')}
+        state['pendingNew'] = [{'word': word, 'pos': main.POS_OF[main.WORD2ID[word]]} for word in ('dog','cat')]
+        state['settings'] = {'newPerDay': 2, 'dailyCap': 3}
+        state['track'] = {'throttle': True}
+        state_put(state, token)
+        fixture.update(fsrs_offline=False, fixed_quiz=True, personal_offline=False)
+        return account
+
+    @main.app.post('/api/v1/__ui_fixture/same-day-relearning-case')
+    def seed_same_day_relearning_case(body: dict):
+        day = body.get('day', '')
+        if len(day) != 10: return JSONResponse({'detail':'invalid fixture day'}, status_code=400)
+        account = seed_offline_case()
+        get_state = next(route.endpoint for route in main.app.routes if getattr(route, 'path', None) == '/api/v1/me/state' and 'GET' in getattr(route, 'methods', set()))
+        put_state = next(route.endpoint for route in main.app.routes if getattr(route, 'path', None) == '/api/v1/me/state' and 'PUT' in getattr(route, 'methods', set()))
+        token = 'Bearer ' + account['token']; state = get_state(token)['state']
+        state['cards']['apple'] = {'pos':main.POS_OF[main.WORD2ID['apple']], 'due':'2020-01-02T00:00:00Z',
+            'fsrs': {'state':3, 'stability':1, 'difficulty':5, 'due':'2020-01-02T00:00:00Z', 'step':0, 'lastReview':'2020-01-01T00:00:00Z'}}
+        state['log'] = [{'d':day, 'word':'apple', 'kind':'review', 'rating':1, 'eventId':uuid.uuid4().hex}]
+        state['settings'] = {'newPerDay':1, 'dailyCap':1}
+        put_state(state, token)
         fixture.update(fsrs_offline=False, fixed_quiz=True, personal_offline=False)
         return account
 

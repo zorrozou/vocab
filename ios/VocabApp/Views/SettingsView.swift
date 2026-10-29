@@ -172,7 +172,7 @@ struct SettingsView: View {
                         if app.S.settings.newPerDay != n && app.markSettingChanged("newPerDay") { app.S.settings.newPerDay = n; app.save() }
                     }
                     settingSection(id: "cap", title: "每日总上限（复习、新词和探测的不同单词）",
-                                   options: [30, 60, 100, 130],
+                                   options: [30, 60, 100, 130, 200, 300],
                                    current: app.S.settings.dailyCap) { n in
                         if app.S.settings.dailyCap != n && app.markSettingChanged("dailyCap") { app.S.settings.dailyCap = n; app.save() }
                     }
@@ -553,7 +553,7 @@ struct SettingsView: View {
                                 onPick: @escaping (Int) -> Void) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(title).font(.system(size: 13)).foregroundStyle(Theme.muted)
-            HStack(spacing: 8) {
+            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: options.count > 4 ? 3 : options.count), spacing: 8) {
                 ForEach(options, id: \.self) { n in
                     Button { onPick(n) } label: {
                         Text("\(n)")

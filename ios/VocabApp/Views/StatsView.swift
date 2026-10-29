@@ -14,6 +14,9 @@ struct StatsView: View {
     private var stubborn: [(String, Int)] {
         StudyEngine.stubbornWords(app.S)
     }
+    private var drillWords: [String] {
+        StudyEngine.stubbornDrillWords(app.S, day: DayUtil.today(), now: Date())
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -83,10 +86,15 @@ struct StatsView: View {
                         Text("根据当前保留的学习记录统计，整理历史后数量可能变化。")
                             .font(.system(size: 12)).foregroundStyle(Theme.muted)
                         // 顽固词特训：单独组队歼灭（纯复习队列，不进新词）
-                        PrimaryButton(title: "🔥 顽固词特训（\(stubborn.count) 词）", color: Theme.warn) {
+                        PrimaryButton(title: "🔥 顽固词特训（\(drillWords.count) 词）", color: Theme.warn) {
                             app.startStubbornDrill()
                         }
+                        .disabled(drillWords.isEmpty)
                         .padding(.top, 4)
+                        if drillWords.count < stubborn.count {
+                            Text("已为今日新词预留名额；超过上限的词暂不安排。")
+                                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        }
                     }
                 }
                 .padding(.top, 12)
