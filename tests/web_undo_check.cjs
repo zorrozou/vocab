@@ -28,7 +28,7 @@ const ctx = {
 vm.createContext(ctx); vm.runInContext(saveCode + '\n' + admissionCode + '\n' + reviewCode + '\n' + syncCode, ctx);
 const fireTimers = () => { for (const f of scheduled.values()) f(); scheduled.clear(); };
 (async () => {
-  await ctx.review('apple', 1, undefined, true);
+  await ctx.review('apple', 1, true);
   assert.equal(ctx.S.log.length, 1);
   assert.equal(scheduled.size, 0, 'undoable rating must not reach server before decision');
   assert.equal(JSON.parse(values.vocab_v1).log.length, 1, 'rating still persisted locally');
@@ -38,9 +38,9 @@ const fireTimers = () => { for (const f of scheduled.values()) f(); scheduled.cl
   assert.equal(ctx.S.knowledge.apple, undefined);
   assert.equal(ctx.S.knowledgeEvidence, undefined, 'undo must remove uncommitted evidence events');
   fireTimers(); assert.equal(pushes, 1);
-  await ctx.review('apple', 1, undefined, true);
+  await ctx.review('apple', 1, true);
   ctx.commitUndoReview(); fireTimers(); assert.equal(pushes, 2);
-  await ctx.review('apple', 1, 1.0); // acceptance review has no undo UI
+  await ctx.review('apple', 1); // acceptance review has no undo UI
   fireTimers(); assert.equal(pushes, 3);
   failWrites = true;
   vm.runInContext('save()', ctx);

@@ -1220,10 +1220,10 @@ final class AppState {
         // 只有真正完成学习才消耗待补学词/推进顺序游标；中途退出不丢词、不跳词。
         S.pendingNew.removeAll { $0.word == word }
         if !fromPending { S.pointer = max(S.pointer, pos + 1) }
-        S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "learn"))
+        S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "learn", ts: DayUtil.isoString(Date())))
         StudyEngine.recordKnowledge(&S, word: word, pos: pos, ok: rating != 1)
-        // 水平追踪观测（v1.2）：不熟悉=强证据(resp 0, w1.0)；学会了=自评弱证据(resp 1, w0.5)
-        observeLevel(pos: pos, known: rating != 1, weight: rating == 1 ? 1.0 : 0.5)
+        // Seeing the definition and self-rating changes this word's memory,
+        // not the estimate of knowledge of hundreds of unseen words.
         await scheduleFsrs(word: word, body: body, rating: rating)
     }
 
@@ -1233,10 +1233,11 @@ final class AppState {
         StudyEngine.posteriorUpdate(&S, rank: pos, resp: known ? 1 : 0, weight: weight, guess: guess)
     }
 
-    func review(word: String, rating: Int, trackWeight: Double? = nil, allowUndo: Bool = false, acceptance: Bool = false, verifiedPos: Int? = nil) async {
+    func review(word: String, rating: Int, allowUndo: Bool = false, acceptance: Bool = false, verifiedPos: Int? = nil) async {
         guard var c = S.cards[word] else { return }
         if acceptance, S.quizProgressDay == DayUtil.today(), (S.quizCompleted ?? []).contains(word) { return }
         guard admitStudy(word: word, kind: "review") else { return }
+        let delayedEvidence = !acceptance && StudyEngine.delayedReviewEvidence(S, word: word)
         let preStab = c.fsrs?.stability ?? Double(c.stage.flatMap { StudyEngine.ladderInterval[$0] } ?? 0)   // v1.3：成熟度用答前稳定度
         let lastReview = lastReviewDate(word)   // 在写今日日志前取上一次记录
         let today = DayUtil.today()
@@ -1248,7 +1249,7 @@ final class AppState {
             undoSnapshot = nil
         }
         if let verifiedPos, verifiedPos > 0 { c.pos = verifiedPos }
-        S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "review"))
+        S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "review", ts: DayUtil.isoString(Date())))
         StudyEngine.recordKnowledge(&S, word: word, pos: c.pos ?? S.pointer, ok: rating != 1)
         let body = StudyEngine.fsrsBody(for: c, rating: rating, isNewCard: false, lastReview: lastReview)
         if rating == 1 { c.lt = 0 }
@@ -1259,25 +1260,20 @@ final class AppState {
             c.easyStreak = 0
         }
         S.cards[word] = c
-        // 水平追踪观测（v1.3 权重修正，治"只升不降"）：
-        //  - 忘记：曾通过的成熟卡（答前稳定度≥21天）是有力向下证据 w0.4；新卡遗忘 w0.2
-        //  - 记得/困难/熟练：只有词排位高于当前估值才算向上证据（低于估值的成功无信息量），w0.15
-        //  - 被动证据每日总权重封顶 1.5；验收测试（trackWeight 1.0）不受上限
-        if let pos = S.cards[word]?.pos, S.calibrated {
-            if let tw = trackWeight {
-                observeLevel(pos: pos, known: rating != 1, weight: tw, guess: verifiedPos == nil ? 0 : 0.25)
-            } else {
-                var tr = S.track ?? TrackState()
-                if tr.dayWDay != today { tr.dayW = 0; tr.dayWDay = today }
-                var w = 0.0
-                var known = true
-                if rating == 1 { w = preStab >= 21 ? 0.4 : 0.2; known = false }
-                else if Double(pos) > StudyEngine.postMean(S) { w = 0.15 }
-                if w > 0 && (tr.dayW ?? 0) + w <= 1.5 {
-                    observeLevel(pos: pos, known: known, weight: w, guess: verifiedPos == nil ? 0 : 0.25)
-                    tr.dayW = (tr.dayW ?? 0) + w
-                    S.track = tr
-                }
+        // Only delayed retention is general-level evidence; immediate acceptance
+        // and repeated learning steps still update the card, with no level bonus.
+        // Passive evidence remains capped at weight 1.5 per day.
+        if let pos = S.cards[word]?.pos, S.calibrated, delayedEvidence {
+            var tr = S.track ?? TrackState()
+            if tr.dayWDay != today { tr.dayW = 0; tr.dayWDay = today }
+            var w = 0.0
+            var known = true
+            if rating == 1 { w = preStab >= 21 ? 0.4 : 0.2; known = false }
+            else if Double(pos) > StudyEngine.postMean(S) { w = 0.15 }
+            if w > 0 && (tr.dayW ?? 0) + w <= 1.5 {
+                observeLevel(pos: pos, known: known, weight: w, guess: (verifiedPos ?? 0) > 0 ? 0.25 : 0)
+                tr.dayW = (tr.dayW ?? 0) + w
+                S.track = tr
             }
         }
         if acceptance {

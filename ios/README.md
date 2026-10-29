@@ -92,3 +92,5 @@ xcrun swiftc ios/VocabApp/Models.swift tests/ios_quiz_feedback_regression.swift 
 离线学习步骤回归：`python tests/provisional_schedule_fixtures.py > /tmp/vocab-provisional-cases.json` 生成官方 py-fsrs 对照，然后运行 `node tests/web_provisional_schedule_check.cjs /tmp/vocab-provisional-cases.json`。Swift 同步对照见 `tests/ios_provisional_schedule_regression.swift`；`offline-relearning` UI 场景验证已达每日不同词上限时，旧存档里的待处理遗忘评分仍可按分钟间隔重学。
 
 精简 Web 评分起点兼容回归：`swiftc ios/VocabApp/Config.swift ios/VocabApp/Models.swift ios/VocabApp/StudyEngine.swift ios/VocabApp/APIClient.swift tests/ios_fsrs_base_decoding.swift -o /tmp/vocab-fsrs-base-check && /tmp/vocab-fsrs-base-check`。离线步骤的 Swift 对照用同一组生产源文件，将测试文件替换为 `tests/ios_provisional_schedule_regression.swift`，执行时传入生成的 JSON。
+
+延迟水平证据回归使用同一组生产源文件编译 `tests/ios_delayed_evidence.swift`，在 `TZ=Asia/Shanghai`、`TZ=America/New_York` 和 `TZ=Pacific/Kiritimati` 下执行。`mastery-budget` UI 场景完整走过老词复习、两个新词和即时验收，检查只有老词延迟复习产生整体水平证据，全部评分及时间戳仍保存。

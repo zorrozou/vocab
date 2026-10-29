@@ -79,6 +79,30 @@ enum StudyEngine {
         Set(log.filter { $0.d == day && ["learn", "review", "probe"].contains($0.kind) }.map(\.word))
     }
 
+    /// Only retention after at least 24 hours is passive evidence of general
+    /// vocabulary level. Read before appending the current grade. Pending offline
+    /// grades count as practice even when the server's lastReview is still old.
+    static func delayedReviewEvidence(_ s: LearningState, word: String, now: Date = Date()) -> Bool {
+        guard let card = s.cards[word] else { return false }
+        let logs = s.log.filter { $0.word == word && ["learn", "review"].contains($0.kind) }
+        let stamps = [card.fsrs?.lastReview] + logs.map(\.ts) +
+            (card.pendingFsrs?.events ?? []).map { Optional($0.at) } +
+            (card.fsrsHistory?.events ?? []).map { Optional($0.at) }
+        var latest = stamps.compactMap { value -> Date? in
+            guard let value, value.contains("T") else { return nil }
+            return DayUtil.parseISO(value)
+        }.max()
+        if let day = logs.map(\.d).max(), latest.map({ DayUtil.localDay($0) < day }) ?? true {
+            // Date-only legacy evidence has no exact time: use the end of its
+            // local day, so crossing midnight cannot masquerade as 24h recall.
+            guard let noon = DayUtil.localNoon(day),
+                  let end = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: noon)) else { return false }
+            latest = end
+        }
+        guard let latest else { return false }
+        return now.timeIntervalSince(latest) >= 86_400
+    }
+
     /// Recheck at the synchronous start of grading: a queue can outlive its day,
     /// settings, or the progress pulled from another device.
     static func studyAdmissionIssue(_ s: LearningState, word: String, kind: String, sessionDay: String?, day: String) -> String? {

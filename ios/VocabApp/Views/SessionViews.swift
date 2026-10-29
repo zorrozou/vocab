@@ -825,7 +825,7 @@ struct AcceptanceQuizView: View {
         let owner = app.auth, sessionID = app.session.id, index = i, generation = app.routeGeneration
         Task {
             // Completion is persisted with the review before the request suspends.
-            await app.review(word: w, rating: ok ? 3 : 1, trackWeight: 1.0, acceptance: true, verifiedPos: quiz?.pos)
+            await app.review(word: w, rating: ok ? 3 : 1, acceptance: true, verifiedPos: quiz?.pos)
             guard app.auth == owner else { return }
             app.save()
             guard app.session.id == sessionID, app.routeGeneration == generation,

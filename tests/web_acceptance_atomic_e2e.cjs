@@ -23,7 +23,7 @@ const base=(process.env.VOCAB_TEST_BASE||'http://127.0.0.1:18765').replace(/\/$/
   await page.reload();
   await page.evaluate(()=>{autoPersonalize=async()=>{}; maybeQuiz();});
   assert(!(await page.locator('#app h2').first().innerText()).includes('验收测试'),'reload must not repeat the submitted acceptance');
-  await page.evaluate(()=>review('apple',1,1.0,false,true));
+  await page.evaluate(()=>review('apple',1,false,true));
   assert.equal(await page.evaluate(()=>S.log.filter(x=>x.kind==='review').length),1,'duplicate acceptance cannot change FSRS twice');
   console.log('PASS acceptance rating and completion persist together before FSRS, survive reload and reject duplicate submission');
  } finally {await browser.close();}

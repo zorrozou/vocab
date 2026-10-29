@@ -721,14 +721,32 @@ async function learn(word, pos, rating = 3, fromPending = false) {
   // 完成学习才消耗待补学词/推进顺序游标；待补学词的位置不能改写主学习进度。
   S.pendingNew = S.pendingNew.filter(w => w.word !== word);
   if (!fromPending) S.pointer = Math.max(S.pointer, pos + 1);
-  S.log.push({ eventId: (crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")), d: today(), word, rating, kind: "learn" });
+  S.log.push({ eventId: (crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")), d: today(), ts: new Date().toISOString(), word, rating, kind: "learn" });
   recordKnowledge(word, pos, rating !== 1);
-  // 水平追踪观测（v1.2）：不熟悉=强证据；学会了=自评弱证据
-  if (S.calibrated) posteriorUpdate(pos, rating === 1 ? 0 : 1, rating === 1 ? 1.0 : 0.5);
+  // Learning after seeing a definition updates this word, not global ability.
   await scheduleFsrs(c, body, rating);
 }
 
 let undoSnapshot = null;
+// Read before appending the current grade. Offline practice counts even if the
+// server's lastReview is stale. A local midnight alone is not delayed recall.
+function delayedReviewEvidence(state, word, now = new Date()) {
+  const c = state.cards[word]; if (!c) return false;
+  const logs = state.log.filter(e => e.word === word && ["learn", "review"].includes(e.kind));
+  const stamps = [c.fsrs?.lastReview, c.fsrs?.last_review, ...logs.map(e => e.ts),
+    ...(c.pendingFsrs?.events || []).map(e => e.at), ...(c.fsrsHistory?.events || []).map(e => e.at)];
+  let latest = stamps.filter(v => typeof v === "string" && v.includes("T"))
+    .map(v => new Date(v).getTime()).filter(Number.isFinite).reduce((a,b) => Math.max(a,b), -Infinity);
+  const day = logs.map(e => e.d).sort().at(-1);
+  const localDay = t => { const d = new Date(t); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; };
+  if (day && (!Number.isFinite(latest) || localDay(latest) < day)) {
+    const end = new Date(day + "T00:00:00");
+    if (!Number.isFinite(end.getTime()) || localDay(end) !== day) return false;
+    end.setDate(end.getDate() + 1); latest = end.getTime();
+  }
+  return Number.isFinite(latest) && now.getTime() - latest >= 86400000;
+}
+
 function undoReview() {
   if (!undoSnapshot) return;
   S.cards[undoSnapshot.word] = undoSnapshot.card;
@@ -750,11 +768,12 @@ function commitUndoReview() {
   save();
 }
 
-async function review(word, rating, trackWeight, allowUndo = false, acceptance = false, verifiedPos = null) {
+async function review(word, rating, allowUndo = false, acceptance = false, verifiedPos = null) {
   const c = S.cards[word]; if (!c) return;
   const day = today();
   if (acceptance && S.quizProgressDay === day && (S.quizCompleted || []).includes(word)) return;
   if (!admitStudy(word, "review")) return;
+  const delayedEvidence = !acceptance && delayedReviewEvidence(S, word);
   const preStab = c.fsrs ? c.fsrs.stability : (LEGACY_STAB[c.stage] || 0);   // v1.3：成熟度用答前稳定度判断
   const lastReview = lastReviewDate(word);   // 在写今日日志前取上一次记录
   // 手滑误点「忘记」可撤销：评分前快照卡片与日志长度
@@ -763,7 +782,7 @@ async function review(word, rating, trackWeight, allowUndo = false, acceptance =
     probeCount: S.probeCount, track: structuredClone(S.track) };
   else undoSnapshot = null;
   if (Number.isSafeInteger(verifiedPos) && verifiedPos > 0) c.pos = verifiedPos;
-  S.log.push({ eventId: (crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")), d: today(), word, rating, kind: "review" });
+  S.log.push({ eventId: (crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")), d: today(), ts: new Date().toISOString(), word, rating, kind: "review" });
   recordKnowledge(word, c.pos || S.pointer, rating !== 1);
   const body = c.fsrs
     ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: c.fsrs.lastReview || c.fsrs.last_review || (lastReview ? lastReview + "T08:00:00Z" : null) }
@@ -773,25 +792,19 @@ async function review(word, rating, trackWeight, allowUndo = false, acceptance =
   if (rating === 4) {
     c.easyStreak = (c.easyStreak || 0) + 1;
   } else c.easyStreak = 0;
-  // 水平追踪观测（v1.3 权重修正，治"只升不降"）：
-  //  - 忘记：曾通过的成熟卡（答前稳定度≥21天）是有力向下证据 w0.4；新卡遗忘 w0.2
-  //  - 记得/困难/熟练：只有词排位高于当前估值才算向上证据（低于估值的成功无信息量），w0.15
-  //  - 被动证据每日总权重封顶 1.5，防复习量大的日子带偏估计；验收测试（trackWeight 1.0）不受上限
+  // Only delayed retention is passive general-level evidence (daily weight <=1.5).
+  // Immediate acceptance and repeated steps still update word-specific memory.
   const p = S.cards[word] && S.cards[word].pos;
-  if (S.calibrated && p) {
-    if (trackWeight !== undefined) {
-      posteriorUpdate(p, rating === 1 ? 0 : 1, trackWeight, Number.isSafeInteger(verifiedPos) && verifiedPos > 0 ? 0.25 : 0);
-    } else {
-      const tr = S.track || {};
-      if (tr.dayWDay !== today()) { tr.dayW = 0; tr.dayWDay = today(); }
-      let w = 0, resp = 1;
-      if (rating === 1) { w = preStab >= 21 ? 0.4 : 0.2; resp = 0; }
-      else if (p > postMean()) { w = 0.15; }
-      if (w > 0 && (tr.dayW || 0) + w <= 1.5) {
-        posteriorUpdate(p, resp, w, Number.isSafeInteger(verifiedPos) && verifiedPos > 0 ? 0.25 : 0);
-        tr.dayW = (tr.dayW || 0) + w;
-        S.track = tr;
-      }
+  if (S.calibrated && p && delayedEvidence) {
+    const tr = S.track || {};
+    if (tr.dayWDay !== today()) { tr.dayW = 0; tr.dayWDay = today(); }
+    let w = 0, resp = 1;
+    if (rating === 1) { w = preStab >= 21 ? 0.4 : 0.2; resp = 0; }
+    else if (p > postMean()) { w = 0.15; }
+    if (w > 0 && (tr.dayW || 0) + w <= 1.5) {
+      posteriorUpdate(p, resp, w, Number.isSafeInteger(verifiedPos) && verifiedPos > 0 ? 0.25 : 0);
+      tr.dayW = (tr.dayW || 0) + w;
+      S.track = tr;
     }
   }
   if (acceptance) {
@@ -1496,7 +1509,7 @@ async function quizRound(words, i) {
       if (q.options[+x.dataset.i].ok) x.classList.add("right");
     });
     if (!ok) b.classList.add("wrong");
-    await review(w, ok ? 3 : 1, 1.0, false, true, q.pos);   // 验收是客观实测：权重 1.0（强于复习的 0.2/0.3）
+    await review(w, ok ? 3 : 1, false, true, q.pos);
     if (S !== state || session !== currentSession) return;
     save();
     setTimeout(() => { if (answerCurrent() && session === currentSession) quizRound(words, i + 1); }, 650);
@@ -1800,7 +1813,7 @@ async function answerCard(item, quizOk, wrongRecorded = false) {
   const word = item.word;
   const c = S.cards[word];
   if (!quizOk && !wrongRecorded) {
-    await review(word, 1, undefined, true, false, item.quizPos);
+    await review(word, 1, true, false, item.quizPos);
     if (S !== state || session !== currentSession) return;
     currentSession.reviewedToday++; save();
     if (!current()) return;
@@ -1838,7 +1851,7 @@ async function answerCard(item, quizOk, wrongRecorded = false) {
     if (rated) return;
     rated = true;
     document.querySelectorAll("#r2,#r3,#r4").forEach(b => b.disabled = true);
-    await review(word, r, undefined, false, false, item.quizPos);
+    await review(word, r, false, false, item.quizPos);
     if (S !== state || session !== currentSession) return;
     currentSession.reviewedToday++;
     if (!actionCurrent()) { save(); return; }

@@ -58,6 +58,7 @@ scenarios=(
   tests/web_daily_budget_sync_e2e.cjs
   tests/web_stale_daily_plan_e2e.cjs
   tests/web_choice_evidence_e2e.cjs
+  tests/web_delayed_evidence_e2e.cjs
   tests/quiz_word_identity_http.py
   tests/web_quiz_identity_e2e.cjs
   tests/web_acceptance_atomic_e2e.cjs

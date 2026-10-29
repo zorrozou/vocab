@@ -1515,6 +1515,26 @@ final class VocabUITests: XCTestCase {
             try await Task.sleep(for:.milliseconds(100))
         }
         XCTAssertEqual(reviewGuess, 0.25, "mature four-choice answers still have a guessing component")
+        app.buttons["学会了 →"].tap()
+        for index in 1...2 {
+            let header = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "验收测试 \(index)/2")).firstMatch
+            XCTAssertTrue(header.waitForExistence(timeout: 30))
+            XCTAssertTrue(app.buttons["quiz-option-0"].waitForExistence(timeout: 20))
+            app.buttons["quiz-option-0"].tap()
+        }
+        var finalState: [String:Any] = [:]
+        for _ in 0..<100 {
+            finalState = (try await fixtureRequest("/api/v1/me/state",token:token))["state"] as? [String:Any] ?? [:]
+            if Set(finalState["quizCompleted"] as? [String] ?? []) == Set(["dog","cat"]) { break }
+            try await Task.sleep(for:.milliseconds(100))
+        }
+        XCTAssertEqual(Set(finalState["quizCompleted"] as? [String] ?? []), Set(["dog","cat"]))
+        let finalHistory = finalState["posteriorHistory"] as? [String:Any]
+        let updates = (finalHistory?["events"] as? [String:[String:Any]] ?? [:]).values.filter { ($0["kind"] as? String) == "update" }
+        XCTAssertEqual(updates.count, 1, "two taught words and immediate acceptance must not add general-level evidence")
+        let finalLogs = (finalState["log"] as? [[String:Any]] ?? []).filter { ["learn","review"].contains($0["kind"] as? String ?? "") }
+        XCTAssertEqual(finalLogs.count, 5, "review, two learned words and two acceptance grades must all survive")
+        XCTAssertTrue(finalLogs.allSatisfy { ($0["ts"] as? String) != nil })
     }
 
     @MainActor func testDailyCapacityAndDoneScreen() async throws {
