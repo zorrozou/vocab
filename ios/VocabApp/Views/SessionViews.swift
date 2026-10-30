@@ -129,6 +129,7 @@ struct LearnCardView: View {
                 HStack { Text("正在加载词义…"); ProgressView().scaleEffect(0.7) }
                     .font(.system(size: 14)).foregroundStyle(Theme.muted)
             }
+            if !senses.isEmpty { MeaningFeedbackButton(word:item.word,text:senses.map(\.text).joined(separator:"；")) }
             if !detailError.isEmpty {
                 Text(detailError).font(.system(size: 13)).foregroundStyle(Theme.bad)
                 Button("重新加载词义") { loadDetail() }
@@ -588,6 +589,7 @@ struct AnswerCardView: View {
                                     Text(s.text).font(.system(size: 15)).foregroundStyle(Theme.text)
                                 }
                             }
+                            if let senses=detail?.senses,!senses.isEmpty { MeaningFeedbackButton(word:word,text:senses.map(\.text).joined(separator:"；")) }
                             if detail == nil {
                                 if detailError.isEmpty {
                                     HStack { Text("正在加载词义…"); ProgressView().scaleEffect(0.7) }

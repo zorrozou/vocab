@@ -1457,10 +1457,18 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(user.waitForExistence(timeout:20));user.tap();user.typeText(seed["username"] as! String)
         pass.tap();pass.typeText(seed["password"] as! String);app.buttons["登录"].tap()
         XCTAssertTrue(app.buttons["settings-menu"].waitForExistence(timeout:30));app.buttons["settings-menu"].tap()
+        let library=app.buttons["下载／更新整库离线包"]
+        for _ in 0..<8 { if library.isHittable { break };app.swipeUp() }
+        XCTAssertTrue(library.isHittable);library.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","词已校验保存")).firstMatch.waitForExistence(timeout:120))
         let repair=app.buttons.matching(NSPredicate(format:"label BEGINSWITH %@","检查并修复异常卡")).firstMatch
         for _ in 0..<8 { if repair.isHittable { break };app.swipeUp() }
         XCTAssertTrue(repair.isHittable);repair.tap()
         XCTAssertTrue(app.staticTexts["没有需要修复的异常卡。"].waitForExistence(timeout:10))
+        let localPractice=app.buttons["本机生成薄弱词例句"]
+        for _ in 0..<4 { if localPractice.isHittable { break };app.swipeUp() }
+        XCTAssertTrue(localPractice.isHittable);localPractice.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@ OR label CONTAINS %@","本机中英双语模型尚不可用","没有需要生成例句")).firstMatch.waitForExistence(timeout:20))
         let health=app.buttons["实际学习效果与存档健康"]
         for _ in 0..<3 { if health.isHittable { break };app.swipeUp() }
         XCTAssertTrue(health.exists);health.tap()

@@ -243,6 +243,8 @@ struct SentenceRow: View {
 
     @State private var swapping = false
     @State private var swapError = false
+    @State private var reportMessage=""
+    @State private var reporting=false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -282,6 +284,19 @@ struct SentenceRow: View {
                 .accessibilityIdentifier("swap-\(kind)-\(word)")
                 .disabled(swapping)
             }
+            Menu {
+                ForEach([("meaning","词义不匹配"),("translation","翻译有误"),("grammar","语法问题"),("unnatural","表达不自然")],id:\.0) { reason,title in
+                    Button(title) {
+                        reporting=true
+                        Task {
+                            do { try await APIClient.shared.reportContent(word:word,text:sentence.text,kind:kind=="static" ? "static":"personal",reason:reason);reportMessage="已进入内容复核队列。" }
+                            catch { reportMessage="未提交："+error.localizedDescription }
+                            reporting=false
+                        }
+                    }
+                }
+            } label: { Text(reporting ? "正在提交…":"例句纠错").font(.caption).foregroundStyle(Theme.muted).frame(minHeight:32) }.disabled(reporting)
+            if !reportMessage.isEmpty { Text(reportMessage).font(.caption).foregroundStyle(Theme.muted) }
             if let recallNote {
                 Text(recallNote).font(.system(size: 12)).foregroundStyle(Theme.muted)
             }
@@ -330,5 +345,26 @@ struct QuizOptionsView: View {
         if ok { return Theme.ok.opacity(0.35) }
         if p == i { return Theme.bad.opacity(0.35) }
         return Theme.cardDeep.opacity(0.5)
+    }
+}
+
+
+struct MeaningFeedbackButton: View {
+    let word:String
+    let text:String
+    @State private var message=""
+    @State private var running=false
+    var body: some View {
+        VStack(alignment:.leading,spacing:4) {
+            Button("报告词义问题") {
+                running=true
+                Task {
+                    do { try await APIClient.shared.reportContent(word:word,text:String(text.prefix(500)),kind:"meaning",reason:"meaning");message="已进入内容复核队列。" }
+                    catch { message="未提交："+error.localizedDescription }
+                    running=false
+                }
+            }.font(.caption).foregroundStyle(Theme.muted).disabled(running)
+            if !message.isEmpty { Text(message).font(.caption).foregroundStyle(Theme.muted) }
+        }
     }
 }

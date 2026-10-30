@@ -6,7 +6,7 @@ def valid_word(word):
 
 def sentence_issue(text, target, lemma=lambda x:x):
     if not isinstance(text,str) or not text.strip(): return 'empty'
-    if any(t in text for t in ('<','>','{','}','___','http://','https://')): return 'placeholder-or-markup'
+    if any(t in text for t in ('<','>','{','}','�','___','http://','https://')): return 'placeholder-or-markup'
     tokens=re.findall(r"[A-Za-z]+(?:'[A-Za-z]+)?",text.lower())
     if len(tokens)<3: return 'too-short'
     # Normalize corpus contractions so function words aren't rejected artificially.
@@ -23,4 +23,18 @@ def sentence_issue(text, target, lemma=lambda x:x):
     if len(w)>2: forms.update({w+w[-1]+'ed',w+w[-1]+'ing'})
     if not forms.intersection(expanded) and not any(lemma(t)==w for t in expanded): return 'missing-target' 
     if len(text)>500: return 'too-long'
+    return None
+
+
+def judge_score(output, dimensions=6):
+    """An incomplete, out-of-range, or prose response is not a passing review."""
+    if not isinstance(output,str) or not re.fullmatch(r'\s*[1-5](?:\s+[1-5]){'+str(dimensions-1)+r'}\s*',output): return 0
+    return min(map(int,output.split()))
+
+
+def translation_issue(text):
+    if not isinstance(text,str) or not text.strip(): return 'missing-translation'
+    if not re.search(r'[\u3400-\u9fff]',text): return 'missing-chinese-translation'
+    if any(t in text for t in ('<','>','{','}','�','___','http://','https://')): return 'translation-markup'
+    if len(text)>500: return 'translation-too-long'
     return None

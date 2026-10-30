@@ -29,7 +29,7 @@ function state(word) { return {v:1,calibrated:true,frontier:1,pointer:2,probeCou
   assert(slots.alice.cards.apricot && slots.bob.cards.blueberry && !slots.bob.cards.apple);
   // Clearing this account's cache must leave other account slots untouched.
   page.once('dialog', d => d.accept());
-  await page.locator('#tReset').click();
+  await Promise.all([page.waitForEvent('domcontentloaded'),page.locator('#tReset').click()]);
   await page.waitForFunction(() => !!S.cards.apple && !!document.querySelector('#bStart'));
   const untouchedBob=await page.evaluate(()=>JSON.parse(localStorage.getItem(accountSlot({userId:7,accountId:'b'.repeat(32),username:'bob'}))));
   assert(untouchedBob.cards.blueberry && !untouchedBob.cards.apple);

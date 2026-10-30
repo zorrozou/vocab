@@ -626,7 +626,7 @@ struct LexiconAtResponse: Codable {
     var exhausted: Bool?
 
     enum CodingKeys: String, CodingKey {
-        case from, words, exhausted
+        case from, words, exhausted, lexicon_revision, remaining_positions
         case nextPos = "next_pos"
     }
 }

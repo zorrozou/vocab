@@ -14,6 +14,37 @@ enum PlaybackSession {
     }
 }
 
+/// On-device speech is a fallback, never presented as a downloaded neural voice.
+@MainActor
+private final class LocalSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate {
+    private let synthesizer=AVSpeechSynthesizer()
+    private var active:AVSpeechUtterance?
+    private var completion:CheckedContinuation<Void,Never>?
+    override init() { super.init();synthesizer.delegate=self }
+    func stop() {
+        synthesizer.stopSpeaking(at:.immediate);active=nil
+        let done=completion;completion=nil;done?.resume()
+    }
+    func speak(_ text:String,voice:String?) async {
+        guard !Task.isCancelled else { return }
+        stop()
+        let utterance=AVSpeechUtterance(string:text)
+        utterance.voice=AVSpeechSynthesisVoice(language:voice?.hasPrefix("en-GB")==true ? "en-GB":"en-US")
+        utterance.rate=AVSpeechUtteranceDefaultSpeechRate
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                completion=continuation;active=utterance;synthesizer.speak(utterance)
+            }
+        } onCancel: { Task { @MainActor in if self.active===utterance { self.stop() } } }
+    }
+    private func finished(_ utterance:AVSpeechUtterance) {
+        guard active===utterance else { return }
+        active=nil;let done=completion;completion=nil;done?.resume()
+    }
+    nonisolated func speechSynthesizer(_ synthesizer:AVSpeechSynthesizer,didFinish utterance:AVSpeechUtterance) { Task { @MainActor in self.finished(utterance) } }
+    nonisolated func speechSynthesizer(_ synthesizer:AVSpeechSynthesizer,didCancel utterance:AVSpeechUtterance) { Task { @MainActor in self.finished(utterance) } }
+}
+
 /// 朗读服务：TTS 音频（服务器 edge-tts 神经语音）+ App 本地磁盘缓存 + 流式连播链
 /// - 首次播放某文本：从服务器取 mp3（服务端自己也有缓存，命中 ~0.1s，新生成 ~2s），写入本地缓存
 /// - 再次播放同一文本：直接读本地文件，零网络、离线可用
@@ -23,6 +54,7 @@ enum PlaybackSession {
 @Observable
 final class AudioService {
     private(set) var playingText: String?
+    private let localSpeech=LocalSpeechPlayer()
     private var current: AVAudioPlayer?
     private var chainTask: Task<Void, Never>?
 
@@ -92,7 +124,8 @@ final class AudioService {
         guard let url = await APIClient.shared.ttsURL(text, voice: voice) else {
             throw APIError(message: "TTS URL 构建失败")
         }
-        let (data, resp) = try await URLSession.shared.data(from: url)
+        var request=URLRequest(url:url);request.timeoutInterval=20
+        let (data, resp) = try await URLSession.shared.data(for:request)
         guard let http = resp as? HTTPURLResponse, http.statusCode == 200, data.count > 500 else {
             throw APIError(message: "TTS 拉取失败")
         }
@@ -116,6 +149,7 @@ final class AudioService {
                 return try AVAudioPlayer(data: data)
             } catch {
                 print("[VocabApp] 音频获取失败(第\(attempt + 1)次): \(text.prefix(30))… \(error.localizedDescription)")
+                if let network=error as? URLError, [.notConnectedToInternet,.networkConnectionLost,.timedOut,.cannotConnectToHost].contains(network.code) { return nil }
                 if attempt < 2, !Task.isCancelled {
                     try? await Task.sleep(nanoseconds: UInt64(0.8 * Double(attempt + 1) * 1e9))
                 }
@@ -130,6 +164,7 @@ final class AudioService {
     func stop() {
         chainTask?.cancel()
         chainTask = nil
+        localSpeech.stop()
         current?.stop()
         current = nil
         playingText = nil
@@ -140,7 +175,12 @@ final class AudioService {
         stop()
         chainTask = Task {
             configureSession()
-            guard let p = await makePlayer(text, voice: voice), !Task.isCancelled else { return }
+            let player=await makePlayer(text,voice:voice)
+            guard !Task.isCancelled else { return }
+            guard let p=player else {
+                playingText=text;await localSpeech.speak(text,voice:voice)
+                if !Task.isCancelled { playingText=nil };return
+            }
             current = p
             playingText = text
             p.play()
@@ -158,11 +198,11 @@ final class AudioService {
         chainTask = Task {
             configureSession()
             // 并行发起全部下载（共享本地缓存与服务端缓存）
-            async let all = withTaskGroup(of: (Int, AVAudioPlayer?).self) { group in
+            async let all = withTaskGroup(of: (Int, Data?).self) { group in
                 for (i, t) in items.enumerated() {
-                    group.addTask { [self] in (i, await makePlayer(t, voice: voice)) }
+                    group.addTask { [self] in (i, try? await audioData(t, voice: voice)) }
                 }
-                var arr = [(Int, AVAudioPlayer?)]()
+                var arr = [(Int, Data?)]()
                 for await r in group { arr.append(r) }
                 return arr.sorted { $0.0 < $1.0 }
             }
@@ -176,11 +216,15 @@ final class AudioService {
             }
             let sorted = await all
             var byIndex: [Int: AVAudioPlayer] = [:]
-            for (i, p) in sorted { byIndex[i] = p }
+            for (i, bytes) in sorted { if let bytes { byIndex[i] = try? AVAudioPlayer(data:bytes) } }
             byIndex[0] = first
             for i in 0..<items.count {
                 if Task.isCancelled { return }
-                guard let p = byIndex[i] else { continue }
+                guard let p = byIndex[i] else {
+                    playingText=items[i];await localSpeech.speak(items[i],voice:voice)
+                    if i+1<items.count { try? await Task.sleep(nanoseconds:1_000_000_000) }
+                    continue
+                }
                 if i > 0 {   // 第一条已在等待其余音频时开始播放
                     current = p
                     playingText = items[i]

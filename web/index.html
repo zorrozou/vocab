@@ -128,10 +128,12 @@
   </span>
 </div>
 
+<script src="./offline-library.js"></script>
 <script>
 "use strict";
 // 反代部署在 /vocab/；本地直接访问服务根路径时不添加前缀。
 const API = location.pathname === "/vocab" || location.pathname.startsWith("/vocab/") ? "/vocab" : "";
+VocabLibrary.init(API);
 // 测试工具默认隐藏，仅 ?debug=1 显示，避免正式学习时误清进度/误快进
 if (new URLSearchParams(location.search).get("debug") === "1") {
   document.getElementById("testTools").style.display = "";
@@ -430,6 +432,13 @@ let audioTimers = [];
 let actx = null, activeSrcs = [];
 function audioCtx() { if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)(); return actx; }
 document.addEventListener("pointerdown", () => { const c = audioCtx(); if (c.state === "suspended") c.resume(); }, { passive: true });
+async function localSpeak(text, token) {
+  if(token!==seqToken || !window.speechSynthesis)return false;
+  const voices=speechSynthesis.getVoices().filter(v=>v.localService && /^en[-_]/i.test(v.lang));
+  if(!voices.length)return false;
+  const speech=new SpeechSynthesisUtterance(text);speech.voice=voices.find(v=>v.lang===(S.settings.voice?.startsWith("en-GB")?"en-GB":"en-US"))||voices[0];speech.lang=speech.voice.lang;
+  return await new Promise(resolve=>{let done=false;const finish=ok=>{if(done)return;done=true;clearTimeout(timer);resolve(ok);};speech.onend=()=>finish(true);speech.onerror=()=>finish(false);const timer=setTimeout(()=>{if(token===seqToken)speechSynthesis.cancel();finish(false);},120000);speechSynthesis.speak(speech);});
+}
 async function playText(text) {
   stopAudio();
   const my = ++seqToken;
@@ -443,9 +452,11 @@ async function playText(text) {
     src.buffer = buf; src.connect(ctx.destination);
     activeSrcs.push(src); src.start();
     logSentenceExposures(text, "audio", true);
-  } catch (e) { if (my === seqToken) apHint(); }
+  } catch (e) { if (my === seqToken && !await localSpeak(text,my)) apHint(); }
 }
 function stopAudio() {
+  seqToken++;
+  window.speechSynthesis?.cancel();
   if (audio) { audio.pause(); audio.currentTime = 0; audio = null; }
   audioTimers.forEach(clearTimeout); audioTimers = [];
   activeSrcs.forEach(s => { try { s.stop(); } catch (e) {} }); activeSrcs = [];
@@ -462,6 +473,7 @@ async function fetchBuf(text) {
       return await audioCtx().decodeAudioData(ab);
     } catch (e) {
       lastErr = e;
+      if(navigator.onLine===false)break;
       if (attempt < 2) await new Promise(res => setTimeout(res, 800 * (attempt + 1)));
     }
   }
@@ -482,6 +494,15 @@ async function autoPlaySequence(word, sentences) {
     // 这就是"不少即时生成例句不能自动播放"的根因）
     const bufs = await Promise.all(items.map(t => fetchBuf(t).catch(() => null)));
     if (my !== seqToken) return;
+    if(bufs.some(b=>!b)) {
+      for(let i=0;i<items.length;i++) {
+        if(my!==seqToken)return;
+        if(!bufs[i]){if(!await localSpeak(items[i],my))apHint();}
+        else {const src=ctx.createBufferSource();src.buffer=bufs[i];src.connect(ctx.destination);activeSrcs.push(src);src.start();await new Promise(r=>setTimeout(r,bufs[i].duration*1000));}
+        if(i+1<items.length)await new Promise(r=>setTimeout(r,Math.max(.6,bufs[i+1]?.duration||1.2)*1000));
+      }
+      return;
+    }
     const ok = items.map((t, i) => ({ t, buf: bufs[i] })).filter(x => x.buf);
     if (!ok.length) { apHint(); return; }
     let t = ctx.currentTime + 0.05;
@@ -1930,7 +1951,41 @@ async function showLearn(item) {
   }
 }
 
+function showContentFeedback(word,text,kind) {
+  document.querySelector('#contentFeedback')?.remove();
+  const owner=AUTH,dialog=document.createElement('dialog');dialog.id='contentFeedback';
+  dialog.style.cssText='background:#1b202a;color:#e8ecf5;border:1px solid #374151;border-radius:14px;max-width:480px;width:85%;padding:20px';
+  dialog.innerHTML='<h2>内容纠错</h2><p class="excerpt"></p><label>问题类型 <select id="feedbackReason"><option value="meaning">词义不匹配</option><option value="translation">翻译有误</option><option value="grammar">语法问题</option><option value="unnatural">表达不自然</option><option value="other">其他</option></select></label><p><label>补充说明（可选）<textarea id="feedbackComment" maxlength="300" rows="3" style="width:100%"></textarea></label></p><p id="feedbackStatus" role="status"></p><div class="row"><button id="feedbackSend">提交纠错</button><button id="feedbackClose" class="ghost">关闭</button></div>';
+  dialog.querySelector('.excerpt').textContent=word+'：'+text;
+  document.body.append(dialog);dialog.showModal();
+  dialog.querySelector('#feedbackClose').onclick=()=>{dialog.close();dialog.remove();};
+  let signature='',id='';
+  dialog.querySelector('#feedbackSend').onclick=async()=>{
+    const button=dialog.querySelector('#feedbackSend'),status=dialog.querySelector('#feedbackStatus');
+    const body={word,text:text.slice(0,500),kind,reason:dialog.querySelector('#feedbackReason').value,comment:dialog.querySelector('#feedbackComment').value};
+    const next=JSON.stringify(body);if(next!==signature){signature=next;id=crypto.randomUUID();}
+    body.request_id=id;button.disabled=true;
+    try {
+      const r=await fetch(API+'/api/v1/content/report',{method:'POST',headers:{...await personalHeaders(),'Content-Type':'application/json'},body:JSON.stringify(body),signal:AbortSignal.timeout(15000)});
+      if(AUTH!==owner)return;
+      if(!r.ok)throw Error('HTTP '+r.status);
+      status.textContent='已进入内容复核队列；学习进度未改变。';button.textContent='已提交';
+    }catch(e){if(AUTH===owner&&dialog.isConnected){status.textContent='尚未提交，请联网后重试：'+e.message;button.disabled=false;}}
+  };
+}
+
 function bindPlays() {
+  document.querySelectorAll('#app .sent').forEach(el=>{
+    const source=el.querySelector('.plays.bad');
+    if(!source||el.querySelector('.content-feedback'))return;
+    const b=document.createElement('button');b.className='ghost content-feedback';b.textContent='例句纠错';b.style.cssText='font-size:12px;min-height:32px;margin-top:6px';
+    b.onclick=()=>showContentFeedback(source.dataset.w,source.dataset.t,source.dataset.kind==='static'?'static':'personal');el.append(b);
+  });
+  const sense=document.querySelector('#app .sense'),word=document.querySelector('#app .playw')?.dataset.t;
+  if(sense&&word&&!sense.querySelector('.content-feedback')){
+    const text=sense.textContent,b=document.createElement('button');b.className='ghost content-feedback';b.textContent='词义纠错';b.style.cssText='font-size:12px;min-height:32px;margin-left:8px';b.onclick=()=>showContentFeedback(word,text,'meaning');sense.append(b);
+  }
+
   document.querySelectorAll(".plays,.playw").forEach(b => {
     b.onclick = ev => { ev.stopPropagation(); playText(b.dataset.t); };
   });
@@ -2251,7 +2306,7 @@ async function refreshPersonalJobs() {
     for (const job of state.personalJobs || []) {
       if (job.owner !== owner || ["complete", "partial", "failed", "superseded"].includes(job.status)) continue;
       try {
-        const response = await fetch(API + "/api/v1/personalize", {
+        const response = await fetch(API + "/api/v1/personalize", {signal:AbortSignal.timeout(15000),
           method: "POST", headers: { "Content-Type": "application/json", ...await personalHeaders() },
           body: JSON.stringify({ device: owner, date: job.date, weak_words: job.weakWords,
             learned_max_pos: job.learnedMaxPos, sync: true, replace: job.replace, request_id: job.id })
@@ -2260,7 +2315,7 @@ async function refreshPersonalJobs() {
           if (!AUTH && response.status === 409 && S === state && deviceId() === owner) { job.status = "failed"; changed = true; }
           throw new Error("任务提交失败 " + response.status);
         }
-        const r = await fetch(`${API}/api/v1/personalized/job?job_id=${encodeURIComponent(job.id)}&device=${encodeURIComponent(owner)}`, { headers: await personalHeaders() });
+        const r = await fetch(`${API}/api/v1/personalized/job?job_id=${encodeURIComponent(job.id)}&device=${encodeURIComponent(owner)}`, { headers: await personalHeaders(),signal:AbortSignal.timeout(15000) });
         if (!r.ok) throw new Error("任务查询失败 " + r.status);
         const result = await r.json();
         if (S !== state || deviceId() !== owner) return;
@@ -2277,13 +2332,75 @@ async function refreshPersonalJobs() {
         if (result.status === "complete" && job.replace) {
           state.personalizedDay = job.date; state.personalizedWeak = job.weakKey; changed = true;
         }
-      } catch (e) { /* 保留待处理状态，下次进入主页或恢复网络时重试 */ }
+      } catch (e) { personalLastFailure=true; /* 保留待处理状态，下次进入主页或恢复网络时重试 */ }
     }
     if (changed && S === state && deviceId() === owner) save();
   })();
   try { await personalRefresh; } finally { personalRefresh = null; }
 }
 
+async function cachedPracticeWord(word) {
+  VocabLibrary.init(API);
+  let value=null;
+  try {
+    const packed=await VocabLibrary.lookup('/api/v1/lexicon/word',new URLSearchParams({word}));
+    if(packed)value=await packed.json();
+    if(!value)for(const name of (await caches.keys()).filter(n=>n.startsWith('vocab-public-'))) {
+    const r=await(await caches.open(name)).match(location.origin+API+'/api/v1/lexicon/word?word='+encodeURIComponent(word));
+    if(r){value=await r.json();break;}
+    }
+  }catch(_){}
+  return value;
+}
+async function generateLocalPractice(target) {
+  const state=S,owner=AUTH,words=Object.keys(recentDifficult(state)).filter(w=>!isMastered(state.cards[w]||{})).slice(0,3);
+  const current=()=>S===state&&AUTH===owner&&target.isConnected;
+  if(!words.length){target.textContent="近 14 天没有需要生成例句的薄弱词。";return;}
+  if(!await VocabLocalSentence.available()) {
+    const found=await localWeakPractice(words,target);
+    if(current()) {
+      if(!found)target.textContent="请先联网下载整库包，保存薄弱词例句。";
+      const note=document.createElement('p');note.textContent="本机中英双语模型尚不可用，已使用保存的例句；可联网生成新句。";target.prepend(note);
+    }
+    return;
+  }
+  if(!current())return;
+  target.textContent="正在本机生成并检查例句…";
+  const rows=[];let failed=0;
+  for(const word of words) {
+    if(!current())return;
+    const detail=await cachedPracticeWord(word);
+    if(!detail?.senses?.[0]?.text){failed++;continue;}
+    try {
+      const row=await VocabLocalSentence.generate(word,detail.senses[0].text,AbortSignal.timeout(60000));
+      if(!(state.rejectedPersonalized?.[word]||[]).includes(row.text))rows.push({word,...row});
+    }catch(_){failed++;}
+  }
+  if(!current())return;
+  target.replaceChildren();
+  const note=document.createElement('p');note.textContent=`本机生成 ${rows.length} 条，仅用于例句阅读，不计入学习进度。`+(failed?` ${failed} 词未生成；请先下载离线包或稍后重试。`:'');target.append(note);
+  for(const row of rows){const p=document.createElement('p');p.textContent=row.word+'：'+row.text+' '+row.zh;target.append(p);}
+}
+async function localWeakPractice(words, target) {
+  const state=S,owner=AUTH,rows=[];
+  VocabLibrary.init(API);
+  for(const word of words.slice(0,15)) {
+    if(state.cards[word]&&isMastered(state.cards[word]))continue;
+    const value=await cachedPracticeWord(word);
+    if(S!==state||AUTH!==owner||!target?.isConnected)return false;
+    const alternatives=(value?.sentences||[]).filter(s=>s.text&&s.zh&&!(state.rejectedPersonalized?.[word]||[]).includes(s.text));
+    const tier=(recentDifficult(state)[word]?.again||0)>0?1:2;
+    const candidates=alternatives.filter(s=>s.tier===tier);
+    const pool=candidates.length?candidates:alternatives;
+    if(pool.length)rows.push({word,...pool[Number(today().replaceAll('-',''))%pool.length]});
+  }
+  if(!rows.length)return false;
+  target.replaceChildren();
+  const note=document.createElement('p');note.textContent='本机薄弱词练习：按近期遗忘情况选择已保存例句；联网后仍可生成新句。';target.append(note);
+  for(const row of rows){const p=document.createElement('p');p.textContent=row.word+'：'+row.text+' '+row.zh;target.append(p);}
+  return true;
+}
+let personalLastFailure=false;
 async function autoPersonalize() {
   if (AUTH && !AUTH.accountId) return;
   const date = today(), state = S, owner = deviceId();
@@ -2294,6 +2411,10 @@ async function autoPersonalize() {
   if (!weakToday.length) {
     state.personalizedDay = date; state.personalizedWeak = ""; save();
     status("今天没有薄弱词，无需定制"); return;
+  }
+  if(navigator.onLine===false) {
+    if(!await localWeakPractice(weakToday,$("#genOut")))status("当前离线且这些词的例句未保存；联网下载整库或今日任务包后可使用。");
+    return;
   }
   if (!state.personalJobs) state.personalJobs = [];
   let job = [...state.personalJobs].reverse().find(j => j.replace && j.owner === owner && j.date === date && j.weakKey === weakKey &&
@@ -2313,8 +2434,10 @@ async function autoPersonalize() {
   }
   for (let k = 0; k < 10; k++) {
     status("正在为薄弱词定制例句…");
+    personalLastFailure=false;
     await refreshPersonalJobs();
     if (S !== state || deviceId() !== owner) return;
+    if(personalLastFailure){if(!await localWeakPractice(weakToday,$("#genOut")))status("暂时无法生成，任务已保留；联网后会重试。");return;}
     if (job.status === "complete") { status("✓ 薄弱词例句已就绪"); return; }
     if (["partial", "failed", "superseded"].includes(job.status)) {
       status("部分例句暂不可用，可稍后重新进入完成页重试；现有例句仍可使用。"); return;
@@ -2432,34 +2555,67 @@ async function repairQuarantinedCards(target) {
   }
   if(target.isConnected)target.textContent=`已修复 ${done}/${cards.length} 词；修复前快照已保留。`+(failures.length?" 未完成："+failures.join("；"):"请立即同步。");
 }
+async function ensureOfflineWorker() {
+  await navigator.serviceWorker.register(`${API}/offline-worker.js`,{scope:API+'/'});
+  const deadline=Date.now()+10000;
+  while(Date.now()<deadline) {
+    const worker=navigator.serviceWorker.controller;
+    if(worker) {
+      const ready=await new Promise(resolve=>{
+        const channel=new MessageChannel(),timer=setTimeout(()=>{channel.port1.close();resolve(false);},400);
+        channel.port1.onmessage=e=>{clearTimeout(timer);channel.port1.close();resolve(e.data?.libraryVersion===1);};
+        worker.postMessage('library-status',[channel.port2]);
+      });
+      if(ready)return;
+    }
+    await new Promise(r=>setTimeout(r,100));
+  }
+  throw Error("离线服务尚未更新，请联网刷新后重试。");
+}
+let libraryDownloadController=null;
+async function downloadLibraryOffline(target) {
+  if(libraryDownloadController)return;
+  if(!navigator.serviceWorker||!isSecureContext){target.textContent="此浏览器需 HTTPS 才能保存离线词库。";return;}
+  const control=new AbortController();libraryDownloadController=control;
+  try {
+    await ensureOfflineWorker();
+    VocabLibrary.init(API);
+    target.textContent="正在准备整库内容，首次打包可能需要约半分钟…";
+    const m=await VocabLibrary.download(async(n,total,bytes)=>{if(target.isConnected)target.textContent=`整库离线包：${n}/${total} 词，${(bytes/1048576).toFixed(1)} MB；可暂停后续传。`;},control.signal);
+    if(target.isConnected)target.textContent=`整库 ${m.words} 词已校验保存：释义、双向题目和例句。音频另下载今日包，未缓存音频使用本机英语语音（设备需有可用语音）。每日名额仍需联网领取。`;
+  }catch(e){if(target.isConnected)target.textContent=e.name==='AbortError'?"下载已暂停，下次继续；原离线包保留。":"下载未完成，可重试续传："+e.message;}
+  finally{libraryDownloadController=null;}
+}
 async function downloadTodayOffline(target) {
   const owner=AUTH, plan=cachedSharedPlan();
   if(!navigator.serviceWorker || !window.isSecureContext){target.textContent="此浏览器需要 HTTPS 才能下载离线包。";return;}
   try {
-    await navigator.serviceWorker.register(`${API}/offline-worker.js`,{scope:API+'/'});
-    await Promise.race([navigator.serviceWorker.ready,new Promise((_,reject)=>setTimeout(()=>reject(Error("离线服务启动超时，请重试")),10000))]);
-    if(!navigator.serviceWorker.controller)await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{navigator.serviceWorker.removeEventListener('controllerchange',changed);reject(Error("请刷新页面后重试"));},5000);function changed(){clearTimeout(timer);resolve();}navigator.serviceWorker.addEventListener('controllerchange',changed,{once:true});});
+    await ensureOfflineWorker();
   }catch(e){target.textContent=e.message;return;}
   if(!plan?.items.length){target.textContent="请先回首页加载今日任务，领取共享名额。";return;}
   const day=today(), voice=S.settings.voice||"";
-  let ready=0;const failed=[];
-  try {const r=await fetch(`${API}/api/v1/lexicon/meta`);if(!r.ok)throw Error();}catch(e){target.textContent="无法确认词库版本，请联网后下载。";return;}
+  let ready=0,revision=null;const failed=[];
+  try {const r=await fetch(`${API}/api/v1/lexicon/meta`);if(!r.ok)throw Error();revision=(await r.json()).lexicon_revision;}catch(e){target.textContent="无法确认词库版本，请联网后下载。";return;}
   const queue=plan.items.slice(0,100);
   await Promise.all([1,2,3].map(async()=>{
-    while(queue.length && AUTH===owner && today()===day){
+    while(queue.length && AUTH===owner && today()===day && (S.settings.voice||"")===voice){
       const item=queue.shift();
       try {
         const r=await fetch(`${API}/api/v1/lexicon/word?word=${encodeURIComponent(item.word)}`);if(!r.ok)throw Error();
-        const w=await r.json();if(w.word!==item.word)throw Error();
+        const w=await r.json();if(w.word!==item.word||w.lexiconRevision!==revision)throw Error();
+        const required=[`/api/v1/lexicon/word?word=${encodeURIComponent(w.word)}`,...["forward","reverse"].map(mode=>`/api/v1/quiz?word=${encodeURIComponent(w.word)}&mode=${mode}`)];
         for(const mode of ["forward","reverse"])if(!await wordQuiz(w.word,w.pos,mode))throw Error();
         for(const text of [w.word,...(w.sentences||[]).map(s=>s.text)]){
-          const r=await fetch(`${API}/api/v1/tts?text=${encodeURIComponent(text)}&v=${encodeURIComponent(voice)}`);if(!r.ok)throw Error();await r.arrayBuffer();
+          const r=await fetch(`${API}/api/v1/tts?text=${encodeURIComponent(text)}&v=${encodeURIComponent(voice)}`);if(!r.ok||(await r.arrayBuffer()).byteLength<500)throw Error();required.push(`/api/v1/tts?text=${encodeURIComponent(text)}&v=${encodeURIComponent(voice)}`);
         }
+        const names=(await caches.keys()).filter(n=>n.startsWith('vocab-public-')&&n.endsWith(revision));
+        for(const path of required){const url=new URL(location.origin+API+path);url.searchParams.sort();let stored=false;for(const name of names){const hit=await(await caches.open(name)).match(url.href);if(hit&&(await hit.arrayBuffer()).byteLength>2){stored=true;break;}}if(!stored)throw Error('内容未保存');}
         ready++;
       }catch(e){failed.push(item.word);}
       if(AUTH===owner&&target.isConnected)target.textContent=`今日离线包：${ready}/${plan.items.length} 词完整就绪（释义、双向题目和静态例句音频）。`+(failed.length?` ${failed.length} 词不完整，可重试。`:(plan.items.length>100?"每批最多下载 100 词。":""));
     }
   }));
+  if(AUTH===owner&&target.isConnected&&(S.settings.voice||"")!==voice)target.textContent="嗓音已更换，请重新下载今日离线包。";
   navigator.serviceWorker.controller?.postMessage('prune-public-cache');
 }
 
@@ -2643,9 +2799,10 @@ function showSettings() {
     <div class="row"><button class="ghost" style="flex:1;padding:9px" id="bValidation">独立水平校验（24 题，不影响学习计划）</button></div>
     ${S.evalReport ? `<p class="muted" style="font-size:12px">上次 ${escapeHTML(S.evalReport.date)}：独立 ≈${escapeHTML(S.evalReport.mean)}，当前 ≈${escapeHTML(S.evalReport.appMean)}，差值 ${S.evalReport.delta > 0 ? "+" : ""}${escapeHTML(S.evalReport.delta)}</p>` : ""}
     <p class="setting-heading">离线与数据维护</p>
-    <div class="row"><button class="ghost" id="bOfflinePack">下载今日任务离线包</button><button class="ghost" id="bRepairCards">检查并修复异常卡（${Object.values(S.cards).filter(c=>c.fsrsIssue).length}）</button></div>
+    <div class="row"><button class="ghost" id="bOfflinePack">下载今日任务离线包</button><button class="ghost" id="bLibraryPack">下载／更新整库离线包</button><button class="ghost" id="bPauseLibrary">暂停整库下载</button><button class="ghost" id="bClearLibrary">删除整库离线包</button><button class="ghost" id="bLocalPractice">本机生成薄弱词例句</button><button class="ghost" id="bRepairCards">检查并修复异常卡（${Object.values(S.cards).filter(c=>c.fsrsIssue).length}）</button></div>
     ${Object.entries(S.cards).filter(([,c])=>c.fsrsIssue).slice(0,25).map(([w,c])=>`<p class="muted">${escapeHTML(w)}：${escapeHTML(c.fsrsIssue)}</p>`).join("")}
-    <p class="muted" id="maintenanceMsg" role="status">离线包只下载已领取任务；异常卡仅从可验证的完整历史重建。个人例句联网生成。</p>
+    <p class="muted" id="maintenanceMsg" role="status">整库包包含全部释义、题目和例句；今日包额外保存任务音频。本机模型可用时可生成新句，否则使用已保存例句。学习名额仍按原规则领取。</p>
+    <div id="localPracticeOut" role="status"></div>
     <details><summary>存档健康与学习效果</summary><div id="settingsHealth">正在读取…</div></details>
     <p class="setting-heading">学习数据与备份</p>
     ${normalActive ? `<p class="muted">可靠本机存储已启用。备份恢复、整理历史和重新加载服务器进度需要联网。</p>` : AUTH && AUTH.accountId && !largeActive ? `<div class="row"><button class="ghost" id="bPrepareNormal">启用可靠本机存储（实验）</button></div><p class="muted">启用后可继续学习和同步；备份恢复与历史整理需要联网。</p>` : ""}
@@ -2665,7 +2822,12 @@ function showSettings() {
     <p class="muted" id="settingsSaveStatus" role="status"></p><div class="row"><button class="act" id="bSave">返回学习</button></div>
   </div>`;
   renderLearningHealth($("#settingsHealth"));
-  for(const [id,action] of [["bOfflinePack",downloadTodayOffline],["bRepairCards",repairQuarantinedCards]]) $("#"+id).onclick=async()=>{const b=$("#"+id);b.disabled=true;try{await action($("#maintenanceMsg"));}finally{if(b.isConnected)b.disabled=false;}};
+  $("#bLocalPractice").onclick=async()=>{const b=$("#bLocalPractice");b.disabled=true;try{await generateLocalPractice($("#localPracticeOut"));}finally{if(b.isConnected)b.disabled=false;}};
+  $("#bPauseLibrary").onclick=()=>libraryDownloadController?.abort();
+  $("#bClearLibrary").onclick=async()=>{if(libraryDownloadController){$("#maintenanceMsg").textContent="请先暂停下载。";return;}VocabLibrary.init(API);await VocabLibrary.clear();$("#maintenanceMsg").textContent="整库离线包已删除，学习进度和今日音频保留。";};
+  VocabLibrary.init(API);
+  VocabLibrary.active().then(m=>{const el=$("#maintenanceMsg");if(m&&el&&!el.textContent.trim())el.textContent=`已保存整库 ${m.words} 词，${(m.bytes/1048576).toFixed(1)} MB。`;}).catch(()=>{});
+  for(const [id,action] of [["bOfflinePack",downloadTodayOffline],["bLibraryPack",downloadLibraryOffline],["bRepairCards",repairQuarantinedCards]]) $("#"+id).onclick=async()=>{const b=$("#"+id);b.disabled=true;try{await action($("#maintenanceMsg"));}finally{if(b.isConnected)b.disabled=false;}};
   renderUserTag();
   document.querySelectorAll("[data-new]").forEach(b => b.onclick = () => { const value = +b.dataset.new; if (st.newPerDay !== value && markSettingChanged("newPerDay")) { st.newPerDay = value; save(); } showSettings(); });
   document.querySelectorAll("[data-cap]").forEach(b => b.onclick = () => { const value = +b.dataset.cap; if (st.dailyCap !== value && markSettingChanged("dailyCap")) { st.dailyCap = value; save(); } showSettings(); });

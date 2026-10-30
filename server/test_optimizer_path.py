@@ -24,6 +24,9 @@ word2id = {w:i+1 for i,w in enumerate(cards)}
 reviews = module.collect_reviews(state, word2id, now)
 assert len(reviews)==420 and len(module.effective_reviews(reviews))==400
 assert module.split_reviews(reviews) is not None
+held_out=module.split_reviews(reviews)[1]
+with_duplicate=sorted(reviews+[held_out[0]],key=lambda r:(r.review_datetime,r.card_id))
+assert module.validation_scores(list(Scheduler().parameters),with_duplicate,held_out)['count']==len(held_out), 'same-timestamp practice must not duplicate held-out observations'
 from copy import deepcopy
 partial=deepcopy(state);partial['cards']['word0']['fsrsHistory']['base']['is_new']=False
 assert len(module.effective_reviews(module.collect_reviews(partial,word2id,now)))==380

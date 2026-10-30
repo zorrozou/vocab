@@ -18,11 +18,13 @@ from pathlib import Path
 from urllib.parse import quote
 
 from fsrs import Card, Rating, ReviewLog, Scheduler
-from fsrs.optimizer import Optimizer
+Optimizer = None  # Optional heavy dependency is loaded only when a fit is eligible.
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DATA = ROOT / 'server' / 'data'
-MIN_REVIEWS = 400
+sys.path.insert(0, str(ROOT / 'server' if (ROOT / 'server/app').is_dir() else ROOT))
+from app.training_data import training_data, MIN_OBSERVATIONS
+MIN_REVIEWS = MIN_OBSERVATIONS
 
 
 def readonly(path):
@@ -33,37 +35,9 @@ def readonly(path):
 
 def collect_reviews(state, word2id, now):
     """Only complete new-card histories; an invalid/missing step excludes the card."""
-    seen, reviews = {}, []
-    cards = state.get('cards', {})
-    if not isinstance(cards, dict): raise ValueError('Invalid cards in learning state')
-    for word, card in cards.items():
-        if not isinstance(card, dict) or card.get('pendingFsrs'): continue
-        card_id, history, applied = word2id.get(word), card.get('fsrsHistory'), card.get('appliedFsrs')
-        if not card_id or not isinstance(history, dict) or not isinstance(applied, list): continue
-        if (history.get('base') or {}).get('is_new') is not True: continue
-        events = history.get('events')
-        if not isinstance(events, list) or not events: continue
-        own, valid = {}, True
-        for event in events:
-            if not isinstance(event, dict): valid = False; break
-            key, raw, rating = event.get('id'), event.get('at'), event.get('rating')
-            if not isinstance(key, str) or not key or key not in applied or type(rating) is not int or rating not in (1,2,3,4): valid = False; break
-            try:
-                at = datetime.fromisoformat(raw.replace('Z','+00:00'))
-                if at.tzinfo is None or at > now: raise ValueError()
-                at = at.astimezone(timezone.utc)
-            except (AttributeError, ValueError, OverflowError): valid = False; break
-            signature = (int(card_id), rating, at)
-            if key in seen and seen[key] != signature: raise ValueError('Conflicting rating event IDs')
-            if key in own and own[key] != signature: raise ValueError('Conflicting rating event IDs')
-            own[key] = signature
-        if not valid or set(applied) != set(own): continue
-        seen.update(own)
-        # The pinned upstream optimizer only uses the first 64 events per card.
-        for key, (_, rating, at) in sorted(own.items(),key=lambda p:(p[1][2],p[0]))[:64]:
-            reviews.append((at,int(card_id),key,Rating(rating)))
-    reviews.sort(key=lambda x:(x[0],x[1],x[2]))
-    return [ReviewLog(card_id=card_id,rating=rating,review_datetime=at,review_duration=None) for at,card_id,_,rating in reviews]
+    records, _ = training_data(state, now, word2id)
+    return [ReviewLog(card_id=int(word2id[word]),rating=Rating(rating),review_datetime=at,review_duration=None)
+            for at,word,_,rating in records]
 
 
 def effective_reviews(reviews):
@@ -96,6 +70,7 @@ def validation_scores(parameters, reviews, test):
     for r in reviews:
         c = cards.get(r.card_id) or Card(card_id=r.card_id,due=r.review_datetime)
         if (r.card_id,r.review_datetime) in keys:
+            keys.remove((r.card_id,r.review_datetime))
             probability = min(1-1e-9,max(1e-9,float(scheduler.get_card_retrievability(c,r.review_datetime))))
             outcome = int(r.rating != Rating.Again)
             losses.append(-math.log(probability if outcome else 1-probability))
@@ -105,7 +80,8 @@ def validation_scores(parameters, reviews, test):
     return {'log_loss':sum(losses)/len(losses),'brier':sum(briers)/len(briers),'count':len(losses)}
 
 
-def optimize(uid: int, data_dir: Path = DEFAULT_DATA):
+def optimize(uid: int, data_dir: Path = DEFAULT_DATA, check_only=False):
+    global Optimizer
     data_dir = Path(data_dir)
     with closing(readonly(data_dir / 'users.db')) as conn:
         row = conn.execute('SELECT u.account_id,s.state_json FROM users u JOIN account_state s ON s.account_id=u.account_id WHERE u.id=?', (uid,)).fetchone()
@@ -119,6 +95,10 @@ def optimize(uid: int, data_dir: Path = DEFAULT_DATA):
     with closing(readonly(data_dir / 'lexicon_v0.1.sqlite')) as lex:
         word2id = dict(lex.execute('SELECT word,id FROM lexicon_entry'))
     reviews = collect_reviews(state, word2id, datetime.now(timezone.utc))
+    _, readiness = training_data(state, datetime.now(timezone.utc), word2id)
+    if check_only:
+        print(json.dumps({"user_id":uid, **readiness},ensure_ascii=False,sort_keys=True))
+        return readiness["eligible"]
     split = split_reviews(reviews)
     effective = len(effective_reviews(reviews))
     print(f'uid{uid}: 完整历史有效跨日观测 {effective} 条')
@@ -126,6 +106,11 @@ def optimize(uid: int, data_dir: Path = DEFAULT_DATA):
         print(f'uid{uid}: 样本或留出集不足，保留现有参数')
         return False
     train, test = split
+    if Optimizer is None:
+        try:
+            from fsrs.optimizer import Optimizer
+        except ImportError as error:
+            raise RuntimeError('优化器依赖未安装；请在隔离训练环境执行，现有参数未改动') from error
     params = list(Optimizer(train).compute_optimal_parameters(verbose=False))
     if not all(type(v) in (int,float) and math.isfinite(v) for v in params): raise ValueError('Invalid optimized parameters')
     Scheduler(parameters=params,desired_retention=.9)
@@ -160,12 +145,13 @@ def optimize(uid: int, data_dir: Path = DEFAULT_DATA):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--check', action='store_true', help='只报告有效样本与留出集条件，不训练、不写入参数')
     parser.add_argument('--data-dir', type=Path, default=DEFAULT_DATA)
     parser.add_argument('user_id', type=int, nargs='+')
     args = parser.parse_args()
     try:
         for uid in args.user_id:
-            optimize(uid, args.data_dir)
+            optimize(uid, args.data_dir, check_only=args.check)
     except (OSError, ValueError, RuntimeError, ImportError, sqlite3.Error, json.JSONDecodeError) as error:
         print(f'参数优化失败: {error}', file=sys.stderr)
         return 1

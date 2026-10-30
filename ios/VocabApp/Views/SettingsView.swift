@@ -258,9 +258,17 @@ struct SettingsView: View {
                         catch { exportError = "读取备份失败：\(error.localizedDescription)" }
                     }.disabled(exporting)
                     Text("离线与数据维护").font(.headline).foregroundStyle(Theme.text)
+                    GhostButton(title:"下载／更新整库离线包") { Task { await app.downloadLibraryOffline() } }.disabled(app.maintenanceRunning)
+                    if app.maintenanceRunning { GhostButton(title:"暂停整库下载") { app.libraryDownloadCancelled=true } }
+                    GhostButton(title:"删除整库离线包") { Task { await app.clearOfflineLibrary() } }.disabled(app.maintenanceRunning)
                     GhostButton(title:"下载今日任务离线包") { Task { await app.downloadTodayOffline() } }.disabled(app.maintenanceRunning)
                     GhostButton(title:"检查并修复异常卡（\(app.S.cards.values.filter { $0.fsrsIssue != nil }.count)）") { Task { await app.repairQuarantinedCards() } }.disabled(app.maintenanceRunning)
-                    Text(app.maintenanceMessage.isEmpty ? "离线包只下载已领取任务。异常卡仅从可验证的完整历史重建；个人例句联网生成。" : app.maintenanceMessage).font(.caption).foregroundStyle(Theme.muted)
+                    GhostButton(title:"本机生成薄弱词例句") { Task { await app.generateLocalPractice() } }.disabled(app.localPracticeRunning)
+                    if !app.localPracticeNotice.isEmpty { Text(app.localPracticeNotice).font(.caption).foregroundStyle(Theme.muted) }
+                    ForEach(Array(app.localPracticeRows.enumerated()),id:\.offset) { _,row in
+                        Text(row.target+"："+row.text+"\n"+(row.zh ?? "")).font(.callout).foregroundStyle(Theme.text)
+                    }
+                    Text(app.maintenanceMessage.isEmpty ? "整库包包含释义、双向题目与例句；今日包额外保存任务音频。本机模型可用时可生成新句，否则使用已保存例句。学习名额仍按原规则领取。" : app.maintenanceMessage).font(.caption).foregroundStyle(Theme.muted)
                     ForEach(app.S.cards.keys.filter { app.S.cards[$0]?.fsrsIssue != nil }.sorted().prefix(25),id:\.self) { word in
                         Text(word+"："+(app.S.cards[word]?.fsrsIssue ?? "")).font(.caption).foregroundStyle(Theme.warn)
                     }

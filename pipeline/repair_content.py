@@ -6,7 +6,7 @@ import argparse,json,os,re,sqlite3,sys,time,urllib.request
 from concurrent.futures import ThreadPoolExecutor,as_completed
 from pathlib import Path
 from audit_learning_content import audit
-from app.content_quality import sentence_issue,valid_word
+from app.content_quality import sentence_issue,valid_word,translation_issue
 from app.core_senses import OVERRIDES,apply_overrides
 
 def call(prompt):
@@ -97,7 +97,7 @@ def apply(db,patch):
         return json.dumps(sorted((found-{None})|{wid}))
     try:
         for row in result['accepted']:
-            if row['review_score']<4 or sentence_issue(row['replacement'],row['word']):raise ValueError('Invalid patch')
+            if type(row.get('review_score')) is not int or not 4<=row['review_score']<=5 or sentence_issue(row['replacement'],row['word'],lambda t:variants.get(t,t)) or translation_issue(row.get('translation')):raise ValueError('Invalid patch')
             wid=c.execute('SELECT id FROM lexicon_entry WHERE word=?',(row['word'],)).fetchone()[0]
             if row['sid']:
                 old=c.execute('SELECT text,translation FROM sentence WHERE id=? AND targetWordId=?',(row['sid'],wid)).fetchone()

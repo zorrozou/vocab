@@ -1084,6 +1084,7 @@ final class AppState {
         auth = nil
         fsrsReplayError = ""
         maintenanceMessage = ""
+        localPracticeRows=[];localPracticeNotice=""
         Task { await api.clearToken(ifMatches: previousToken) }
         Keychain.delete("token")
         UserDefaults.standard.removeObject(forKey: "vocab_profile")
@@ -1253,6 +1254,31 @@ final class AppState {
         }
         save()
         maintenanceMessage="已修复 \(done)/\(words.count) 词，修复前快照已保留。" + (failures.isEmpty ? "请立即同步。" : failures.joined(separator:"；"))
+    }
+
+    var libraryDownloadCancelled=false
+    func downloadLibraryOffline() async {
+        guard !maintenanceRunning else { return }
+        maintenanceRunning=true;libraryDownloadCancelled=false
+        defer { maintenanceRunning=false }
+        maintenanceMessage="正在准备整库离线内容…"
+        do {
+            let app=self
+            let m=try await api.downloadLibrary { n,total,bytes in
+                await MainActor.run {
+                    guard !app.libraryDownloadCancelled else { return false }
+                    app.maintenanceMessage="整库离线包：\(n)/\(total) 词，\(String(format:"%.1f",Double(bytes)/1048576)) MB；可暂停后续传。"
+                    return true
+                }
+            }
+            maintenanceMessage="整库 \(m.words) 词已校验保存：释义、双向题目和例句。音频可另下载今日包；未缓存音频使用本机英语语音。每日名额仍需联网领取。"
+        } catch is CancellationError { maintenanceMessage="下载已暂停，可继续下载；原离线包保留。" }
+        catch { maintenanceMessage="整库下载未完成，可续传："+error.localizedDescription }
+    }
+    func clearOfflineLibrary() async {
+        guard !maintenanceRunning else { return }
+        do { try await api.clearLibrary();maintenanceMessage="整库离线包已删除，学习进度和今日音频保留。" }
+        catch { maintenanceMessage=error.localizedDescription }
     }
 
     func downloadTodayOffline() async {
@@ -1836,12 +1862,65 @@ final class AppState {
     }
 
     private var personalRefreshRunning = false
+    private var personalRefreshFailed = false
+
+    var localPracticeRunning=false
+    var localPracticeRows:[PersonalizedOut.Row]=[]
+    var localPracticeNotice=""
+    func generateLocalPractice() async {
+        guard !localPracticeRunning else { return }
+        let owner=auth,slot=slotKey,words=Array(StudyEngine.recentWeakWords(S,today:DayUtil.today()).prefix(3))
+        localPracticeRows=[]
+        guard !words.isEmpty else { localPracticeNotice="近 14 天没有需要生成例句的薄弱词。";return }
+        localPracticeRunning=true
+        defer { localPracticeRunning=false }
+        if !LocalSentenceGenerator.available {
+            let rows=await localWeakPractice(words)
+            guard auth==owner,slotKey==slot else { return }
+            localPracticeRows=rows
+            localPracticeNotice="本机中英双语模型尚不可用。以下为已保存例句；可联网生成新句。"
+            return
+        }
+        localPracticeNotice="正在本机生成并检查例句…"
+        var failures=0
+        for word in words {
+            guard auth==owner,slotKey==slot else { return }
+            guard let detail=await api.cachedWord(word),let sense=detail.senses?.first?.text else { failures+=1;continue }
+            do {
+                let sentence=try await LocalSentenceGenerator.generate(word:word,sense:sense,easier:true)
+                guard auth==owner,slotKey==slot else { return }
+                if !(S.rejectedPersonalized?[word] ?? []).contains(sentence.text) {
+                    localPracticeRows.append(.init(target:word,recall:nil,text:sentence.text,zh:sentence.zh))
+                }
+            } catch { failures+=1 }
+        }
+        localPracticeNotice="本机生成 \(localPracticeRows.count) 条，仅用于例句阅读，不计入学习进度。"+(failures>0 ? " \(failures) 词未生成；请先下载离线包或稍后重试。":"")
+    }
+
+    func localWeakPractice(_ words:[String]) async -> [PersonalizedOut.Row] {
+        let owner=auth,slot=slotKey,day=DayUtil.today()
+        var rows:[PersonalizedOut.Row]=[]
+        for word in words.prefix(15) {
+            if let c=S.cards[word],StudyEngine.isMastered(c) { continue }
+            guard let detail=await api.cachedWord(word),owner==auth,slot==slotKey else { continue }
+            let candidates=(detail.sentences ?? []).filter { !($0.zh ?? "").isEmpty && !(S.rejectedPersonalized?[word] ?? []).contains($0.text) }
+            let recent=Array((S.cards[word]?.studyEvidence?.events ?? [:]).values).filter { $0.day>=DayUtil.addDays(day,-13) && $0.day<=day }
+            let tier=recent.contains { $0.rating==1 } ? 1:2
+            let preferred=candidates.filter { $0.tier==tier },pool=preferred.isEmpty ? candidates:preferred
+            if !pool.isEmpty {
+                let sentence=pool[(Int(day.replacingOccurrences(of:"-",with:"")) ?? 0)%pool.count]
+                rows.append(.init(target:word,recall:nil,text:sentence.text,zh:sentence.zh))
+            }
+        }
+        return auth==owner && slotKey==slot ? rows:[]
+    }
 
     /// 重新提交相同幂等键并拉取任务状态；进程重启和网络失败后可安全重试。
     func refreshPersonalJobs() async {
         if let auth, auth.accountId == nil { return }
         guard !personalRefreshRunning else { return }
         personalRefreshRunning = true
+        personalRefreshFailed = false
         defer { personalRefreshRunning = false }
         let owner = deviceId(), slot = slotKey, token = auth?.token
         let jobs = S.personalJobs ?? []
@@ -1873,6 +1952,7 @@ final class AppState {
                     changed = true
                 }
             } catch {
+                personalRefreshFailed = true
                 // 旧游客任务可能属于无法验证的旧命名空间；保留记录，允许用户重新生成。
                 if token == nil, (error as? APIError)?.statusCode == 409, deviceId() == owner, slotKey == slot,
                    let index = S.personalJobs?.firstIndex(where: { $0.id == job.id && $0.owner == owner }) {
@@ -1920,6 +2000,12 @@ final class AppState {
             onStatus("正在为薄弱词定制例句…")
             await refreshPersonalJobs()
             guard deviceId() == owner, slotKey == slot, !Task.isCancelled else { return }
+            if personalRefreshFailed {
+                let rows=await localWeakPractice(weakToday)
+                guard deviceId()==owner,slotKey==slot else { return }
+                onStatus(rows.isEmpty ? "暂时无法生成，任务已保留；联网后会重试。" : "本机薄弱词练习：按近期遗忘选择已保存例句；联网后仍可生成新句。")
+                if !rows.isEmpty { onRows?(rows) };return
+            }
             let state = S.personalJobs?.first(where: { $0.id == job.id })?.status
             if state == "complete" {
                 let rows = weakToday.compactMap { word -> PersonalizedOut.Row? in

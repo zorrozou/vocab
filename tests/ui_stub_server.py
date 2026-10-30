@@ -10,6 +10,7 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
     shutil.copy2(root / 'data' / 'lexicon_v0.1.sqlite', isolated / 'data' / 'lexicon_v0.1.sqlite')
     shutil.copy2(root / 'web' / 'index.html', isolated / 'static' / 'index.html')
     shutil.copy2(root / 'web' / 'offline-worker.js', isolated / 'static' / 'offline-worker.js')
+    shutil.copy2(root / 'web' / 'offline-library.js', isolated / 'static' / 'offline-library.js')
     sys.path.insert(0, str(isolated))
     from app import main
     import uvicorn

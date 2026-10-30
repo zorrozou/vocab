@@ -2,6 +2,9 @@
 Existing word/sense IDs remain stable. Preserve other senses for dictionary lookup.
 """
 OVERRIDES = {
+ 'economic':('a','经济的；经济上的'),
+ 'temporal':('a','时间的；颞部的；世俗的'),
+ 'scrutinize':('vt','仔细检查；审查'),
  'like':('vt','喜欢；喜爱'), 'natural':('a','自然的；天然的'), 'despite':('prep','尽管；即使'),
  'southern':('a','南方的；南部的'), 'eastern':('a','东方的；东部的'), 'northern':('a','北方的；北部的'),
  'separate':('a','分开的；单独的'), 'leading':('a','主要的；领先的'), 'substantial':('a','大量的；重大的；结实的'),

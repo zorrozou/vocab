@@ -4,7 +4,7 @@ import argparse,json,sqlite3,sys
 from pathlib import Path
 _project=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(_project/'server' if (_project/'server'/'app').is_dir() else _project))
-from app.content_quality import valid_word,sentence_issue
+from app.content_quality import valid_word,sentence_issue,translation_issue
 
 def audit(db):
     c=sqlite3.connect(f'file:{Path(db).resolve()}?mode=ro',uri=True)
@@ -14,7 +14,7 @@ def audit(db):
     for sid,word,tier,text,zh,method in rows:
         reason=sentence_issue(text,word,lambda t:variants.get(t,t))
         if reason: issues.append({'id':sid,'word':word,'tier':tier,'reason':reason,'text':text})
-        elif not (zh or '').strip(): issues.append({'id':sid,'word':word,'tier':tier,'reason':'missing-translation','text':text})
+        elif translation_issue(zh): issues.append({'id':sid,'word':word,'tier':tier,'reason':translation_issue(zh),'text':text})
         else:
             available.add((word,tier))
             score=(0 if method=='tatoeba' else 1,-sid)
