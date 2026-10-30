@@ -1231,6 +1231,34 @@ actor APIClient {
         return URLSession(configuration: c)
     }()
 
+    // Public content cache is independent of account/learning storage.
+    private func contentFile(_ path: String, _ query: [String:String]) -> URL? {
+        guard ["/api/v1/lexicon/word", "/api/v1/quiz"].contains(path), query["word"] != nil,
+              let host = Config.apiBase?.absoluteString else { return nil }
+        var normalized = query
+        if path == "/api/v1/quiz" { normalized.removeValue(forKey:"seed"); normalized.removeValue(forKey:"pos") }
+        let revision = UserDefaults.standard.string(forKey:"vocab_content_revision:"+host) ?? "unknown"
+        let key = host + path + revision + normalized.keys.sorted().map { $0+"="+normalized[$0]! }.joined(separator:"&")
+        let name = SHA256.hash(data:Data(key.utf8)).map { String(format:"%02x",$0) }.joined()
+        let dir = FileManager.default.urls(for:.applicationSupportDirectory,in:.userDomainMask)[0].appendingPathComponent("VocabPublic",isDirectory:true)
+        try? FileManager.default.createDirectory(at:dir,withIntermediateDirectories:true)
+        var excluded=URLResourceValues();excluded.isExcludedFromBackup=true
+        var directory=dir;try? directory.setResourceValues(excluded)
+        return dir.appendingPathComponent(name+".json")
+    }
+    func offlineContentReady(word:String) -> Bool {
+        for (path,query) in [("/api/v1/lexicon/word",["word":word]),("/api/v1/quiz",["word":word,"mode":"forward"]),("/api/v1/quiz",["word":word,"mode":"reverse"])] {
+            guard let file=contentFile(path,query), let data=try? Data(contentsOf:file),data.count>2 else { return false }
+        }
+        return true
+    }
+    private func prunePublicCache(_ file: URL) {
+        let fm=FileManager.default
+        guard let files=try? fm.contentsOfDirectory(at:file.deletingLastPathComponent(),includingPropertiesForKeys:[.contentModificationDateKey,.fileSizeKey]), files.count > 800 else { return }
+        let sorted=files.sorted { ((try? $0.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast) < ((try? $1.resourceValues(forKeys:[.contentModificationDateKey]).contentModificationDate) ?? .distantPast) }
+        for old in sorted.prefix(files.count-800) { try? fm.removeItem(at:old) }
+    }
+
     // MARK: 基础请求
 
     private func url(_ path: String, _ query: [String: String] = [:]) throws -> URL {
@@ -1290,7 +1318,16 @@ actor APIClient {
         if let token { req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization") }
         for (name, value) in headers { req.setValue(value, forHTTPHeaderField: name) }
         if let body { req.httpBody = try JSONEncoder().encode(body) }
-        let (data, resp) = try await session.data(for: req)
+        let cached = method == "GET" ? contentFile(path,query) : nil
+        if cached != nil || path.hasPrefix("/api/v1/lexicon/") { req.timeoutInterval = 8 }
+        let data: Data, resp: URLResponse
+        do { (data,resp) = try await session.data(for:req) }
+        catch {
+            guard token == expectedSession else { throw APIError(message:"账号已切换") }
+            if let cached, let old=try? Data(contentsOf:cached), let value=try? JSONDecoder().decode(T.self,from:old) { return value }
+            throw error
+        }
+        guard token == expectedSession else { throw APIError(message:"账号已切换") }
         guard let http = resp as? HTTPURLResponse else { throw APIError(message: "网络异常") }
         guard (200..<300).contains(http.statusCode) else {
             let detail = (try? JSONDecoder().decode(ErrBody.self, from: data))?.detail
@@ -1300,7 +1337,9 @@ actor APIClient {
                 : (detail ?? structured?.message ?? "HTTP \(http.statusCode)")
             throw APIError(message: message, statusCode: http.statusCode, code: structured?.code)
         }
-        return try JSONDecoder().decode(T.self, from: data)
+        let value = try JSONDecoder().decode(T.self, from: data)
+        if let cached, data.count < 256*1024 { try? data.write(to:cached,options:.atomic);prunePublicCache(cached) }
+        return value
     }
 
     private func get<T: Decodable>(_ path: String, _ query: [String: String] = [:]) async throws -> T {
@@ -2036,7 +2075,21 @@ actor APIClient {
     // MARK: FSRS
 
     struct LexiconMetadata: Decodable { var lexicon_revision: String; var positions: Int }
-    func lexiconMetadata() async throws -> LexiconMetadata { try await get("/api/v1/lexicon/meta", [:]) }
+    func lexiconMetadata() async throws -> LexiconMetadata {
+        let result: LexiconMetadata = try await get("/api/v1/lexicon/meta", [:])
+        if let host=Config.apiBase?.absoluteString { UserDefaults.standard.set(result.lexicon_revision,forKey:"vocab_content_revision:"+host) }
+        return result
+    }
+    struct LearningHealth: Decodable {
+        struct Day: Decodable { var day:String;var words,attempts:Int }
+        var lines:[String];var days:[Day]
+    }
+    func learningHealth() async throws -> LearningHealth { try await get("/api/v1/me/learning-health") }
+    struct CardRepair: Decodable { var card:CardState;var schedulers:[String:FsrsSchedulerConfig];var events:Int }
+    func repairCard(_ card:CardState) async throws -> CardRepair {
+        struct In: Encodable { var card:CardState }
+        return try await request("POST","/api/v1/fsrs/repair",body:In(card:card))
+    }
 
     struct FsrsIn: Codable, Equatable {
         var is_new: Bool = false

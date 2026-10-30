@@ -46,7 +46,10 @@ const base = process.env.VOCAB_TEST_BASE || 'http://127.0.0.1:18765/';
     assert.deepEqual(built,{word:'pear',detail:'pear'}, 'wrong detail must not replace a queued word');
     const beforeLegacyQueue = calls;
     const legacyBuilt = await page.evaluate(async () => { S=defaultState(); S.calibrated=true; S.settings.newPerDay=1; S.settings.dailyCap=1; S.pendingNew=[{word:'old',pos:1,sense:'旧词义'}]; session={queue:[],idx:0,reviewedToday:0,learnedToday:0}; await buildQueue(); return session.queue[0].detail.sense; });
-    assert.equal(legacyBuilt,'旧词义'); assert.equal(calls,beforeLegacyQueue, 'legacy meaning should not be replaced by an unnecessary request');
+    assert.equal(legacyBuilt,'旧词义'); assert.equal(calls,beforeLegacyQueue+1, 'a changed content revision should attempt refresh while preserving a mismatched legacy word');
+    mode='ok';
+    const updated=await page.evaluate(async()=>{S.pendingNew=[{word:'pear',pos:2,sense:'过时释义',lexiconRevision:'old'}];session={queue:[],idx:0};await buildQueue();return session.queue[0].detail;});
+    assert.equal(updated.senses[0].text,'梨');assert.equal(updated.sense,undefined);
     console.log('PASS missing, wrong and empty meaning; retry, defer, pending preservation and legacy sense');
   } finally { await browser.close(); }
 })().catch(e => { console.error(e); process.exit(1); });

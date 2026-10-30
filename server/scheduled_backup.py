@@ -8,6 +8,8 @@ import secrets
 import shutil
 import sqlite3
 import stat
+import json
+import zipfile
 from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
@@ -46,6 +48,46 @@ def completed_snapshot(path):
                     return False
                 allowed.add(sidecar.name)
     return {p.name for p in path.iterdir()} == allowed
+
+
+def maintain_archive(output, root):
+    """Monthly portable archive; never modifies live state or restore epochs.
+
+    Ordinary daily rotation cannot remove the compressed monthly recovery point.
+    Replace it only after CRC validation. No unverified/foreign files are removed.
+    """
+    records = verify(output)
+    month = output.name[:6]
+    target = root / ("vocab-monthly-" + month + ".zip")
+    temporary = root / (".monthly-" + secrets.token_hex(8) + ".tmp")
+    try:
+        with zipfile.ZipFile(temporary,"w",compression=zipfile.ZIP_DEFLATED,compresslevel=6) as archive:
+            for name in [*records,MANIFEST]: archive.write(output/name,name)
+            archive.writestr("archive-info.json",json.dumps({"format":1,"source":output.name,"month":month}))
+        os.chmod(temporary,0o600)
+        with zipfile.ZipFile(temporary) as archive:
+            if archive.testzip() is not None: raise ValueError("Monthly archive verification failed")
+        if target.is_symlink(): raise ValueError("Monthly archive must not be a symlink")
+        if target.exists():
+            with zipfile.ZipFile(target) as previous:
+                info=json.loads(previous.read("archive-info.json"))
+                if info.get("format")!=1 or info.get("month")!=month: raise ValueError("Unrecognized monthly archive")
+        os.replace(temporary,target)
+    finally:
+        if temporary.exists(): temporary.unlink()
+    # Deduplicate identical immutable lexicon snapshots, never the live database.
+    name="lexicon_v0.1.sqlite"
+    for other in sorted(root.iterdir(),reverse=True):
+        if other==output:continue
+        try:
+            if not completed_snapshot(other) or digest(other/name)!=records[name]["sha256"]:continue
+            link=output/(".lexicon-"+secrets.token_hex(4))
+            try:
+                os.link(other/name,link);os.replace(link,output/name)
+            finally:
+                if link.exists():link.unlink()
+            break
+        except OSError:continue
 
 
 def backup(data, root, keep=30):
@@ -97,6 +139,7 @@ def backup(data, root, keep=30):
             os.chmod(marker, 0o600)
             if not completed_snapshot(output):
                 raise ValueError('New backup could not be verified; older backups were retained')
+            maintain_archive(output, root)
             # A failed new snapshot must never delete older backups. Ignore
             # incomplete, altered, or foreign directories instead of deleting them.
             complete = []

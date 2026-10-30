@@ -1447,6 +1447,26 @@ final class VocabUITests: XCTestCase {
         XCTAssertFalse(app.buttons["学会了 →"].exists)
     }
 
+    @MainActor func testLearningMaintenanceControls() async throws {
+        continueAfterFailure=false
+        let format=DateFormatter();format.dateFormat="yyyy-MM-dd"
+        let seed=try await fixtureRequest("/api/v1/__ui_fixture/same-day-relearning-case",method:"POST",body:["day":format.string(from:Date())])
+        let app=XCUIApplication();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
+        XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30));app.buttons["登录"].tap()
+        let user=app.textFields["auth-username"],pass=app.secureTextFields["auth-password"]
+        XCTAssertTrue(user.waitForExistence(timeout:20));user.tap();user.typeText(seed["username"] as! String)
+        pass.tap();pass.typeText(seed["password"] as! String);app.buttons["登录"].tap()
+        XCTAssertTrue(app.buttons["settings-menu"].waitForExistence(timeout:30));app.buttons["settings-menu"].tap()
+        let repair=app.buttons.matching(NSPredicate(format:"label BEGINSWITH %@","检查并修复异常卡")).firstMatch
+        for _ in 0..<8 { if repair.isHittable { break };app.swipeUp() }
+        XCTAssertTrue(repair.isHittable);repair.tap()
+        XCTAssertTrue(app.staticTexts["没有需要修复的异常卡。"].waitForExistence(timeout:10))
+        let health=app.buttons["实际学习效果与存档健康"]
+        for _ in 0..<3 { if health.isHittable { break };app.swipeUp() }
+        XCTAssertTrue(health.exists);health.tap()
+        XCTAssertTrue(app.staticTexts["以下为服务器已同步数据。"].waitForExistence(timeout:20))
+    }
+
     @MainActor func testCorePolicyGuessAndTimedContinuation() async throws {
         continueAfterFailure = false
         let format = DateFormatter(); format.locale = Locale(identifier: "en_US_POSIX"); format.dateFormat = "yyyy-MM-dd"

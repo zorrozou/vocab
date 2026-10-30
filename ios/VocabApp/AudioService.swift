@@ -86,6 +86,7 @@ final class AudioService {
     private func audioData(_ text: String, voice: String?) async throws -> Data {
         let file = Self.cacheFile(text, voice: voice)
         if let cached = try? Data(contentsOf: file), cached.count > 500 {
+            try? FileManager.default.setAttributes([.modificationDate:Date()],ofItemAtPath:file.path)
             return cached
         }
         guard let url = await APIClient.shared.ttsURL(text, voice: voice) else {
@@ -97,6 +98,14 @@ final class AudioService {
         }
         try? data.write(to: file, options: .atomic)
         return data
+    }
+
+    func cacheForOffline(_ texts:[String],voice:String?) async throws {
+        for text in texts {
+            _ = try await audioData(text,voice:voice)
+            guard let bytes=try? Data(contentsOf:Self.cacheFile(text,voice:voice)),bytes.count>500 else { throw APIError(message:"音频无法写入缓存") }
+        }
+        Self.evictCacheIfNeeded()
     }
 
     private func makePlayer(_ text: String, voice: String?) async -> AVAudioPlayer? {

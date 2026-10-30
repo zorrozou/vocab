@@ -6,6 +6,10 @@ L6: frq 8000~12000 且不在库，全部收录
 """
 import csv, sqlite3, sys
 from pathlib import Path
+_project=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(_project/'server' if (_project/'server'/'app').is_dir() else _project))
+from app.content_quality import valid_word
+from app.core_senses import apply_overrides
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from build_lexicon_ecdict import norm_word, split_senses
@@ -29,7 +33,7 @@ def main():
     with open(CSV_PATH, encoding="utf-8") as f:
         for row in csv.DictReader(f):
             w = norm_word(row["word"])
-            if not w or " " in w or w in existing or w in seen:
+            if not valid_word(w) or w in existing or w in seen:
                 continue
             frq = int(row["frq"]) if row["frq"].isdigit() else None
             bnc = int(row["bnc"]) if row["bnc"].isdigit() else None
@@ -77,6 +81,7 @@ def main():
                             (next_id, order, p, t, "domain"))
         print(f"L{level}（{key}）: 入库 {len(taken)} 词")
 
+    apply_overrides(conn)
     conn.commit()
     for lv in (1, 2, 3, 4, 5, 6):
         n = cur.execute("SELECT COUNT(*) FROM lexicon_entry WHERE level=?", (lv,)).fetchone()[0]

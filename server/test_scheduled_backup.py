@@ -4,6 +4,7 @@ import fcntl
 import os
 import sqlite3
 import tempfile
+import zipfile
 from pathlib import Path
 import scheduled_backup
 from scheduled_backup import MARKER, backup, completed_snapshot
@@ -20,6 +21,11 @@ with tempfile.TemporaryDirectory(prefix='vocab-auto-test-') as tmp:
     with sqlite3.connect(first / 'users.db') as db:
         assert db.execute('SELECT value FROM example WHERE value=?', ('committed wal',)).fetchone()
     second = backup(data, root, keep=2); assert first.exists() and second.exists()
+    assert (first/'lexicon_v0.1.sqlite').stat().st_ino == (second/'lexicon_v0.1.sqlite').stat().st_ino
+    archives=list(root.glob('vocab-monthly-*.zip'));assert len(archives)==1
+    with zipfile.ZipFile(archives[0]) as archive:
+        assert archive.testzip() is None and 'users.db' in archive.namelist()
+        restored=base/'month-restored';archive.extractall(restored);verify(restored)
     third = backup(data, root, keep=2)
     assert third.exists() and len([p for p in root.iterdir() if p.is_dir()]) == 2
     for path in (p for p in root.iterdir() if p.is_dir()): verify(path)

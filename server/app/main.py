@@ -23,6 +23,7 @@ import math
 from app.auth import identity_by_token, mount_auth, user_by_token
 from app.fsrs_config import fsrs_config_key, normalize_fsrs_config
 from app.limits import check_rate
+from app.content_quality import valid_word, sentence_issue
 from app.tts_patch import patch_edge_tts
 
 patch_edge_tts()   # edge-tts v2 端点迁移补丁（微软 2026-10 迁移致 v1 握手 403）
@@ -66,6 +67,12 @@ EXAM = {r["id"]: (r["examTags"] or "") for r in _lx.execute("SELECT id, examTags
 SENSE = {r["wordId"]: r["text"] for r in _lx.execute("SELECT wordId, text FROM sense WHERE role='core'")}
 PTAG = {r["wordId"]: (r["pos"] or "") for r in _lx.execute("SELECT wordId, pos FROM sense WHERE role='core'")}
 VMAP = {r["variant"]: r["lemma"] for r in _lx.execute("SELECT variant, lemma FROM variant_map")}
+_revision = hashlib.sha256((LEXICON_REVISION+"quality-v2").encode())
+for _row in _lx.execute("SELECT wordId,pos,text,role FROM sense ORDER BY id"):
+    _revision.update(json.dumps(list(_row),ensure_ascii=False).encode())
+for _row in _lx.execute("SELECT id,text,translation,targetWordId,tier,flag FROM sentence ORDER BY id"):
+    _revision.update(json.dumps(list(_row),ensure_ascii=False).encode())
+LEXICON_REVISION = _revision.hexdigest()
 
 
 def lex_lemma(t):
@@ -95,21 +102,18 @@ def lex_lemma(t):
 
 
 def static_sentences(wid):
-    """每档一条：Tatoeba 自然语料优先，LLM 生成补缺；template 占位句不对外"""
+    """Choose the first valid translated example in each tier, preserving fallbacks."""
     rows = _lx.execute(
-        """SELECT text, tier, translation FROM sentence s
+        """SELECT text,tier,translation FROM sentence
            WHERE targetWordId=? AND (genMethod LIKE 'llm-%' OR genMethod='tatoeba')
              AND COALESCE(flag,'') != 'reported'
-             AND id = (SELECT id FROM sentence s2
-                       WHERE s2.targetWordId = s.targetWordId AND s2.tier = s.tier
-                         AND (s2.genMethod LIKE 'llm-%' OR s2.genMethod='tatoeba')
-                         AND COALESCE(s2.flag,'') != 'reported'
-                       ORDER BY CASE s2.genMethod WHEN 'tatoeba' THEN 0
-                                  WHEN 'llm-tier-v1' THEN 1 ELSE 2 END,
-                                s2.id DESC LIMIT 1)
-           ORDER BY tier LIMIT 3""",
-        (wid,)).fetchall()
-    return [{"tier": r["tier"], "text": r["text"], "zh": r["translation"] or ""} for r in rows]
+           ORDER BY tier, CASE genMethod WHEN 'tatoeba' THEN 0 WHEN 'llm-tier-v1' THEN 1 ELSE 2 END, id DESC""", (wid,)).fetchall()
+    selected={}
+    for row in rows:
+        tier=row['tier']
+        if tier in (1,2,3) and tier not in selected and not sentence_issue(row['text'],ID2WORD[wid],lex_lemma) and (row['translation'] or '').strip():
+            selected[tier]={'tier':tier,'text':row['text'],'zh':row['translation']}
+    return [selected[t] for t in sorted(selected)]
 
 
 def static_sentence(wid):
@@ -554,7 +558,7 @@ def demo_daily(pos: int = Query(default=1200, ge=1, le=4600)):
         wid = seq[i - 1]["id"]
         if len(new_words) >= 5:
             break
-        if PTAG.get(wid, "").startswith(CONTENT_POS):
+        if valid_word(ID2WORD[wid]) and PTAG.get(wid, "").startswith(CONTENT_POS):
             new_words.append({
                 "word": ID2WORD[wid], "pos": i,
                 "sense": (SENSE.get(wid) or "")[:40],
@@ -562,7 +566,7 @@ def demo_daily(pos: int = Query(default=1200, ge=1, le=4600)):
     pool = []
     for i in range(max(1, pos - 40), pos):
         wid = seq[i - 1]["id"]
-        if PTAG.get(wid, "").startswith(CONTENT_POS):
+        if valid_word(ID2WORD[wid]) and PTAG.get(wid, "").startswith(CONTENT_POS):
             pool.append(ID2WORD[wid])
     return {"pos": pos, "new_words": new_words, "weak_pool": pool[-12:]}
 
@@ -656,7 +660,7 @@ def word_detail(wid):
         "SELECT pos, text, role FROM sense WHERE wordId=? AND role IN ('core','ext') ORDER BY senseOrder LIMIT 3",
         (wid,)).fetchall()
     ph = _lx.execute("SELECT phonetic FROM lexicon_entry WHERE id=?", (wid,)).fetchone()
-    return {"word": ID2WORD[wid], "pos": POS_OF[wid],
+    return {"word": ID2WORD[wid], "pos": POS_OF[wid], "lexiconRevision": LEXICON_REVISION,
             "phonetic": ph["phonetic"] if ph else "",
             "level": LVL.get(wid), "examTags": EXAM.get(wid) or "",
             "senses": [{"pos": s["pos"], "text": s["text"]} for s in senses],
@@ -677,7 +681,7 @@ def lexicon_at(pos: int = Query(ge=1), n: int = Query(default=10, ge=1, le=30)):
     while cursor <= len(seq) and cursor < pos + 40 and len(out) < n:
         wid = seq[cursor - 1]["id"]
         cursor += 1
-        if PTAG.get(wid, "").startswith(CONTENT_POS):
+        if valid_word(ID2WORD[wid]) and PTAG.get(wid, "").startswith(CONTENT_POS):
             out.append(word_detail(wid))
     # The scanned range can contain no content words. Returning the scan cursor
     # lets clients advance without confusing that case with end of vocabulary.
@@ -700,7 +704,7 @@ def lexicon_band(lo: int = Query(ge=1), hi: int = Query(ge=2),
     import random as _r
     lo2, hi2 = min(lo, hi), min(max(lo, hi), len(seq))
     pool = [seq[i - 1]["id"] for i in range(lo2, hi2 + 1)
-            if PTAG.get(seq[i - 1]["id"], "").startswith(CONTENT_POS)]
+            if valid_word(seq[i - 1]["word"]) and PTAG.get(seq[i - 1]["id"], "").startswith(CONTENT_POS)]
     rng = _r.Random(seed or time.time_ns())
     pick = rng.sample(pool, min(n, len(pool)))
     return {"lo": lo2, "hi": hi2, "words": [word_detail(w) for w in pick]}
@@ -717,7 +721,7 @@ def lexicon_probes():
     out = []
     for b in bands:
         pool = [seq[i - 1]["id"] for i in range(max(1, b - 80), min(len(seq), b + 80) + 1)
-                if PTAG.get(seq[i - 1]["id"], "").startswith(CONTENT_POS)]
+                if valid_word(seq[i - 1]["word"]) and PTAG.get(seq[i - 1]["id"], "").startswith(CONTENT_POS)]
         for wid in rng.sample(pool, min(4, len(pool))):
             d = word_detail(wid)
             out.append({"word": d["word"], "pos": d["pos"],
@@ -740,7 +744,7 @@ def sentence_alternatives(word: str = Query(min_length=1, max_length=40),
              AND COALESCE(flag,'') != 'reported' AND text IS NOT NULL AND trim(text) != ''
            ORDER BY CASE genMethod WHEN 'tatoeba' THEN 0 WHEN 'llm-tier-v1' THEN 1 ELSE 2 END, id DESC
            LIMIT 30""", (wid, tier)).fetchall()
-    return {"word": word, "sentences": [{"text": r["text"], "tier": r["tier"], "zh": r["translation"] or ""} for r in rows]}
+    return {"word": word, "sentences": [{"text": r["text"], "tier": r["tier"], "zh": r["translation"] or ""} for r in rows if not sentence_issue(r["text"],ID2WORD[wid],lex_lemma) and (r["translation"] or "").strip()]}
 
 
 @app.post("/api/v1/sentence/report")
@@ -820,7 +824,7 @@ def quiz(pos: int = Query(ge=1), seed: int = 0, mode: str = Query(default="forwa
         candidates = []
         for i in range(max(1, pos - radius), min(len(seq), pos + radius) + 1):
             w2 = seq[i - 1]["id"]
-            if w2 in seen:
+            if w2 in seen or not valid_word(ID2WORD[w2]):
                 continue
             seen.add(w2)
             if not PTAG.get(w2, "").startswith(pcls):
@@ -1015,7 +1019,7 @@ def placement_set(seed: str = ""):
     items = []
     for b in bands:
         pool = [i for i in range(max(1, b - 80), min(len(seq), b + 80) + 1)
-                if PTAG.get(seq[i - 1]["id"], "").startswith(CONTENT_POS)]
+                if valid_word(seq[i - 1]["word"]) and PTAG.get(seq[i - 1]["id"], "").startswith(CONTENT_POS)]
         for i in rng.sample(pool, min(2, len(pool))):
             wid = seq[i - 1]["id"]
             p, correct = gloss_of(wid)
@@ -1462,3 +1466,34 @@ def fsrs_review(body: FsrsIn, authorization: str = Header(default="")):
             "step": c.step,
             "last_review": c.last_review.isoformat() if c.last_review else None,
             "scheduled_days": getattr(log, "scheduled_days", None)}
+
+# Diagnostics use the caller's synced snapshot; never cache personal reports.
+@app.get('/api/v1/me/learning-health')
+def learning_health(authorization: str = Header(default='')):
+    from app import auth as auth_module
+    from app.learning_health import health
+    identity = identity_by_token(authorization)
+    if not identity: raise HTTPException(401, '请先登录')
+    with sqlite3.connect(auth_module.USERS_DB, timeout=15) as conn:
+        row = conn.execute('SELECT state_json,state_revision FROM account_state WHERE account_id=?',(identity[1],)).fetchone()
+        state = auth_module.load_verified_state(conn,identity[1],row[0],row[1]) if row else {}
+    result = health(state)
+    return JSONResponse(result, headers={'Cache-Control':'no-store'})
+
+
+@app.post('/api/v1/fsrs/repair')
+def repair_fsrs(body: dict, request: Request = None, authorization: str = Header(default='')):
+    check_rate(request, 'fsrs_repair')
+    from app.learning_health import repair
+    from pydantic import ValidationError
+    if authorization and not identity_by_token(authorization): raise HTTPException(401, '请重新登录')
+    def review(data):
+        try: value = FsrsIn(**data)
+        except ValidationError: raise HTTPException(422, '历史起点无效，原评分已保留')
+        return fsrs_review(value, authorization)
+    return JSONResponse(repair(body.get('card'), review), headers={'Cache-Control':'no-store'})
+
+
+@app.get('/offline-worker.js', include_in_schema=False)
+def offline_worker():
+    return FileResponse(STATIC_DIR / 'offline-worker.js', media_type='application/javascript', headers={'Cache-Control':'no-cache'})

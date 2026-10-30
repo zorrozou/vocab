@@ -186,7 +186,7 @@ struct SettingsView: View {
                         ForEach(voices, id: \.0) { v, name in
                             let selected = (app.S.settings.voice ?? "en-US-AriaNeural") == v
                             Button {
-                                if app.S.settings.voice != v && app.markSettingChanged("voice") { app.S.settings.voice = v; app.save() }
+                                if app.S.settings.voice != v && app.markSettingChanged("voice") { app.S.settings.voice = v; app.maintenanceMessage = "嗓音已更换，请重新下载今日离线包。"; app.save() }
                                 app.audio.play("The quick brown fox jumps over the lazy dog.", voice: v)
                             } label: {
                                 Text(name)
@@ -257,6 +257,14 @@ struct SettingsView: View {
                         do { prepareExport(try app.latestLocalBackup()) }
                         catch { exportError = "读取备份失败：\(error.localizedDescription)" }
                     }.disabled(exporting)
+                    Text("离线与数据维护").font(.headline).foregroundStyle(Theme.text)
+                    GhostButton(title:"下载今日任务离线包") { Task { await app.downloadTodayOffline() } }.disabled(app.maintenanceRunning)
+                    GhostButton(title:"检查并修复异常卡（\(app.S.cards.values.filter { $0.fsrsIssue != nil }.count)）") { Task { await app.repairQuarantinedCards() } }.disabled(app.maintenanceRunning)
+                    Text(app.maintenanceMessage.isEmpty ? "离线包只下载已领取任务。异常卡仅从可验证的完整历史重建；个人例句联网生成。" : app.maintenanceMessage).font(.caption).foregroundStyle(Theme.muted)
+                    ForEach(app.S.cards.keys.filter { app.S.cards[$0]?.fsrsIssue != nil }.sorted().prefix(25),id:\.self) { word in
+                        Text(word+"："+(app.S.cards[word]?.fsrsIssue ?? "")).font(.caption).foregroundStyle(Theme.warn)
+                    }
+                    LearningHealthView().id(app.auth?.accountId ?? "guest")
                     if app.auth?.accountId != nil {
                         GhostButton(title: "导出待同步快照") {
                             let current = app.auth

@@ -157,6 +157,7 @@ extension Array where Element == SentenceItem {
 
 /// 待学新词（pendingNew 元素 / lexicon/at 返回元素同构）
 struct NewWord: Codable, Equatable {
+    var lexiconRevision: String? = nil
     var word: String
     var pos: Int
     var sense: String?

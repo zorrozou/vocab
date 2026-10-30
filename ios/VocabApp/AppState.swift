@@ -1083,6 +1083,7 @@ final class AppState {
         let previousToken = auth?.token
         auth = nil
         fsrsReplayError = ""
+        maintenanceMessage = ""
         Task { await api.clearToken(ifMatches: previousToken) }
         Keychain.delete("token")
         UserDefaults.standard.removeObject(forKey: "vocab_profile")
@@ -1222,6 +1223,63 @@ final class AppState {
         return false
     }
 
+    var maintenanceMessage = ""
+    var maintenanceRunning = false
+
+    func repairQuarantinedCards() async {
+        guard !maintenanceRunning, undoSnapshot == nil, !localSaveFailed else { return }
+        maintenanceRunning=true;defer { maintenanceRunning=false }
+        let owner=auth, slot=slotKey, before=S
+        let words=S.cards.keys.filter { S.cards[$0]?.fsrsIssue != nil }.sorted()
+        guard !words.isEmpty else { maintenanceMessage="没有需要修复的异常卡。";return }
+        do { try backupLocalState(before,slot:slot) }
+        catch { maintenanceMessage=error.localizedDescription;return }
+        var done=0, failures:[String]=[]
+        for word in words {
+            guard auth==owner,slotKey==slot,let card=S.cards[word] else { return }
+            do {
+                let result=try await api.repairCard(card)
+                guard auth==owner,slotKey==slot,S.cards[word]==card else { return }
+                for (key,config) in result.schedulers {
+                    if let current=S.fsrsSchedulers?[key],current != config { throw APIError(message:"参数版本冲突") }
+                }
+                var schedulers=S.fsrsSchedulers ?? [:]
+                result.schedulers.forEach { schedulers[$0.key]=$0.value }
+                S.fsrsSchedulers=schedulers;S.cards[word]=result.card;saveLocal()
+                guard !localSaveFailed else { maintenanceMessage="本机保存失败，修复前备份已保留";return }
+                done += 1
+            } catch { failures.append(word+"："+error.localizedDescription) }
+            guard auth==owner,slotKey==slot else { return }
+        }
+        save()
+        maintenanceMessage="已修复 \(done)/\(words.count) 词，修复前快照已保留。" + (failures.isEmpty ? "请立即同步。" : failures.joined(separator:"；"))
+    }
+
+    func downloadTodayOffline() async {
+        guard !maintenanceRunning else { return }
+        guard let plan=cachedSharedPlan(),!plan.items.isEmpty else { maintenanceMessage="请先回首页加载今日任务，领取共享名额。";return }
+        let owner=auth,day=DayUtil.today(),voice=S.settings.voice
+        maintenanceRunning=true;defer { maintenanceRunning=false }
+        do { _ = try await api.lexiconMetadata() }
+        catch { maintenanceMessage="无法确认词库版本，请联网后下载。";return }
+        var ready=0, failed=0
+        for item in plan.items.prefix(100) {
+            guard auth==owner,DayUtil.today()==day else { return }
+            guard S.settings.voice==voice else { maintenanceMessage="嗓音已更换，请重新下载今日离线包。";return }
+            do {
+                let word=try await api.lexiconWord(item.word)
+                guard word.word==item.word else { throw APIError(message:"词条不一致") }
+                for mode in ["forward","reverse"] { _ = try await api.quiz(pos:word.pos,seed:1,mode:mode,word:word.word) }
+                guard await api.offlineContentReady(word:word.word) else { throw APIError(message:"内容无法写入缓存") }
+                try await audio.cacheForOffline([word.word]+(word.sentences ?? []).map(\.text),voice:voice)
+                ready += 1
+            } catch { failed += 1 }
+            guard auth==owner else { return }
+            guard S.settings.voice==voice else { maintenanceMessage="嗓音已更换，请重新下载今日离线包。";return }
+            maintenanceMessage="今日离线包：\(ready)/\(plan.items.count) 词完整就绪（释义、双向题目和静态例句音频）。"+(failed>0 ? " \(failed) 词不完整，可重试。" : (plan.items.count>100 ? "每批最多下载 100 词。" : ""))
+        }
+    }
+
     private func cachedSharedPlan() -> SharedStudyPlan? {
         guard let account = auth?.accountId else { return nil }
         let day = DayUtil.today()
@@ -1234,7 +1292,7 @@ final class AppState {
         return nil
     }
 
-    private func prepareSharedQueue(_ proposed: [Session.Item], newExhausted: Bool = false, adoptPool: Bool = true,
+    private func prepareSharedQueue(_ proposed: [Session.Item], newExhausted: Bool = false, adoptPool: Bool = true, offline: Bool = false,
                                     active: () -> Bool) async throws -> [Session.Item] {
         guard let owner = auth else { return proposed }
         guard let account = owner.accountId else { throw APIError(message: "请重新登录后领取今日名额。") }
@@ -1254,6 +1312,7 @@ final class AppState {
         let plan: SharedStudyPlan
         var fromCache = false
         do {
+            if offline { throw URLError(.notConnectedToInternet) }
             let response = try await api.reserveStudyPlan(day: day, candidates: proposed.map(info), completed: Array(completedEvents.values), newExhausted: newExhausted)
             guard response.valid(account: account, day: day) else { throw APIError(message: "共享学习计划校验失败，请重新加载。", statusCode: 409) }
             guard active(), auth == owner, DayUtil.today() == day else { throw APIError(message: "账号或日期已变化，请重新开始。", statusCode: 409) }
@@ -1584,7 +1643,9 @@ final class AppState {
         guard active() else { return false }
         trackLevelDaily()
         S.pendingNew = S.pendingNew.filter { S.cards[$0.word] == nil }
+        var contentRevision:String?
         if let metadata = try? await api.lexiconMetadata() {
+            contentRevision=metadata.lexicon_revision
             guard active() else { return false }
             if S.newSupply?.revision != metadata.lexicon_revision { S.newSupply = nil }
         }
@@ -1623,8 +1684,19 @@ final class AppState {
         var scanBatch = min(30, nNew + 2)
         while news.count < nNew && !exhausted {
             let want = min(30, max(scanBatch, nNew - news.count + 2))
-            let result = try? await api.lexiconAt(pos: cursor, n: want)
-            guard active(), let r = result else { return false }
+            let r: LexiconAtResponse
+            do { r = try await api.lexiconAt(pos:cursor,n:want) }
+            catch {
+                guard active(), error is URLError, cachedSharedPlan() != nil else { return false }
+                do {
+                    let repeated=due.filter { completed.contains($0) }.map { Session.Item.review(word:$0) }
+                    let queue=try await prepareSharedQueue(repeated,offline:true,active:active)
+                    guard active() else { return false }
+                    session=Session();session.day=planDay;session.queue=queue
+                    studyNotice="使用已领取的离线任务";return true
+                } catch { if active() { studyNotice=error.localizedDescription };return false }
+            }
+            guard active() else { return false }
             lexiconRevision = r.lexicon_revision ?? lexiconRevision
             for w in r.words where S.cards[w.word] == nil { supplyWords.insert(w.word) }
             scanEnd = r.nextPos ?? (r.words.map(\.pos).max().map { $0 + 1 } ?? cursor)
@@ -1643,7 +1715,7 @@ final class AppState {
             scanBatch = min(30, scanBatch * 2)
         }
         // 统一按词形补全详情：不能按可能已过期的位置猜词，更不能把别的词释义填进来。
-        for i in news.indices where !(news[i].senses ?? []).contains(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) &&
+        for i in news.indices where (contentRevision != nil && news[i].lexiconRevision != contentRevision) || !(news[i].senses ?? []).contains(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) &&
             (news[i].sense ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             let result = try? await api.lexiconWord(news[i].word)
             guard active() else { return false }

@@ -8,6 +8,11 @@
 """
 import csv, json, re, sqlite3
 from pathlib import Path
+import sys
+_project=Path(__file__).resolve().parents[1]
+sys.path.insert(0,str(_project/'server' if (_project/'server'/'app').is_dir() else _project))
+from app.content_quality import valid_word
+from app.core_senses import apply_overrides
 
 ROOT = Path(__file__).resolve().parent
 CSV_PATH = ROOT / "data" / "ecdict.csv"
@@ -68,7 +73,7 @@ def main():
         for row in csv.DictReader(f):
             n_rows += 1
             w = norm_word(row["word"])
-            if not w or " " in w or w in seen:
+            if not valid_word(w) or w in seen:
                 continue
             frq = int(row["frq"]) if row["frq"].isdigit() else None
             bnc = int(row["bnc"]) if row["bnc"].isdigit() else None
@@ -156,6 +161,7 @@ def main():
     vm.pop("", None)
     cur.executemany("INSERT OR IGNORE INTO variant_map(variant, lemma) VALUES(?,?)",
                     sorted(vm.items()))
+    apply_overrides(conn)
     conn.commit()
 
     # ---------- 4. 校验报告 ----------

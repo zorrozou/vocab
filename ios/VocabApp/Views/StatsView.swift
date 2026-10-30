@@ -35,6 +35,7 @@ struct StatsView: View {
                         StatCell(number: "\(mastered)", label: "已掌握")
                         StatCell(number: "\(app.S.streak)", label: "连续天数")
                     }
+                    LearningHealthView().id(app.auth?.accountId ?? "guest")
                     Text("记忆保持率分布（FSRS）").font(.system(size: 16, weight: .bold))
                         .foregroundStyle(Theme.text).frame(maxWidth: .infinity, alignment: .leading)
                     let retention = StudyEngine.retentionSummary(app.S.cards, log: app.S.log, now: Date(), configurations: app.S.fsrsSchedulers ?? [:])
@@ -113,6 +114,32 @@ struct StatsView: View {
                 }
                 .padding(.top, 12)
             }
+        }
+    }
+}
+
+
+struct LearningHealthView: View {
+    @Environment(AppState.self) private var app
+    @State private var lines:[String]=[]
+    @State private var message="展开后读取已同步数据"
+    @State private var expanded=false
+    var body: some View {
+        DisclosureGroup("实际学习效果与存档健康",isExpanded:$expanded) {
+            VStack(alignment:.leading,spacing:8) {
+                Text(message).font(.caption).foregroundStyle(Theme.muted)
+                ForEach(Array(lines.enumerated()),id:\.offset) { _,line in Text(line).font(.caption).foregroundStyle(Theme.muted) }
+            }.frame(maxWidth:.infinity,alignment:.leading)
+        }.foregroundStyle(Theme.text).task(id:expanded) {
+            guard expanded else { return }
+            let owner=app.auth
+            guard owner != nil else { message="登录并同步后可查看跨端学习效果。";return }
+            do {
+                let report=try await APIClient.shared.learningHealth()
+                guard app.auth==owner else { return }
+                lines=report.lines+report.days.suffix(7).map { "\($0.day)：\($0.words) 个可追溯不同词 · \($0.attempts) 次练习" }
+                message="以下为服务器已同步数据。"
+            } catch { if app.auth==owner { message="效果报告暂不可用："+error.localizedDescription } }
         }
     }
 }

@@ -9,6 +9,7 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
     (isolated / 'static').mkdir()
     shutil.copy2(root / 'data' / 'lexicon_v0.1.sqlite', isolated / 'data' / 'lexicon_v0.1.sqlite')
     shutil.copy2(root / 'web' / 'index.html', isolated / 'static' / 'index.html')
+    shutil.copy2(root / 'web' / 'offline-worker.js', isolated / 'static' / 'offline-worker.js')
     sys.path.insert(0, str(isolated))
     from app import main
     import uvicorn
@@ -737,6 +738,13 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
         state_put(state, token)
         fixture.update(fsrs_offline=False, fixed_quiz=True, personal_offline=True)
         return account
+
+    @main.app.post('/api/v1/__ui_fixture/content-quality-case')
+    def content_quality_case():
+        with sqlite3.connect(main.LEXICON_DB) as conn:
+            wid=main.WORD2ID['apple']
+            conn.execute("INSERT INTO sentence(text,translation,wordIds,targetWordId,recallIds,genMethod,flag,tier) VALUES('This unrelated sentence has no target.','','[]',?,'[]','tatoeba','corpus',1)",(wid,))
+        return {'ok':True}
 
     @main.app.post('/api/v1/__ui_fixture/static-swap-case')
     def seed_static_swap_case():

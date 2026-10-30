@@ -5,7 +5,7 @@ from time import monotonic
 from fastapi import HTTPException
 
 # Protect expensive paths while permitting a normal batch of audio prefetches.
-RULES = {'auth': (20, 60), 'personalize': (6, 60), 'sentence': (180, 60), 'tts': (300, 60), 'report': (60, 60), 'snapshot': (15, 60), 'snapshot_read': (600, 60), 'state_changes': (600, 60), 'fsrs_resolve': (120, 60), 'state_delta_write': (120, 60)}
+RULES = {'fsrs_repair': (60, 60), 'auth': (20, 60), 'personalize': (6, 60), 'sentence': (180, 60), 'tts': (600, 60), 'report': (60, 60), 'snapshot': (15, 60), 'snapshot_read': (600, 60), 'state_changes': (600, 60), 'fsrs_resolve': (120, 60), 'state_delta_write': (120, 60)}
 MAX_KEYS = 10000
 _lock = Lock()
 _windows = {}

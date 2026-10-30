@@ -33,6 +33,8 @@ if curl --max-time 2 --silent http://127.0.0.1:18765/ >/dev/null; then
   exit 1
 fi
 scenarios=(
+  server/test_learning_health.py
+  tests/web_learning_maintenance_e2e.cjs
   tests/test_ui_fixture_cleanup.py
   server/test_scheduled_backup.py
   server/test_restore_api.py
