@@ -1447,6 +1447,50 @@ final class VocabUITests: XCTestCase {
         XCTAssertFalse(app.buttons["学会了 →"].exists)
     }
 
+    @MainActor func testCorePolicyGuessAndTimedContinuation() async throws {
+        continueAfterFailure = false
+        let format = DateFormatter(); format.locale = Locale(identifier: "en_US_POSIX"); format.dateFormat = "yyyy-MM-dd"
+        let seed = try await fixtureRequest("/api/v1/__ui_fixture/same-day-relearning-case", method:"POST", body:["day":format.string(from:Date()),"short_steps":true])
+        let token = try XCTUnwrap(seed["token"] as? String)
+        let app = XCUIApplication(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
+        app.launch()
+        func login() {
+            XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30));app.buttons["登录"].tap()
+            let user=app.textFields["auth-username"], pass=app.secureTextFields["auth-password"]
+            XCTAssertTrue(user.waitForExistence(timeout:20));user.tap();user.typeText(seed["username"] as! String)
+            pass.tap();pass.typeText(seed["password"] as! String);app.buttons["登录"].tap()
+        }
+        login()
+        XCTAssertTrue(app.buttons["start-today"].waitForExistence(timeout:30));app.buttons["start-today"].tap()
+        XCTAssertTrue(app.buttons["quiz-option-0"].waitForExistence(timeout:30));app.buttons["quiz-option-0"].tap()
+        let guess=app.buttons["猜对了／其实没记住"]
+        XCTAssertTrue(guess.waitForExistence(timeout:20));guess.tap()
+        XCTAssertTrue(app.staticTexts["本轮学习完成 🎉"].waitForExistence(timeout:20))
+        let more=app.buttons.matching(NSPredicate(format:"label BEGINSWITH %@","继续今日任务")).firstMatch
+        XCTAssertTrue(more.waitForExistence(timeout:25),"due-time refresh never enabled continuation")
+        var state: [String:Any] = [:]
+        for _ in 0..<80 {
+            state=(try await fixtureRequest("/api/v1/me/state",token:token))["state"] as? [String:Any] ?? [:]
+            let card=(state["cards"] as? [String:[String:Any]])?["apple"] ?? [:]
+            if ((card["studyEvidence"] as? [String:Any])?["events"] as? [String:Any])?.count == 1 { break }
+            try await Task.sleep(for:.milliseconds(200))
+        }
+        let card=try XCTUnwrap((state["cards"] as? [String:[String:Any]])?["apple"])
+        let evidence=try XCTUnwrap((card["studyEvidence"] as? [String:Any])?["events"] as? [String:[String:Any]])
+        let entry=try XCTUnwrap(evidence.first)
+        XCTAssertEqual(entry.value["rating"] as? Int,1)
+        XCTAssertEqual(entry.value["guessed"] as? Bool,true)
+        let logs=try XCTUnwrap(state["log"] as? [[String:Any]])
+        XCTAssertTrue(logs.contains { ($0["eventId"] as? String)==entry.key })
+        XCTAssertEqual(Set(logs.map { $0["word"] as! String }).count,1)
+        app.terminate();app.launch()
+        if !app.buttons["start-today"].waitForExistence(timeout:8) { login() }
+        XCTAssertTrue(app.buttons["start-today"].waitForExistence(timeout:30));app.buttons["start-today"].tap()
+        XCTAssertTrue(app.buttons["quiz-option-0"].waitForExistence(timeout:30));app.buttons["quiz-option-0"].tap()
+        XCTAssertTrue(app.buttons["记得"].waitForExistence(timeout:20));app.buttons["记得"].tap()
+        XCTAssertTrue(app.staticTexts["本轮学习完成 🎉"].waitForExistence(timeout:20))
+    }
+
     @MainActor func testSameDayRelearningAtDailyCapacity() async throws {
         try await checkSameDayRelearning(offline: false)
     }

@@ -9,6 +9,8 @@ import Foundation
                  LogEntry(d:day,word:"pear",rating:3,kind:"review"),
                  LogEntry(d:day,word:"ignored",rating:3,kind:"exposure"),
                  LogEntry(d:"2026-10-28",word:"yesterday",rating:3,kind:"learn")]
+        s.cards["book"] = CardState(due:"2000-01-01T00:00:00Z")
+        s.cards["apple"] = CardState(due:"2000-01-01T00:00:00Z")
         func issue(_ word: String, _ kind: String, sessionDay: String = day) -> String? {
             StudyEngine.studyAdmissionIssue(s, word: word, kind: kind, sessionDay: sessionDay, day: day)
         }

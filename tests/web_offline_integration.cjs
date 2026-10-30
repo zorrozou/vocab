@@ -2,15 +2,16 @@ const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const html = fs.readFileSync('web/index.html', 'utf8');
 const fsrsCall = html.slice(html.indexOf('async function fsrsCall('), html.indexOf('const fsrsDue ='));
 const provisional=html.slice(html.indexOf('function provisionalSchedule('),html.indexOf('// 服务端调度是无状态计算'));
+const mastery=html.slice(html.indexOf('function legacyMastered('),html.indexOf('/* ---------------- 定级'));
 const replay = html.slice(html.indexOf('async function replayPendingFsrs('), html.indexOf('/* 该词上一次学习'));
 let offline = true, persisted;
-const ctx = {AUTH: null, localSaveFailed: false, API: process.env.VOCAB_TEST_BASE || 'http://127.0.0.1:18765', authHeaders: () => ({}),
+const ctx = {today:()=>new Date().toISOString().slice(0,10), AUTH: null, localSaveFailed: false, API: process.env.VOCAB_TEST_BASE || 'http://127.0.0.1:18765', authHeaders: () => ({}),
   fetch: (url, opts) => offline ? Promise.reject(Error('offline')) : fetch(url, opts),
   crypto: require('crypto').webcrypto, Uint8Array, Date, Number, Math, structuredClone, window: {addEventListener: () => {}},
   save: () => { persisted = JSON.stringify(ctx.S); },
   S: {cards: {apple: {stage: 1, due: '2026-10-28', pos: 1}}}
 };
-vm.createContext(ctx); vm.runInContext(provisional + '\n' + fsrsCall + '\n' + replay, ctx);
+vm.createContext(ctx); vm.runInContext(mastery + '\n' + provisional + '\n' + fsrsCall + '\n' + replay, ctx);
 (async () => {
   let card = ctx.S.cards.apple;
   await ctx.scheduleFsrs(card, {is_new: true, rating: 3}, 3);

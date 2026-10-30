@@ -1926,6 +1926,7 @@ actor APIClient {
     func resolveIncrementalSchedulers(_ state: LearningState, generation: String, expectedToken: String) async throws -> LearningState {
         var keys = Set<String>()
         for card in state.cards.values {
+            if let key = card.schedulerKey { keys.insert(key) }
             for value in (card.fsrsReplayVersions ?? [:]).values { keys.insert(value) }
             for group in [card.fsrsHistory, card.pendingFsrs] {
                 guard let group else { continue }
@@ -2034,6 +2035,9 @@ actor APIClient {
 
     // MARK: FSRS
 
+    struct LexiconMetadata: Decodable { var lexicon_revision: String; var positions: Int }
+    func lexiconMetadata() async throws -> LexiconMetadata { try await get("/api/v1/lexicon/meta", [:]) }
+
     struct FsrsIn: Codable, Equatable {
         var is_new: Bool = false
         var state: Int = 1
@@ -2046,6 +2050,7 @@ actor APIClient {
         var now: String? = nil
         var deterministic: Bool? = nil
         var scheduler_key: String? = nil
+        var legacy_last_review_day: String? = nil
     }
 
     func fsrsReview(_ body: FsrsIn, expectedToken: String? = nil, enforceSession: Bool = false) async throws -> FsrsResponse {
@@ -2086,6 +2091,7 @@ extension APIClient.FsrsIn {
         now = try c.decodeIfPresent(String.self, forKey: .now)
         deterministic = try c.decodeIfPresent(Bool.self, forKey: .deterministic)
         scheduler_key = try c.decodeIfPresent(String.self, forKey: .scheduler_key)
+        legacy_last_review_day = try c.decodeIfPresent(String.self, forKey: .legacy_last_review_day)
     }
 }
 

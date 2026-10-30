@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+import math
 
 from app.auth import identity_by_token, mount_auth, user_by_token
 from app.fsrs_config import fsrs_config_key, normalize_fsrs_config
@@ -54,6 +57,7 @@ class _ThreadLocalLexicon:
 
 _lx = _ThreadLocalLexicon()
 seq = _lx.execute("SELECT id, word FROM lexicon_entry ORDER BY level, frq").fetchall()
+LEXICON_REVISION = hashlib.sha256(json.dumps([(r["id"], r["word"]) for r in seq], ensure_ascii=False).encode()).hexdigest()
 POS_OF = {r["id"]: i for i, r in enumerate(seq, 1)}
 WORD2ID = {r["word"]: r["id"] for r in seq}
 ID2WORD = {r["id"]: r["word"] for r in seq}
@@ -660,6 +664,11 @@ def word_detail(wid):
             "sentences": static_sentences(wid)}
 
 
+@app.get("/api/v1/lexicon/meta")
+def lexicon_meta():
+    return {"lexicon_revision": LEXICON_REVISION, "positions": len(seq), "study_policy_version": 1}
+
+
 @app.get("/api/v1/lexicon/at")
 def lexicon_at(pos: int = Query(ge=1), n: int = Query(default=10, ge=1, le=30)):
     """按学习位置取 n 个词（含音标、义项、静态句）"""
@@ -672,7 +681,7 @@ def lexicon_at(pos: int = Query(ge=1), n: int = Query(default=10, ge=1, le=30)):
             out.append(word_detail(wid))
     # The scanned range can contain no content words. Returning the scan cursor
     # lets clients advance without confusing that case with end of vocabulary.
-    return {"from": pos, "words": out, "next_pos": cursor, "exhausted": cursor > len(seq)}
+    return {"from": pos, "words": out, "next_pos": cursor, "exhausted": cursor > len(seq), "lexicon_revision": LEXICON_REVISION, "remaining_positions": max(0, len(seq) - cursor + 1)}
 
 
 @app.get("/api/v1/lexicon/word")
@@ -1362,21 +1371,52 @@ def fsrs_scheduler_version(uid, requested_key, account_id=None):
 
 
 class FsrsIn(BaseModel):
-    is_new: bool = False
-    state: int = 1          # 1 Learning / 2 Review / 3 Relearning
-    stability: float = 0
-    difficulty: float = 0
+    is_new: bool = Field(default=False, strict=True)
+    state: int = Field(default=1, ge=1, le=3, strict=True)          # 1 Learning / 2 Review / 3 Relearning
+    stability: float = Field(default=0, ge=0, le=1000000, allow_inf_nan=False, strict=True)
+    difficulty: float = Field(default=0, ge=0, le=10, allow_inf_nan=False, strict=True)
     due: str | None = None
-    rating: int = 3         # 1 Again / 2 Hard / 3 Good / 4 Easy
-    step: int | None = None         # Learning/Relearning 的当前步数；必须随卡状态往返，否则永远停在第 0 步
+    rating: int = Field(default=3, ge=1, le=4, strict=True)         # 1 Again / 2 Hard / 3 Good / 4 Easy
+    step: int | None = Field(default=None, ge=0, le=31, strict=True)         # Learning/Relearning 的当前步数；必须随卡状态往返，否则永远停在第 0 步
     now: str | None = None          # 模拟时钟（测试用；缺省用真实时间）
     last_review: str | None = None  # 上次复习时间（模拟时钟配套；生产也必须传）
     deterministic: bool = False    # 客户端重放时禁用随机扰动，保证重试结果相同
     scheduler_key: str | None = None
+    legacy_last_review_day: str | None = None
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error(request: Request, exc: RequestValidationError):
+    if request.url.path == "/api/v1/fsrs/review":
+        fields = [str(e["loc"][-1]) for e in exc.errors()]
+        return JSONResponse(status_code=422, content={"detail": {"code": "invalid-fsrs-input", "field": ",".join(fields), "message": "调度参数无效，评分已保留"}})
+    from fastapi.exception_handlers import request_validation_exception_handler
+    return await request_validation_exception_handler(request, exc)
 
 
 @app.post("/api/v1/fsrs/review")
 def fsrs_review(body: FsrsIn, authorization: str = Header(default="")):
+    def invalid(field, message):
+        raise HTTPException(422, {"code": "invalid-fsrs-input", "field": field, "message": message})
+    parsed = {}
+    for field in ("now", "due", "last_review"):
+        raw = getattr(body, field)
+        if raw is None: continue
+        try:
+            value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            if value.tzinfo is None: value = value.replace(tzinfo=timezone.utc)
+            parsed[field] = value
+        except (ValueError, TypeError, OverflowError): invalid(field, "调度日期无效，评分已保留")
+    if not body.is_new:
+        if body.stability <= 0: invalid("stability", "已有卡片的稳定度必须大于零")
+        if body.difficulty < 1: invalid("difficulty", "已有卡片的难度必须在 1 到 10 之间")
+        if parsed.get("last_review") and parsed["last_review"] > parsed.get("now", datetime.now(timezone.utc)):
+            review_time = parsed.get("now", datetime.now(timezone.utc))
+            legacy = body.legacy_last_review_day
+            if (legacy and body.last_review in (legacy + "T08:00:00Z", legacy + "T08:00:00+00:00")
+                and (parsed["last_review"] - review_time).total_seconds() <= 86400):
+                parsed["last_review"] = review_time
+            else: invalid("last_review", "上次评分时间晚于本次评分，请检查设备时间")
     identity = identity_by_token(authorization)
     if authorization and not identity:
         raise HTTPException(401, "未登录或登录已过期")
@@ -1405,15 +1445,16 @@ def fsrs_review(body: FsrsIn, authorization: str = Header(default="")):
             d = datetime.fromisoformat(body.due.replace("Z", "+00:00"))
             c.due = d.replace(tzinfo=timezone.utc) if d.tzinfo is None else d
         if body.last_review:
-            lr = datetime.fromisoformat(body.last_review.replace("Z", "+00:00"))
+            lr = parsed["last_review"]
             c.last_review = lr.replace(tzinfo=timezone.utc) if lr.tzinfo is None else lr
-            # 客户端日志只有日期精度，同日多次复习/时区差可能出现未来时间：钳到 now，防负经过天数
-            review_time = now or datetime.now(timezone.utc)
-            if c.last_review > review_time:
-                c.last_review = review_time
         else:
             c.last_review = now or datetime.now(timezone.utc)
-    c, log = scheduler.review_card(c, _FsrsRating(body.rating), review_datetime=now)
+    try:
+        c, log = scheduler.review_card(c, _FsrsRating(body.rating), review_datetime=now)
+    except (ValueError, ArithmeticError, OverflowError):
+        invalid("card", "卡片参数或日期超出可调度范围，评分已保留")
+    if not math.isfinite(c.stability) or not math.isfinite(c.difficulty):
+        invalid("card", "卡片计算结果无效，评分已保留")
     return {"state": c.state.value, "scheduler_key": scheduler_key, "scheduler_config": fsrs_scheduler_config(scheduler),
             "stability": round(c.stability, 3),
             "difficulty": round(c.difficulty, 3),

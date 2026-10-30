@@ -15,6 +15,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 from app.posterior_evidence import anchor as anchor_posterior, validate as validate_posterior, merge as merge_posterior, replay as replay_posterior, canonicalize as canonicalize_posterior, preserve_study_budget
 from app.streak_evidence import anchor as anchor_streak, validate as validate_streak, merge as merge_streak, calculate as calculate_streak
+from app.study_policy import merge_evidence, validate_evidence
 from app.limits import check_rate
 from app import daily_study, delta_staging, state_segments, state_verification_cache
 from app.fsrs_config import fsrs_config_key, normalize_fsrs_config
@@ -323,6 +324,10 @@ def prepare_uploaded_state(body, max_bytes=MAX_STATE_BYTES):
     validate_personal_versions(body)
     validate_knowledge_evidence(body)
     validate_band_evidence(body)
+    if isinstance(body.get("cards"), dict):
+        for card in body["cards"].values():
+            if isinstance(card, dict) and card.get("studyEvidence") is not None:
+                validate_evidence(card["studyEvidence"])
     body = canonicalize_posterior(body)
     validate_streak(body)
     # A legacy pair without evidence must also be anchorable. Otherwise the
@@ -657,6 +662,7 @@ def enrich_fsrs_schedulers(state, account_id):
     for card in cards.values():
         if not isinstance(card, dict):
             continue
+        if isinstance(card.get("schedulerKey"), str): needed.add(card["schedulerKey"])
         for field in ("fsrsHistory", "pendingFsrs"):
             group = card.get(field)
             if not isinstance(group, dict):
@@ -721,6 +727,7 @@ def validate_restore_state(state, max_bytes=MAX_STATE_BYTES):
     for word, card in state["cards"].items():
         if not isinstance(word, str) or not isinstance(card, dict):
             raise HTTPException(422, "备份中的卡片格式无效")
+        if card.get("studyEvidence") is not None: validate_evidence(card["studyEvidence"])
         for key in ("stage", "lt", "pos", "easyStreak"):
             if card.get(key) is not None and not is_int(card[key]):
                 raise HTTPException(422, "备份中的卡片格式无效")
@@ -1227,6 +1234,11 @@ def merge_learning_states(old, new):
             else:
                 cards[w] = nc
             cards[w] = _merge_card_replay(oc, nc, cards[w], old_last_study_day=oa[0], new_last_study_day=na[0])
+    for word, card in cards.items():
+        card = dict(card)
+        if (old_cards.get(word) or {}).get("studyEvidence") is not None or (new_cards.get(word) or {}).get("studyEvidence") is not None:
+            card["studyEvidence"] = merge_evidence(old_cards.get(word), new_cards.get(word), card)
+        cards[word] = card
     out["cards"] = cards
     # v2.0 字段：不能像整包替换一样把 bandStats/knowledge 清空或覆盖
     knowledge, knowledge_evidence = merge_knowledge_evidence(old, new)
@@ -1392,6 +1404,10 @@ def checkpoint_learning_state(state):
                 raise HTTPException(409, "评分历史尚未完整验证，请先重放或导出进度")
         elif card.get("appliedFsrs") or card.get("fsrsReplayVersions"):
             raise HTTPException(409, "旧评分缺少可验证的完整历史，请先导出进度")
+        if history or card.get("studyEvidence") is not None:
+            card["studyEvidence"] = merge_evidence(card, None, card)
+        if history and history.get("events"):
+            card["schedulerKey"] = history["events"][-1].get("schedulerKey") or history.get("schedulerKey") or card.get("schedulerKey")
         for field in ("fsrsHistory", "pendingFsrs", "fsrsReplayVersions", "appliedFsrs"):
             card.pop(field, None)
     for field in ("knowledgeEvidence", "bandEvidence", "posteriorHistory", "streakEvidence"):

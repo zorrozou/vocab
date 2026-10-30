@@ -1,6 +1,6 @@
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 const html=fs.readFileSync('web/index.html','utf8');
-const code=html.slice(html.indexOf('function dailyPlanSummary('),html.indexOf('/* ---------------- 渲染 ---------------- */'));
+const code=html.slice(html.indexOf('function availableNewCount('),html.indexOf('/* ---------------- 渲染 ---------------- */'));
 const mastery=html.slice(html.indexOf('const isMastered ='),html.indexOf('/* ---------------- 定级'));
 const ctx={today:()=> '2026-10-27',Date};vm.createContext(ctx);vm.runInContext(html.slice(html.indexOf('function provisionalSchedule('),html.indexOf('// 服务端调度是无状态计算'))+'\n'+mastery+'\n'+code,ctx);
 const day='2026-10-27',state={settings:{dailyCap:4,newPerDay:5},track:null,

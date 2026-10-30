@@ -14,7 +14,7 @@ const base = (process.env.VOCAB_TEST_BASE || 'http://127.0.0.1:18765').replace(/
       try { const ok = await buildQueue(); clearTimeout(save._t); return {ok, queue:session.queue.map(x=>({kind:x.kind,word:x.word}))}; }
       finally { Math.random = random; }
     });
-    assert(result.ok); assert.deepEqual(result.queue,[{kind:'review',word:'apple'}], 'audio exposure must not reset the last study date');
+    assert(result.ok); assert.deepEqual(result.queue,[], 'automatic study must not select a word before it is due');
     const exposureOnly = await page.evaluate(async () => {
       S.log = [{d:addDays(today(),-3),word:'apple',rating:3,kind:'exposure',source:'audio'}];
       const random = Math.random; Math.random = () => 0;
@@ -22,6 +22,6 @@ const base = (process.env.VOCAB_TEST_BASE || 'http://127.0.0.1:18765').replace(/
       finally { Math.random = random; }
     });
     assert(exposureOnly.ok); assert.deepEqual(exposureOnly.queue, [], 'exposure alone must not create a review history');
-    console.log('PASS audio exposure does not defer early consolidation');
+    console.log('PASS automatic study excludes early consolidation regardless of exposure history');
   } finally { await browser.close(); }
 })().catch(error => { console.error(error); process.exit(1); });

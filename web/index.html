@@ -167,7 +167,7 @@ function forecastDueDates(cards, day0, days = 14, configurations = {}) {
   }
   return result;
 }
-function retentionSummary(cards, log, now = Date.now()) {
+function retentionSummary(cards, log, now = Date.now(), configurations = {}) {
   const counts = [0, 0, 0, 0, 0], latest = new Map();
   let unknown = 0, approximate = 0;
   const parseDate = value => {
@@ -193,7 +193,12 @@ function retentionSummary(cards, log, now = Date.now()) {
     if (time == null || time > now || !Number.isFinite(now)) { unknown++; continue; }
     if (fallback || (typeof recorded === "string" && recorded.length === 10)) approximate++;
     const elapsed = (now - time) / 86400000;
-    const r = Math.pow(1 + 0.9805 * elapsed / Math.max(0.2, stability), -0.1542);
+    const key = card.schedulerKey || card.fsrsHistory?.events?.at(-1)?.schedulerKey || card.fsrsHistory?.schedulerKey;
+    const config = key && configurations[key];
+    if (!config && !(fallback || (typeof recorded === "string" && recorded.length === 10))) approximate++;
+    const decay = config?.parameters?.length === 21 ? config.parameters[20] : 0.1542;
+    if (!(Number.isFinite(decay) && decay>0)) { unknown++; continue; }
+    const r = Math.pow(1 + (Math.pow(.9,-1/decay)-1) * Math.max(0,Math.floor(elapsed)) / stability,-decay);
     counts[r >= 0.95 ? 0 : r >= 0.9 ? 1 : r >= 0.8 ? 2 : r >= 0.6 ? 3 : 4]++;
   }
   return {counts, unknown, approximate};
@@ -526,6 +531,12 @@ async function fsrsCall(body, active = () => true) {
     });
     if (!active()) return null;
     if (!resp.ok) {
+      if (resp.status === 422) {
+        const error = await resp.json().catch(()=>({}));
+        const issue = error.detail?.message || "调度参数需要修复，评分已保留";
+        fsrsReplayWarning = issue; renderUserTag();
+        return {invalidInput:issue};
+      }
       if (resp.status === 409) {
         const error = await resp.json().catch(() => ({}));
         if (!active()) return null;
@@ -589,6 +600,10 @@ async function replayPendingFsrs(c) {
   const pending = structuredClone(c.pendingFsrs), state = S, owner = AUTH;
   const active = () => S === state && AUTH === owner;
   let body = { ...pending.base };
+  if (!body.legacy_last_review_day && !c.fsrs?.lastReview && !c.fsrs?.last_review && body.last_review?.endsWith("T08:00:00Z")) {
+    const word = Object.keys(S.cards).find(w=>S.cards[w]===c), day = body.last_review.slice(0,10);
+    if (S.log.some(e=>e.word===word && e.d===day && ["learn","review"].includes(e.kind))) body.legacy_last_review_day=day;
+  }
   let result = null;
   const versions = new Map(), configs = new Map();
   for (const event of pending.events) {
@@ -597,7 +612,10 @@ async function replayPendingFsrs(c) {
     if (!active()) return false;
     result = await fsrsCall({ ...body, rating: event.rating, now: event.at, deterministic: true, scheduler_key: schedulerKey }, active);
     if (!active()) return false;
-    if (!result || (schedulerKey && result.scheduler_key !== schedulerKey)) return false;
+    if (!result || result.invalidInput || (schedulerKey && result.scheduler_key !== schedulerKey)) {
+      if (result?.invalidInput) c.fsrsIssue = result.invalidInput;
+      return false;
+    }
     if (result.scheduler_key || schedulerKey) versions.set(event.id, result.scheduler_key || schedulerKey);
     if (result.scheduler_key && result.scheduler_config) configs.set(result.scheduler_key, result.scheduler_config);
     body = { state: result.state, stability: result.stability, difficulty: result.difficulty,
@@ -613,6 +631,7 @@ async function replayPendingFsrs(c) {
   const verified = { ...(c.fsrsReplayVersions || {}) };
   for (const [eventID, key] of versions) verified[eventID] = key;
   c.fsrsReplayVersions = verified;
+  c.schedulerKey = result.scheduler_key || c.schedulerKey;
   delete result.scheduler_key;
   delete result.scheduler_config;
   c.fsrs = result;
@@ -620,19 +639,17 @@ async function replayPendingFsrs(c) {
   c.appliedFsrs = [...new Set([...(c.appliedFsrs || []), ...pending.events.map(e => e.id)])];
   delete c.stage;
   delete c.pendingFsrs;
+  delete c.fsrsIssue;
   return true;
 }
 
-async function scheduleFsrs(c, body, rating) {
+async function scheduleFsrs(c, body, rating, grade = null) {
+  anchorStudyEvidence(c);
   const state = S, owner = AUTH;
   if (!c.pendingFsrs) c.pendingFsrs = { base: { is_new: false, state: 1, stability: 0, difficulty: 0, ...body }, events: [] };
   // 历史保存重算所需的完整事件，不只保存已应用的 ID。
   if (!c.fsrsHistory) { c.fsrsHistory = structuredClone(c.pendingFsrs); c.fsrsReplayVersions = {}; }
-  const lastEvent = c.fsrsHistory.events.at(-1) || c.pendingFsrs.events.at(-1);
-  const eventTime = Math.max(Date.now(), lastEvent ? Date.parse(lastEvent.at) + 1 : 0);
-  const event = { id: crypto.randomUUID ? crypto.randomUUID() :
-    Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join(""),
-    rating, at: new Date(eventTime).toISOString() };
+  const event = grade || makeStudyGrade(c, rating, "unknown", false);
   c.pendingFsrs.events.push(event);
   c.fsrsHistory.events.push(event);
   applyProvisionalSchedule(c, S.fsrsSchedulers || {});
@@ -648,7 +665,7 @@ async function flushPendingFsrs() {
     if (!c.pendingFsrs) continue;
     const replayed = await replayPendingFsrs(c);
     if (S !== originalState || AUTH !== originalAuth) return;
-    if (!replayed) break;
+    if (!replayed) { if (c.fsrsIssue) { changed = true; continue; } break; }
     changed = true;
   }
   if (!Object.values(S.cards).some(c => c.pendingFsrs)) fsrsReplayWarning = "";
@@ -682,6 +699,12 @@ function lastReviewDate(word) {
 
 // Validate again at grading time; a previously prepared queue can be stale.
 function studyAdmissionIssue(state, word, kind, sessionDay, day = today()) {
+  if (["review","drill","acceptance"].includes(kind) && state.cards[word]?.fsrsIssue) return "这个词的调度记录需要修复，原评分已保留，请先同步其他进度。";
+  if (kind === "review") {
+    const c = state.cards[word], due = c && scheduledDue(c,state.fsrsSchedulers);
+    if (!c || isMastered(c) || !due || !(new Date(due) <= new Date())) return "这个词的复习安排已更新，请重新加载今日任务。";
+  }
+
   if (sessionDay && sessionDay !== day) return "日期已变化，进度已保留。请重新开始今天的任务。";
   if (kind === "learn" && state.cards[word]) return "这个词的学习进度已更新，请重新加载今天的任务。";
   if (kind === "probe" && (state.cards[word] || state.log.some(e => e.d === day && e.kind === "probe" && e.word === word)))
@@ -699,7 +722,7 @@ function studyAdmissionIssue(state, word, kind, sessionDay, day = today()) {
   return null;
 }
 function admitStudy(word, kind) {
-  const issue = studyAdmissionIssue(S, word, kind, session.day) || sharedStudyIssue(word, kind);
+  const issue = studyAdmissionIssue(S, word, kind, session.day) || sharedStudyIssue(word, ["drill","acceptance"].includes(kind) ? "review" : kind);
   if (!issue) return true;
   studyNotice = issue;
   session = {day: today(), queue: [], idx: 0, learnedToday: 0, reviewedToday: 0};
@@ -803,7 +826,7 @@ async function prepareSharedQueue(proposed, newExhausted, active, adoptPool = tr
     const card = S.cards[item.word];
     if (card) {
       const due = new Date(scheduledDue(card,S.fsrsSchedulers));
-      if (!isMastered(card) && (due <= new Date() || (item.kind==="review" && delayedReviewEvidence(S,item.word)))) append({kind:"review",word:item.word});
+      if (!isMastered(card) && due <= new Date()) append({kind:"review",word:item.word});
     } else if ((item.new_word && newSlots > 0) || (item.probe_word && probes > 0)) {
       const r = await fetch(`${API}/api/v1/lexicon/word?word=${encodeURIComponent(item.word)}`);
       if (!active() || S !== state || today() !== day) throw new Error("进度或日期已变化，请重新加载今日任务。");
@@ -826,17 +849,18 @@ async function learn(word, pos, rating = 3, fromPending = false) {
   const lastReview = lastReviewDate(word);
   if (!c) c = S.cards[word] = { stage: 1, due: tomorrow(), lt: 0, pos };
   const body = c.fsrs
-    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: c.fsrs.lastReview || c.fsrs.last_review || (lastReview ? lastReview + "T08:00:00Z" : null) }
+    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: c.fsrs.lastReview || c.fsrs.last_review || (lastReview ? lastReview + "T08:00:00Z" : null), legacy_last_review_day: c.fsrs.lastReview || c.fsrs.last_review ? null : lastReview }
     : isNewCard
       ? { is_new: true, rating }
-      : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: fsrsDue(c.due), rating, last_review: lastReview ? lastReview + "T08:00:00Z" : null };
+      : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: fsrsDue(c.due), rating, last_review: lastReview ? lastReview + "T08:00:00Z" : null, legacy_last_review_day:lastReview };
   // 完成学习才消耗待补学词/推进顺序游标；待补学词的位置不能改写主学习进度。
   S.pendingNew = S.pendingNew.filter(w => w.word !== word);
   if (!fromPending) S.pointer = Math.max(S.pointer, pos + 1);
-  S.log.push({ eventId: (crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")), d: today(), ts: new Date().toISOString(), word, rating, kind: "learn" });
+  const grade = makeStudyGrade(c, rating, "learn", false);
+  S.log.push({ eventId:grade.id, d:today(), ts:grade.at, word, rating, kind:"learn" });
   recordKnowledge(word, pos, rating !== 1);
   // Learning after seeing a definition updates this word, not global ability.
-  await scheduleFsrs(c, body, rating);
+  await scheduleFsrs(c, body, rating, grade);
 }
 
 let undoSnapshot = null;
@@ -880,11 +904,11 @@ function commitUndoReview() {
   save();
 }
 
-async function review(word, rating, allowUndo = false, acceptance = false, verifiedPos = null) {
+async function review(word, rating, allowUndo = false, acceptance = false, verifiedPos = null, guessed = false) {
   const c = S.cards[word]; if (!c) return;
   const day = today();
   if (acceptance && S.quizProgressDay === day && (S.quizCompleted || []).includes(word)) return;
-  if (!admitStudy(word, "review")) return;
+  if (!admitStudy(word, acceptance ? "acceptance" : session.voluntary ? "drill" : "review")) return;
   const delayedEvidence = !acceptance && delayedReviewEvidence(S, word);
   const preStab = c.fsrs ? c.fsrs.stability : (LEGACY_STAB[c.stage] || 0);   // v1.3：成熟度用答前稳定度判断
   const lastReview = lastReviewDate(word);   // 在写今日日志前取上一次记录
@@ -894,11 +918,12 @@ async function review(word, rating, allowUndo = false, acceptance = false, verif
     probeCount: S.probeCount, track: structuredClone(S.track) };
   else undoSnapshot = null;
   if (Number.isSafeInteger(verifiedPos) && verifiedPos > 0) c.pos = verifiedPos;
-  S.log.push({ eventId: (crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")), d: today(), ts: new Date().toISOString(), word, rating, kind: "review" });
+  const grade = makeStudyGrade(c, rating, acceptance ? "acceptance" : session.voluntary ? "drill" : "review", Number.isSafeInteger(verifiedPos) && verifiedPos > 0 && rating >= 3, guessed);
+  S.log.push({ eventId:grade.id, d:today(), ts:grade.at, word, rating, kind:"review" });
   recordKnowledge(word, c.pos || S.pointer, rating !== 1);
   const body = c.fsrs
-    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: c.fsrs.lastReview || c.fsrs.last_review || (lastReview ? lastReview + "T08:00:00Z" : null) }
-    : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: fsrsDue(c.due), rating, last_review: lastReview ? lastReview + "T08:00:00Z" : null };
+    ? { state: c.fsrs.state, stability: c.fsrs.stability, difficulty: c.fsrs.difficulty, due: c.fsrs.due, rating, step: c.fsrs.step, last_review: c.fsrs.lastReview || c.fsrs.last_review || (lastReview ? lastReview + "T08:00:00Z" : null), legacy_last_review_day: c.fsrs.lastReview || c.fsrs.last_review ? null : lastReview }
+    : { state: 2, stability: LEGACY_STAB[c.stage] || 1, difficulty: 5, due: fsrsDue(c.due), rating, last_review: lastReview ? lastReview + "T08:00:00Z" : null, legacy_last_review_day:lastReview };
   if (rating === 1) c.lt = 0;
   // 保留连续熟练计数用于展示，间隔由 FSRS 决定，不人为篡改稳定度。
   if (rating === 4) {
@@ -928,12 +953,47 @@ async function review(word, rating, allowUndo = false, acceptance = false, verif
     const learned = S.log.filter(x => x.d === day && x.kind === "learn").map(x => x.word);
     if (learned.every(w => S.quizCompleted.includes(w))) S.quizDay = day;
   }
-  await scheduleFsrs(c, body, rating);
+  await scheduleFsrs(c, body, rating, grade);
 }
 
-const isMastered = c => !c.pendingFsrs?.events?.length &&
-  ![1, 3].includes(c.fsrs?.state) &&
-  (c.stage === 6 || (c.fsrs && c.fsrs.stability >= 180));
+const isMastered = c => {
+  const e = c.studyEvidence;
+  if (!e) return legacyMastered(c);
+  if (e.version !== 1 || typeof e.legacy !== "boolean" || !e.events || typeof e.events !== "object") return false;
+  if (c.fsrs ? !(c.fsrs.state === 2 && Number.isFinite(c.fsrs.stability) && c.fsrs.stability > 0 && c.fsrs.difficulty >= 1 && c.fsrs.difficulty <= 10) : !(c.stage === 6 && e.legacy)) return false;
+  const pending = new Set((c.pendingFsrs?.events || []).map(x=>x.id));
+  const days = new Set(); let lastGap = 0, forgotten = false, previous = null;
+  for (const [id,item] of Object.entries(e.events).sort((a,b)=>Date.parse(a[1].at)-Date.parse(b[1].at) || (a[0]<b[0]?-1:a[0]>b[0]?1:0))) {
+    const at = Date.parse(item.at), prior = Date.parse(item.priorAt);
+    if (!Number.isFinite(at)) return false;
+    const before = [previous,prior].filter(Number.isFinite);
+    const gap = before.length ? (at-Math.max(...before))/1000 : 0; previous = at;
+    if (item.rating === 1) { forgotten = true; days.clear(); lastGap = 0; }
+    else if (!pending.has(id) && ["review","drill"].includes(item.kind) && item.verified && !item.guessed && !item.hinted && item.rating >= 3 && gap >= 86400) { days.add(item.day); lastGap = gap; }
+  }
+  return (e.legacy && !forgotten) || ((c.fsrs?.stability || 0) >= 180 && days.size >= 3 && lastGap >= 7*86400);
+};
+function legacyMastered(c) {
+  if (c.pendingFsrs && (!Array.isArray(c.pendingFsrs.events) || c.pendingFsrs.events.some(e=>![2,3,4].includes(e.rating)))) return false;
+  return c.fsrs ? c.fsrs.state === 2 && Number.isFinite(c.fsrs.stability) && c.fsrs.stability >= 180 && c.fsrs.difficulty >= 1 && c.fsrs.difficulty <= 10 : c.stage === 6;
+}
+function anchorStudyEvidence(c) {
+  if (c.studyEvidence) return;
+  c.studyEvidence = {version:1, originAt:new Date().toISOString(), legacy:legacyMastered(c),
+    originIds:[...new Set([...(c.fsrsHistory?.events || []).map(x=>x.id),...(c.pendingFsrs?.events || []).map(x=>x.id),...(c.appliedFsrs || [])])].sort(),events:{}};
+}
+function makeStudyGrade(c, rating, kind, verified, guessed = false, hinted = false) {
+  anchorStudyEvidence(c);
+  const priorAt = lastPractice(c);
+  const at = new Date(Math.max(Date.now(), priorAt ? Date.parse(priorAt)+1 : 0)).toISOString();
+  const id = crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)),b=>b.toString(16).padStart(2,"0")).join("");
+  c.studyEvidence.events[id] = {at,day:today(),rating,kind,verified:verified && !guessed && !hinted,guessed,hinted,...(priorAt?{priorAt}:{})};
+  return {id,rating,at};
+}
+function lastPractice(c) {
+  const times = [c.fsrs?.lastReview,c.fsrs?.last_review,...(c.fsrsHistory?.events || []).map(x=>x.at),...(c.pendingFsrs?.events || []).map(x=>x.at),...Object.values(c.studyEvidence?.events || {}).map(x=>x.at)].map(Date.parse).filter(Number.isFinite);
+  return times.length ? new Date(Math.max(...times)).toISOString() : null;
+}
 
 /* ---------------- 定级（网格贝叶斯） ---------------- */
 const GRID = []; for (let r = 0; r <= 12000; r += 250) GRID.push(r);
@@ -950,6 +1010,25 @@ function posteriorCalc(post, rank, resp, weight = 1.0, guess = 0) {
     const v = p * like; sum += v; return v;
   });
   return out.map(v => v / sum);
+}
+function effectiveEvidenceSummary(state, day) {
+  const events = state.posteriorHistory?.events || {}, degree = {}, children = {}, seen = new Set(), used = {};
+  for (const [id,e] of Object.entries(events)) { degree[id] = e.parents.length; children[id] = []; }
+  for (const [id,e] of Object.entries(events)) for (const p of e.parents) if (children[p]) children[p].push(id);
+  const ready = Object.keys(events).filter(id=>degree[id]===0); let up=0, down=0, weight=0;
+  while (ready.length) {
+    ready.sort((a,b)=>events[a].day.localeCompare(events[b].day) || (a<b?-1:a>b?1:0));
+    const id=ready.shift(), e=events[id], match=id.match(/^([pr])1_(\d{4}-\d{2}-\d{2})_([0-9a-f]{32})_[0-9a-f]{32}$/);
+    let w=e.kind==="update" ? e.weight : 0;
+    if (match) {
+      const scope=match.slice(1).join(":");
+      if (seen.has(scope)) w=0;
+      else { seen.add(scope); if(match[1]==="r") { w=Math.min(w,Math.max(0,1.5-(used[e.day]||0)));used[e.day]=(used[e.day]||0)+w; } }
+    }
+    if (w>1e-12 && e.day===day) { if(e.resp===1)up++;else down++;weight+=w; }
+    for(const child of children[id])if(--degree[child]===0)ready.push(child);
+  }
+  return `↑${up} / ↓${down}（可追溯权重 ${weight.toFixed(2)}）`;
 }
 function passiveEvidenceWeight(state, day) {
   const weights = new Map();
@@ -1195,35 +1274,29 @@ async function buildQueue(stillOnPage = () => true, retrySharedSync = true) {
   if (!active()) return false;
   trackLevelDaily();
   S.pendingNew = S.pendingNew.filter(w => !S.cards[w.word]);
+  try {
+    const meta = await fetch(`${API}/api/v1/lexicon/meta`).then(r=>r.ok?r.json():null);
+    if (!active()) return false;
+    if (meta?.lexicon_revision && S.newSupply?.revision !== meta.lexicon_revision) delete S.newSupply;
+  } catch (_) { if (!active()) return false; }
   const planState = JSON.stringify(S), planDay = today();
   const completed = new Set(S.log.filter(l => l.d === today() && ["learn", "review", "probe"].includes(l.kind)).map(l => l.word));
   const remaining = Math.max(0, S.settings.dailyCap - completed.size);
   const due = Object.entries(S.cards)
-    .filter(([w, c]) => (!completed.has(w) || needsSameDayReview(c, S.fsrsSchedulers)) && !isMastered(c) && scheduledDue(c, S.fsrsSchedulers) && new Date(scheduledDue(c, S.fsrsSchedulers)) <= new Date())
+    .filter(([w, c]) => (!completed.has(w) || needsSameDayReview(c, S.fsrsSchedulers)) && !isMastered(c) && !c.fsrsIssue && scheduledDue(c, S.fsrsSchedulers) && new Date(scheduledDue(c, S.fsrsSchedulers)) <= new Date())
     .sort((a, b) => new Date(scheduledDue(a[1], S.fsrsSchedulers)) - new Date(scheduledDue(b[1], S.fsrsSchedulers)) || a[0].localeCompare(b[0]))
     .map(([w]) => w);
-  // 提前巩固位：刚学会（≤7天）、FSRS 未到期、未掌握的词，按 P=(1−R)×0.5 概率抽取（≤5个）
-  const nowD = new Date();
-  const earlyPool = Object.entries(S.cards).filter(([w, c]) => {
-    if (completed.has(w) || c.pendingFsrs?.events?.length || isMastered(c) || new Date(c.due) <= nowD) return false;
-    const last = lastReviewDate(w);
-    if (!last) return false;
-    const elapsed = (nowD - new Date(last + "T12:00:00")) / 86400000;
-    if (elapsed > 7 || elapsed < 1) return false;   // 昨天刚过的才进入概率池
-    const S0 = c.fsrs ? Math.max(0.2, c.fsrs.stability) : 2;
-    const R = Math.pow(1 + 0.9805 * elapsed / S0, -0.1542);
-    return Math.random() < (1 - R) * 0.5;
-  }).map(([w]) => w);
   const learnedToday = new Set(S.log.filter(l => l.kind === "learn" && l.d === today()).map(l => l.word)).size;
   const newBudget = Math.max(0, S.settings.newPerDay - learnedToday);
-  const nNew = Math.min(newBudget, remaining);
+  const nNew = Math.min(newBudget, remaining, availableNewCount(S));
   const news = [];
   // 只清理已入卡项；选中但未学完的词继续保留，退出重进不会丢词。
   for (const w of S.pendingNew) {
     if (news.length >= nNew) break;
     if (!completed.has(w.word) && !news.find(x => x.word === w.word)) news.push({ ...w, fromPending: true });
   }
-  let cursor = S.pointer, exhausted = false, scanBatch = Math.min(30, nNew + 2);
+  const supplyWords = new Set(); let lexiconRevision = null, scanEnd = S.pointer;
+  let cursor = S.pointer, exhausted = availableNewCount(S) === 0, scanBatch = Math.min(30, nNew + 2);
   while (news.length < nNew && !exhausted) {
     const want = Math.min(30, Math.max(scanBatch, nNew - news.length + 2));
     const resp = await fetch(`${API}/api/v1/lexicon/at?pos=${cursor}&n=${want}`);
@@ -1232,6 +1305,9 @@ async function buildQueue(stillOnPage = () => true, retrySharedSync = true) {
     const r = await resp.json();
     if (!active()) return false;
     if (!Array.isArray(r.words)) throw new Error("词条响应无效");
+    lexiconRevision = r.lexicon_revision || lexiconRevision;
+    r.words.forEach(w=>{ if (!S.cards[w.word]) supplyWords.add(w.word); });
+    scanEnd = r.next_pos || Math.max(cursor,...r.words.map(w=>w.pos+1));
     for (const w of r.words) {
       if (news.length >= nNew) break;
       if (!completed.has(w.word) && !S.cards[w.word] && !news.find(x => x.word === w.word)) news.push(w);
@@ -1261,12 +1337,10 @@ async function buildQueue(stillOnPage = () => true, retrySharedSync = true) {
   }
   const repeats = due.filter(w => completed.has(w));
   const reviews = [...repeats, ...due.filter(w => !completed.has(w)).slice(0, Math.max(0, remaining - news.length))];
-  const early = earlyPool.filter(w => !reviews.includes(w))
-    .slice(0, Math.min(5, Math.max(0, remaining - news.length - reviews.length)));
-  const reviewsAll = [...reviews, ...early];
+  const reviewsAll = reviews;
   // v1.3 每日主动探测：3 个探测词（2 个后验上方区 / 1 个下方区）随机混入复习段，
   // 4选1 形式与复习测验无差别——用户无感知，证据全额（与定级同级 weight 1.0）
-  const probeBudget = Math.max(0, remaining - reviewsAll.length - news.length);
+  const probeBudget = Math.max(0, remaining - reviewsAll.filter(w=>!completed.has(w)).length - news.length);
   const probes = probeBudget ? (await pickProbes(reviewsAll, news, active)).slice(0, probeBudget) : [];
   if (!active()) return false;
   const revBlock = reviewsAll.map(w => ({ kind: "review", word: w }));
@@ -1284,6 +1358,8 @@ async function buildQueue(stillOnPage = () => true, retrySharedSync = true) {
   }
   if (!active() || today() !== planDay || JSON.stringify(S) !== planState) return false;
   studyNotice = "";
+  if (exhausted && lexiconRevision) S.newSupply = {revision:lexiconRevision,start:S.pointer,end:scanEnd,available:[...supplyWords]};
+  session.voluntary = false;
   session.day = planDay;
   session.queue = queue;
   session.idx = 0;
@@ -1310,14 +1386,26 @@ function prefetchDay(news, reviewWords) {
 }
 
 // 主页显示和建队列共用每日去重、新词目标与容量规则。
+function availableNewCount(state) {
+  const supply = state.newSupply;
+  if (!supply || state.pointer < supply.start || state.pointer > supply.end) return Infinity;
+  return new Set([...supply.available,...(state.pendingNew || []).map(w=>w.word)].filter(w=>!state.cards[w])).size;
+}
+function dailyCounts(state, day = today()) {
+  const entries = state.log.filter(e=>e.d===day && ["learn","review","probe"].includes(e.kind));
+  const news = new Set(entries.filter(e=>e.kind==="learn").map(e=>e.word));
+  const reviews = new Set(entries.filter(e=>e.kind==="review" && !news.has(e.word)).map(e=>e.word));
+  const probes = new Set(entries.filter(e=>e.kind==="probe" && !news.has(e.word) && !reviews.has(e.word)).map(e=>e.word));
+  return {learn:news.size,review:reviews.size,probe:probes.size,total:news.size+reviews.size+probes.size,attempts:entries.length};
+}
 function dailyPlanSummary(state, day = today(), now = new Date()) {
   const completed = new Set(state.log.filter(x => x.d === day && ["learn", "review", "probe"].includes(x.kind)).map(x => x.word));
   const remaining = Math.max(0, state.settings.dailyCap - completed.size);
-  const due = Object.entries(state.cards).filter(([word, card]) => (!completed.has(word) || needsSameDayReview(card, state.fsrsSchedulers)) && !isMastered(card) && scheduledDue(card, state.fsrsSchedulers) && new Date(scheduledDue(card, state.fsrsSchedulers)) <= now);
+  const due = Object.entries(state.cards).filter(([word, card]) => (!completed.has(word) || needsSameDayReview(card, state.fsrsSchedulers)) && !isMastered(card) && !card.fsrsIssue && scheduledDue(card, state.fsrsSchedulers) && new Date(scheduledDue(card, state.fsrsSchedulers)) <= now);
   const dueAvailable = due.length;
   const repeatPlanned = due.filter(([word]) => completed.has(word)).length;
   const learned = new Set(state.log.filter(x => x.d === day && x.kind === "learn").map(x => x.word)).size;
-  const newPlanned = Math.min(Math.max(0, state.settings.newPerDay - learned), remaining);
+  const newPlanned = Math.min(Math.max(0, state.settings.newPerDay - learned), remaining, availableNewCount(state));
   const duePlanned = repeatPlanned + Math.min(dueAvailable - repeatPlanned, Math.max(0, remaining - newPlanned));
   return {completed:completed.size, dueAvailable, duePlanned, newPlanned, repeatPlanned, totalPlanned:completed.size + duePlanned + newPlanned - repeatPlanned};
 }
@@ -1362,14 +1450,14 @@ function home() {
     <div class="today-progress-label muted"><span>今日进度（预计）</span><strong>${plan.completed} / ${plan.totalPlanned}</strong></div>
     <div class="progress today-progress" role="progressbar" aria-label="今日进度" aria-valuemin="0" aria-valuemax="${Math.max(1, plan.totalPlanned)}" aria-valuetext="${plan.completed} / ${plan.totalPlanned}" aria-valuenow="${plan.completed}"><i style="width:${plan.totalPlanned ? Math.min(100, 100 * plan.completed / plan.totalPlanned) : 0}%"></i></div>
     <div class="stat-grid">
-      <div class="stat"><b>${plan.duePlanned}</b><span>今日待复习</span></div>
-      <div class="stat"><b>${plan.newPlanned}</b><span>新词上限</span></div>
+      <div class="stat"><b id="homeDueCount">${plan.duePlanned}</b><span>今日待复习</span></div>
+      <div class="stat"><b id="homeNewCount">${plan.newPlanned}</b><span>新词上限</span></div>
       <div class="stat"><b>${escapeHTML(S.pointer)}</b><span>学习位置</span></div>
     </div>
     ${plan.dueAvailable > plan.duePlanned ? `<p class="muted">另有 ${plan.dueAvailable - plan.duePlanned} 个词已到期，超出今日上限，暂未安排。</p>` : ""}
     ${plan.repeatPlanned ? `<p class="muted">其中 ${plan.repeatPlanned} 个是今天学过的词，按间隔再复习，不增加今日单词数。</p>` : ""}
     <div class="row"><button class="act" id="bStart">${plan.completed ? "继续今天" : "开始今天"}</button></div>
-    <p class="muted" id="startHint" style="margin-top:10px">先预留每日新词名额，再安排到期复习；实际队列可能包含探测或提前复习。</p>
+    <p class="muted" id="startHint" style="margin-top:10px">先预留每日新词名额，再安排到期复习；水平探测也计入每日不同词上限。</p>
   </div>`;
   $("#bStart").onclick = async () => {
     const b = $("#bStart"); b.disabled = true; b.textContent = "正在准备今日任务…";
@@ -1530,6 +1618,7 @@ function step() {
   stopAudio();
   if (session.idx >= session.queue.length) return maybeQuiz();
   const item = session.queue[session.idx];
+  if (item.kind === "review" && studyAdmissionIssue(S,item.word,session.voluntary?"drill":"review",session.day)) { session.idx++; return step(); }
   if (item.kind === "learn") showLearn(item);
   else if (item.kind === "probe") showProbe(item);
   else showReview(item);
@@ -1970,6 +2059,7 @@ async function answerCard(item, quizOk, wrongRecorded = false) {
     ${sb.html.replace('id="pendingSent"', "")}
     ${quizOk
       ? `<div class="row" style="margin-top:14px">
+          <button class="act ghost" id="r1">猜对了／没记住</button>
           <button class="act ghost" id="r2">困难</button>
           <button class="act ghost" id="r3">记得</button>
           <button class="act ok" id="r4">熟练</button>
@@ -1985,15 +2075,15 @@ async function answerCard(item, quizOk, wrongRecorded = false) {
   const go = async r => {
     if (rated) return;
     rated = true;
-    document.querySelectorAll("#r2,#r3,#r4").forEach(b => b.disabled = true);
-    await review(word, r, false, false, item.quizPos);
+    document.querySelectorAll("#r1,#r2,#r3,#r4").forEach(b => b.disabled = true);
+    await review(word, r, false, false, item.quizPos, quizOk && r === 1);
     if (S !== state || session !== currentSession) return;
     currentSession.reviewedToday++;
     if (!actionCurrent()) { save(); return; }
     currentSession.idx++; save(); step();
   };
   if (quizOk) {
-    $("#r2").onclick = () => go(2); $("#r3").onclick = () => go(3); $("#r4").onclick = () => go(4);
+    $("#r1").onclick = () => go(1); $("#r2").onclick = () => go(2); $("#r3").onclick = () => go(3); $("#r4").onclick = () => go(4);
   } else {
     $("#rUndo").onclick = () => { undoReview(); showReview(item); };
     $("#rNext").onclick = () => { commitUndoReview(); session.idx++; save(); step(); };
@@ -2056,37 +2146,53 @@ function recordStudyDay(date) {
 }
 
 /* ---- 完成 + 自动触发个性化 ---- */
-function doneDay() {
-  prunePersonalized();
+function doneDay(refreshOnly = false) {
+  const personalHTML = refreshOnly ? $("#genOut")?.innerHTML : null;
+  if (!refreshOnly) prunePersonalized();
   const day = today();
-  if (S.log.some(e => e.d === day && (["learn", "review", "probe", "placement", "shadow"].includes(e.kind) || (e.kind === "exposure" && e.source === "shadow" && e.score != null)))) recordStudyDay(day);
-  save(); renderChips();
-  if (AUTH) pushState();   // 当日完成立即推服务器（不等防抖），手机端马上同步得到
+  if (!refreshOnly && S.log.some(e => e.d === day && (["learn", "review", "probe", "placement", "shadow"].includes(e.kind) || (e.kind === "exposure" && e.source === "shadow" && e.score != null)))) recordStudyDay(day);
+  if (!refreshOnly) save(); renderChips();
+  if (!refreshOnly && AUTH) pushState();   // 当日完成立即推服务器（不等防抖），手机端马上同步得到
   const summary = dailyPlanSummary(S);
-  const capped = summary.completed >= S.settings.dailyCap && summary.dueAvailable > 0;
-  const countToday = kind => new Set(S.log.filter(e => e.d === day && e.kind === kind).map(e => e.word)).size;
+  const capped = summary.completed >= S.settings.dailyCap && summary.dueAvailable > 0 && summary.duePlanned === 0;
+  const counts = dailyCounts(S,day), countToday = kind => counts[kind];
   $("#app").innerHTML = `<div class="card center">
-    <h2>${capped ? "今日已达上限" : "本轮学习完成 🎉"}</h2>
+    <h2>${capped ? "今日已达上限" : availableNewCount(S) === 0 && summary.duePlanned === 0 ? "词库已学完 · 复习仍按间隔安排" : "本轮学习完成 🎉"}</h2>
     <div class="stat-grid">
-      <div class="stat"><b>${countToday("review")}</b><span>今日复习</span></div>
-      <div class="stat"><b>${countToday("learn")}</b><span>今日新词</span></div>
+      <div class="stat"><b id="doneReviewCount">${countToday("review")}</b><span>今日复习</span></div>
+      <div class="stat"><b id="doneNewCount">${countToday("learn")}</b><span>今日新词</span></div>
       <div class="stat"><b>${escapeHTML(S.streak)}</b><span>连续天数</span></div>
     </div>
+    <p class="muted" id="doneCountText">今日 ${counts.total} / ${S.settings.dailyCap} 个不同词 · ${counts.attempts} 次练习</p>
     ${countToday("probe") ? `<p class="muted">每日上限还计入 ${countToday("probe")} 个水平探测词；同一单词当天只计一次。</p>` : ""}
     ${summary.repeatPlanned ? `<p class="muted">还有 ${summary.repeatPlanned} 个今天学过的词需要按间隔再复习，不增加今日单词数。</p>` : ""}
-    ${S.calibrated && S.posterior ? `<p style="font-size:12px;color:#5f9cec;margin-top:8px">预计认识 ${expectedKnown()} 词（${LVL_NAME[(S.track && S.track.shownLevel) || lvlOfPos(S.frontier)]}），明天从 ${escapeHTML(S.pointer)} 附近发词</p><p class="muted" style="font-size:12px;margin-top:4px">今日水平证据：↑${S.log.filter(l => l.d === today() && ["learn", "review", "probe"].includes(l.kind) && l.rating >= 2).length} / ↓${S.log.filter(l => l.d === today() && ["learn", "review", "probe"].includes(l.kind) && l.rating === 1).length}（含 ${S.log.filter(l => l.d === today() && l.kind === "probe").length} 次水平探测）</p>${S.track && S.track.lastNote ? `<p class="muted" style="font-size:12px;margin-top:4px">${escapeHTML(S.track.lastNote)}</p>` : ""}` : ""}
+    ${S.calibrated && S.posterior ? `<p style="font-size:12px;color:#5f9cec;margin-top:8px">预计认识 ${expectedKnown()} 词（${LVL_NAME[(S.track && S.track.shownLevel) || lvlOfPos(S.frontier)]}），明天从 ${escapeHTML(S.pointer)} 附近发词</p><p class="muted" style="font-size:12px;margin-top:4px">今日有效水平证据：${effectiveEvidenceSummary(S, day)}</p>${S.track && S.track.lastNote ? `<p class="muted" style="font-size:12px;margin-top:4px">${escapeHTML(S.track.lastNote)}</p>` : ""}` : ""}
     <div id="laterRow" style="margin-top:10px"></div>
     <div class="card" style="background:#12151a;margin-top:14px">
       <h2>今日薄弱词 · 个性化例句</h2>
       <div class="muted" id="genOut">正在为你的薄弱词定制例句…</div>
     </div>
   </div>`;
+  renderDoneStatus();
+  if (refreshOnly) { if (personalHTML != null) $("#genOut").innerHTML = personalHTML; }
+  else autoPersonalize();
+}
+
+function renderDoneStatus() {
+  if (!$("#laterRow")) return;
+  const summary = dailyPlanSummary(S), counts = dailyCounts(S);
+  const title = $("#app h2");
+  if (title) title.textContent = summary.completed >= S.settings.dailyCap && summary.dueAvailable > 0 && summary.duePlanned === 0 ? "今日已达上限" : availableNewCount(S) === 0 && summary.duePlanned === 0 ? "词库已学完 · 复习仍按间隔安排" : "本轮学习完成 🎉";
+  if($("#doneReviewCount"))$("#doneReviewCount").textContent=counts.review;
+  if($("#doneNewCount"))$("#doneNewCount").textContent=counts.learn;
+  if($("#doneCountText"))$("#doneCountText").textContent=`今日 ${counts.total} / ${S.settings.dailyCap} 个不同词 · ${counts.attempts} 次练习`;
+  $("#laterRow").innerHTML = "";
   // 日内步骤：FSRS learning steps 可能让词在当天稍后再到期
   const now = new Date(), eod = new Date(addDays(today(), 1) + "T00:00:00");
   const completed = new Set(S.log.filter(x => x.d === today() && ["learn", "review", "probe"].includes(x.kind)).map(x => x.word));
   const remaining = Math.max(0, S.settings.dailyCap - completed.size);
   const plan = dailyPlanSummary(S, today(), now);
-  const laterN = Object.entries(S.cards).filter(([word, c]) => (remaining > 0 || completed.has(word)) && (!completed.has(word) || needsSameDayReview(c, S.fsrsSchedulers)) && !isMastered(c) && scheduledDue(c, S.fsrsSchedulers) && new Date(scheduledDue(c, S.fsrsSchedulers)) > now && new Date(scheduledDue(c, S.fsrsSchedulers)) < eod).length;
+  const laterN = Object.entries(S.cards).filter(([word, c]) => (remaining > 0 || completed.has(word)) && (!completed.has(word) || needsSameDayReview(c, S.fsrsSchedulers)) && !isMastered(c) && !c.fsrsIssue && scheduledDue(c, S.fsrsSchedulers) && new Date(scheduledDue(c, S.fsrsSchedulers)) > now && new Date(scheduledDue(c, S.fsrsSchedulers)) < eod).length;
   if (plan.duePlanned > 0 || plan.newPlanned > 0) {
     $("#laterRow").innerHTML = `<div class="row"><button class="act ghost" id="bMore">继续今日任务（复习 ${plan.duePlanned} · 新词 ${plan.newPlanned}）→</button></div>`;
     $("#bMore").onclick = async () => {
@@ -2101,8 +2207,27 @@ function doneDay() {
   } else if (laterN > 0) {
     $("#laterRow").innerHTML = `<p class="muted">⏰ 今天晚些时候还有 ${laterN} 个词到期，记得回来</p>`;
   }
-  autoPersonalize();
 }
+
+let studyClockSignature = null;
+function refreshStudyClock() {
+  const done = !!$("#laterRow") && !$("#bMore")?.disabled, atHome = !!$("#bStart") && !$("#bStart").disabled;
+  if (!done && !atHome) { studyClockSignature = null; return; }
+  const signature = JSON.stringify([today(),dailyPlanSummary(S),dailyCounts(S),S.settings.dailyCap,S.pointer,S.probeCount]);
+  if (signature === studyClockSignature) return;
+  studyClockSignature = signature;
+  if (done) renderDoneStatus();
+  else {
+    const plan=dailyPlanSummary(S), label=$(".today-progress-label strong"), bar=$(".today-progress");
+    if(label)label.textContent=`${plan.completed} / ${plan.totalPlanned}`;
+    if(bar) { bar.setAttribute("aria-valuemax",Math.max(1,plan.totalPlanned));bar.setAttribute("aria-valuenow",plan.completed);bar.setAttribute("aria-valuetext",`${plan.completed} / ${plan.totalPlanned}`);bar.querySelector("i").style.width=`${plan.totalPlanned?Math.min(100,100*plan.completed/plan.totalPlanned):0}%`; }
+    if($("#homeDueCount"))$("#homeDueCount").textContent=plan.duePlanned;
+    if($("#homeNewCount"))$("#homeNewCount").textContent=plan.newPlanned;
+  }
+}
+setInterval(refreshStudyClock,1000);
+window.addEventListener("focus",refreshStudyClock);
+document.addEventListener("visibilitychange",()=>{ if (!document.hidden) refreshStudyClock(); });
 
 let personalRefresh = null;
 async function refreshPersonalJobs() {
@@ -2253,15 +2378,21 @@ function stubbornDrillWords(state, stubborn) {
   });
 }
 
+function recentDifficult(state, day = today()) {
+  const since=addDays(day,-13), seen=new Set(), out={};
+  function add(word,id,d,rating) { if(d<since||d>day||rating>2||seen.has(id))return;seen.add(id);const r=out[word] ||= {again:0,hard:0}; if(rating===1)r.again++;else r.hard++; }
+  for(const [word,c] of Object.entries(state.cards))for(const [id,e] of Object.entries(c.studyEvidence?.events||{}))if(e.kind!=="unknown")add(word,id,e.day,e.rating);
+  state.log.forEach((e,i)=>{if(["learn","review"].includes(e.kind))add(e.word,e.eventId||`legacy-${i}`,e.d,e.rating);});
+  return out;
+}
 function showStats() {
   stopAudio();
   const words = Object.entries(S.cards);
-  const retention = retentionSummary(S.cards, S.log);
+  const retention = retentionSummary(S.cards, S.log, Date.now(), S.fsrsSchedulers || {});
   const buckets = Object.fromEntries(["≥95%", "90~95%", "80~90%", "60~80%", "<60%"].map((key, i) => [key, retention.counts[i]]));
   const loads = forecastDueDates(S.cards, today(), 14, S.fsrsSchedulers);
   const maxL = Math.max(1, ...loads.map(x => x.n));
-  const lapseCount = {};
-  S.log.filter(l => ["learn", "review"].includes(l.kind) && l.rating <= 2).forEach(l => lapseCount[l.word] = (lapseCount[l.word] || 0) + 1);
+  const difficult = recentDifficult(S), lapseCount = Object.fromEntries(Object.entries(difficult).map(([w,r])=>[w,r.again+r.hard]));
   const stubborn = Object.entries(lapseCount).filter(([word, n]) => n >= 2 && S.cards[word] && !isMastered(S.cards[word])).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)).slice(0, 8);
   const drillWords = stubbornDrillWords(S, stubborn);
   $("#app").innerHTML = `<div class="card">
@@ -2276,13 +2407,13 @@ function showStats() {
       const tot = Math.max(1, Object.values(buckets).reduce((a, b) => a + b, 0));
       return `<div class="row" data-retention-index="${index}" style="margin-top:6px;align-items:center"><span class="muted" style="width:56px">${k}</span><div style="flex:1;height:10px;background:#12151a;border-radius:5px"><div style="width:${n / tot * 100}%;height:100%;background:#2f6fed;border-radius:5px"></div></div><span style="width:34px;text-align:right">${n}</span></div>`;
     }).join("")}
-    <p class="muted" id="retention-note">按默认曲线估算；${retention.approximate} 词使用日期近似，${retention.unknown} 词缺少可用信息或评分待同步，未计入分布。</p>
+    <p class="muted" id="retention-note">按对应参数曲线估算；${retention.approximate} 词使用日期或参数近似，${retention.unknown} 词缺少可用信息或评分待同步，未计入分布。</p>
     <h2 style="margin-top:14px">未来 14 天负载预测</h2>
     <div class="row" style="align-items:flex-end;gap:3px;height:64px">
       ${loads.map(x => `<div style="flex:1;background:#2f6fed;border-radius:3px 3px 0 0;height:${Math.max(3, x.n / maxL * 60)}px" title="${escapeHTML(x.d)}: ${escapeHTML(x.n)}词"></div>`).join("")}
     </div>
     <div class="row" style="gap:3px">${loads.map((x, i) => `<div class="muted" style="flex:1;text-align:center;font-size:9px">${escapeHTML(i % 2 ? "" : x.d.slice(5))}</div>`).join("")}</div>
-    ${stubborn.length ? `<h2 style="margin-top:14px">需要巩固（学习或复习至少 2 次困难／忘记）</h2><p style="font-size:14px">${stubborn.map(([w, n]) => `${escapeHTML(w)} ×${n}`).join(" · ")}</p><p class="muted">根据当前保留的学习记录统计，整理历史后数量可能变化。</p>${drillWords.length < stubborn.length ? '<p class="muted">已为今日新词预留名额；超过上限的词暂不安排。</p>' : ""}<div class="row"><button class="act" id="bDrill" ${drillWords.length ? "" : "disabled"}>巩固练习（${drillWords.length} 词）</button></div>` : ""}
+    ${stubborn.length ? `<h2 style="margin-top:14px">需要巩固（最近 14 天至少 2 次困难／忘记）</h2><p style="font-size:14px">${stubborn.map(([w, n]) => `${escapeHTML(w)}：忘记 ${difficult[w].again} · 困难 ${difficult[w].hard}`).join(" · ")}</p><p class="muted">新评分按独立学习证据统计；旧记录仅统计仍可追溯的部分。</p>${drillWords.length < stubborn.length ? '<p class="muted">已为今日新词预留名额；超过上限的词暂不安排。</p>' : ""}<div class="row"><button class="act" id="bDrill" ${drillWords.length ? "" : "disabled"}>巩固练习（${drillWords.length} 词）</button></div>` : ""}
     <div class="row"><button class="act ghost" id="bBack">返回</button></div>
   </div>`;
   $("#bBack").onclick = home;
@@ -2296,7 +2427,7 @@ function showStats() {
       if (!current()) return;
       if (S !== state) throw new Error("进度已更新，请重新加载巩固练习。");
       if (!queue.length) throw new Error("今日共享名额已预留，请回首页继续今日任务。");
-      session = {day: today(), queue, idx:0, learnedToday:0, reviewedToday:0};
+      session = {day: today(), voluntary:true, queue, idx:0, learnedToday:0, reviewedToday:0};
       step();
     } catch (e) { if (current()) { button.disabled=false; button.textContent=e.retrySharedSync ? "进度已同步，点击开始巩固练习" : (e.message || "加载失败，点击重试"); } }
   };
@@ -2718,6 +2849,8 @@ function backupSchedulerWarnings(state, verified = new Set()) {
   let legacy = false, malformed = false;
   for (const card of Object.values(state.cards || {})) {
     if (!card || typeof card !== "object") continue;
+    if (typeof card.schedulerKey === "string" && card.schedulerKey) keys.add(card.schedulerKey);
+    else if (card.schedulerKey != null) malformed = true;
     for (const key of Object.values(card.fsrsReplayVersions || {})) {
       if (typeof key === "string" && key) keys.add(key); else if (key != null && typeof key !== "string") malformed = true;
     }
@@ -7025,7 +7158,7 @@ function largeRebaseCompletedFsrs(startingRaw, snapshot, serverRaw) {
   const before = JSON.parse(startingRaw), local = JSON.parse(snapshot), remote = JSON.parse(serverRaw);
   const ops = deltaDiff(before, local, before, false);
   if (!ops || !ops.length || ops.length > 2048) return null;
-  const fields = new Set(["fsrs", "due", "stage", "pendingFsrs", "appliedFsrs", "fsrsHistory", "fsrsReplayVersions"]);
+  const fields = new Set(["fsrs", "due", "stage", "pendingFsrs", "appliedFsrs", "fsrsHistory", "fsrsReplayVersions", "schedulerKey", "fsrsIssue"]);
   let cards = 0;
   for (const op of ops) {
     if (op.op !== "set" || op.path.length !== 2 || !["cards", "fsrsSchedulers"].includes(op.path[0])) return null;
@@ -7071,6 +7204,10 @@ function largeRebaseCompletedFsrs(startingRaw, snapshot, serverRaw) {
         if (events.length !== 1 || typeof newVersions[id] !== "string" ||
             (events[0].schedulerKey || next.fsrsHistory.schedulerKey) !== newVersions[id]) return null;
       }
+      const lastEvent = next.fsrsHistory.events.at(-1);
+      if (Object.hasOwn(next, "fsrsIssue") ||
+          (Object.hasOwn(next, "schedulerKey") && next.schedulerKey !== newVersions[lastEvent?.id]) ||
+          (Object.hasOwn(old, "schedulerKey") && !Object.hasOwn(next, "schedulerKey"))) return null;
       const referenced = backupSchedulerWarnings({cards:{[key]:next}, fsrsSchedulers:local.fsrsSchedulers}).keys;
       const localConfigs = local.fsrsSchedulers, remoteConfigs = remote.fsrsSchedulers, oldConfigs = before.fsrsSchedulers;
       if (referenced.size && (!deltaMap(localConfigs) || !deltaMap(remoteConfigs))) return null;

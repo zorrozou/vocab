@@ -5,6 +5,7 @@ import SwiftUI
 /// 会话内瞬态（不持久化）：今日队列与进度
 struct Session {
     let id = UUID()
+    var voluntary = false
     var day = DayUtil.today()
     enum Item: Equatable {
         case review(word: String)
@@ -1122,7 +1123,11 @@ final class AppState {
     /// 对同一张卡按原始发生时间重算；只有全部成功才替换卡片，失败保留完整队列。
     private func replayPendingFsrs(word: String) async -> Bool {
         if let auth, auth.accountId == nil { return false }
-        guard let pending = S.cards[word]?.pendingFsrs, !pending.events.isEmpty else { return true }
+        guard var pending = S.cards[word]?.pendingFsrs, !pending.events.isEmpty else { return true }
+        let originalPending = pending
+        if pending.base.legacy_last_review_day == nil, S.cards[word]?.fsrs?.lastReview == nil, let last = pending.base.last_review, last.hasSuffix("T08:00:00Z"), S.log.contains(where: { $0.word == word && ["learn", "review"].contains($0.kind) && $0.d == String(last.prefix(10)) }) {
+            pending.base.legacy_last_review_day = pending.base.legacy_last_review_day ?? String(last.prefix(10))
+        }
         let owner = slotKey, originalAuth = auth, token = auth?.token
         let result: FsrsResponse?
         var versions: [String: String] = [:]
@@ -1135,12 +1140,17 @@ final class AppState {
             }
         } catch {
             guard slotKey == owner, auth == originalAuth else { return false }
+            if (error as? APIError)?.statusCode == 422 {
+                S.cards[word]?.fsrsIssue = error.localizedDescription
+                fsrsReplayError = error.localizedDescription
+                saveLocal()
+            }
             if error.localizedDescription.contains("FSRS 参数") || error.localizedDescription.contains("FSRS 算法") {
                 fsrsReplayError = error.localizedDescription
             }
             return false
         }
-        guard slotKey == owner, auth == originalAuth, var card = S.cards[word], card.pendingFsrs == pending,
+        guard slotKey == owner, auth == originalAuth, var card = S.cards[word], card.pendingFsrs == originalPending,
               let result else { return false }
         for (key, config) in configs {
             if let existing = S.fsrsSchedulers?[key], existing != config {
@@ -1167,18 +1177,16 @@ final class AppState {
         for event in pending.events where !applied.contains(event.id) { applied.append(event.id) }
         card.appliedFsrs = applied
         card.pendingFsrs = nil
+        card.schedulerKey = result.schedulerKey ?? card.schedulerKey
+        card.fsrsIssue = nil
         S.cards[word] = card
         return true
     }
 
-    private func scheduleFsrs(word: String, body: APIClient.FsrsIn, rating: Int) async {
+    private func scheduleFsrs(word: String, body: APIClient.FsrsIn, rating: Int, event: PendingFsrsEvent) async {
         guard var card = S.cards[word] else { return }
         if card.pendingFsrs == nil { card.pendingFsrs = PendingFsrs(base: body, events: []) }
         if card.fsrsHistory == nil { card.fsrsHistory = card.pendingFsrs; card.fsrsReplayVersions = [:] }
-        let lastDate = (card.fsrsHistory?.events.last ?? card.pendingFsrs?.events.last)
-            .flatMap { DayUtil.parseISO($0.at) } ?? .distantPast
-        let eventDate = max(Date(), lastDate.addingTimeInterval(0.001))
-        let event = PendingFsrsEvent(id: UUID().uuidString.lowercased(), rating: rating, at: DayUtil.isoString(eventDate))
         card.pendingFsrs?.events.append(event)
         card.fsrsHistory?.events.append(event)
         StudyEngine.applyProvisionalSchedule(&card, configurations: S.fsrsSchedulers ?? [:])
@@ -1194,7 +1202,7 @@ final class AppState {
         for word in S.cards.keys.sorted() where S.cards[word]?.pendingFsrs != nil {
             let replayed = await replayPendingFsrs(word: word)
             guard auth == owner, slotKey == slot else { return }
-            if !replayed { break }
+            if !replayed { if S.cards[word]?.fsrsIssue != nil { changed = true; continue }; break }
             changed = true
         }
         if !S.cards.values.contains(where: { $0.pendingFsrs != nil }) { fsrsReplayError = "" }
@@ -1203,8 +1211,9 @@ final class AppState {
 
     private func admitStudy(word: String, kind: String) -> Bool {
         let localIssue = StudyEngine.studyAdmissionIssue(S, word: word, kind: kind, sessionDay: session.day, day: DayUtil.today())
-        let alreadyCounted = kind == "review" && StudyEngine.completedDailyWords(S.log, day: DayUtil.today()).contains(word)
-        let sharedIssue: String? = auth == nil || alreadyCounted || cachedSharedPlan()?.permits(word: word, kind: kind) == true
+        let sharedKind = ["drill", "acceptance"].contains(kind) ? "review" : kind
+        let alreadyCounted = sharedKind == "review" && StudyEngine.completedDailyWords(S.log, day: DayUtil.today()).contains(word)
+        let sharedIssue: String? = auth == nil || alreadyCounted || cachedSharedPlan()?.permits(word: word, kind: sharedKind) == true
             ? nil : "请联网重新加载今日任务，领取两端共享的单词名额。"
         guard let issue = localIssue ?? sharedIssue else { return true }
         studyNotice = issue
@@ -1283,8 +1292,7 @@ final class AppState {
         if adoptPool { for item in plan.items where !seen.contains(item.word) && !completed.contains(item.word) && !item.completed && slots > 0 {
             if let card = S.cards[item.word] {
                 let due = DayUtil.parseISO(StudyEngine.scheduledDue(card, configurations: S.fsrsSchedulers ?? [:])) ?? .distantFuture
-                let earlier = item.kind == "review" && StudyEngine.delayedReviewEvidence(S, word: item.word)
-                if !StudyEngine.isMastered(card), due <= Date() || earlier { append(.review(word: item.word)) }
+                if !StudyEngine.isMastered(card), due <= Date() { append(.review(word: item.word)) }
             } else if item.new_word && newSlots > 0 || item.probe_word && probes > 0 {
                 var detail = try await api.lexiconWord(item.word)
                 guard active(), S == state, DayUtil.today() == day else { throw APIError(message: "进度或日期已变化，请重新加载今日任务。") }
@@ -1300,7 +1308,7 @@ final class AppState {
         guard admitStudy(word: word, kind: "learn") else { return }
         let today = DayUtil.today()
         let lastReview = lastReviewDate(word)
-        let c = S.cards[word] ?? CardState(stage: 1, due: DayUtil.addDays(today, 1) + "T12:00:00Z",
+        var c = S.cards[word] ?? CardState(stage: 1, due: DayUtil.addDays(today, 1) + "T12:00:00Z",
                                            lt: 0, pos: pos, fsrs: nil)
         let isNewCard = S.cards[word] == nil
         let body = StudyEngine.fsrsBody(for: S.cards[word], rating: rating, isNewCard: isNewCard, lastReview: lastReview)
@@ -1308,11 +1316,13 @@ final class AppState {
         // 只有真正完成学习才消耗待补学词/推进顺序游标；中途退出不丢词、不跳词。
         S.pendingNew.removeAll { $0.word == word }
         if !fromPending { S.pointer = max(S.pointer, pos + 1) }
-        S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "learn", ts: DayUtil.isoString(Date())))
+        let event = StudyEngine.recordStudyGrade(&c, rating: rating, kind: "learn", verified: false)
+        S.cards[word] = c
+        S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "learn", ts: event.at, eventId: event.id))
         StudyEngine.recordKnowledge(&S, word: word, pos: pos, ok: rating != 1)
         // Seeing the definition and self-rating changes this word's memory,
         // not the estimate of knowledge of hundreds of unseen words.
-        await scheduleFsrs(word: word, body: body, rating: rating)
+        await scheduleFsrs(word: word, body: body, rating: rating, event: event)
     }
 
     /// 水平观测（v1.2）：每次反馈都是对词汇量后验的一次带权观测
@@ -1322,10 +1332,10 @@ final class AppState {
         return StudyEngine.posteriorUpdate(&S, rank: pos, resp: known ? 1 : 0, weight: weight, guess: guess, evidenceKey: evidenceKey)
     }
 
-    func review(word: String, rating: Int, allowUndo: Bool = false, acceptance: Bool = false, verifiedPos: Int? = nil) async {
+    func review(word: String, rating: Int, allowUndo: Bool = false, acceptance: Bool = false, verifiedPos: Int? = nil, guessed: Bool = false) async {
         guard var c = S.cards[word] else { return }
         if acceptance, S.quizProgressDay == DayUtil.today(), (S.quizCompleted ?? []).contains(word) { return }
-        guard admitStudy(word: word, kind: "review") else { return }
+        guard admitStudy(word: word, kind: acceptance ? "acceptance" : session.voluntary ? "drill" : "review") else { return }
         let delayedEvidence = !acceptance && StudyEngine.delayedReviewEvidence(S, word: word)
         let preStab = c.fsrs?.stability ?? Double(c.stage.flatMap { StudyEngine.ladderInterval[$0] } ?? 0)   // v1.3：成熟度用答前稳定度
         let lastReview = lastReviewDate(word)   // 在写今日日志前取上一次记录
@@ -1338,7 +1348,9 @@ final class AppState {
             undoSnapshot = nil
         }
         if let verifiedPos, verifiedPos > 0 { c.pos = verifiedPos }
-        S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "review", ts: DayUtil.isoString(Date())))
+        let event = StudyEngine.recordStudyGrade(&c, rating: rating, kind: acceptance ? "acceptance" : session.voluntary ? "drill" : "review", verified: (verifiedPos ?? 0) > 0 && rating >= 3, guessed: guessed)
+        S.cards[word] = c
+        S.log.append(LogEntry(d: today, word: word, rating: rating, kind: "review", ts: event.at, eventId: event.id))
         StudyEngine.recordKnowledge(&S, word: word, pos: c.pos ?? S.pointer, ok: rating != 1)
         let body = StudyEngine.fsrsBody(for: c, rating: rating, isNewCard: false, lastReview: lastReview)
         if rating == 1 { c.lt = 0 }
@@ -1375,7 +1387,7 @@ final class AppState {
             let learned = Set(S.log.filter { $0.d == today && $0.kind == "learn" }.map(\.word))
             if learned.isSubset(of: Set(S.quizCompleted ?? [])) { S.quizDay = today }
         }
-        await scheduleFsrs(word: word, body: body, rating: rating)
+        await scheduleFsrs(word: word, body: body, rating: rating, event: event)
     }
 
     /// 每天首次 buildQueue 时运行：T=后验均值。
@@ -1534,6 +1546,7 @@ final class AppState {
         guard active(), S == state else { return 0 }
         guard !queue.isEmpty else { studyNotice = "今日共享名额已预留，请回首页继续今日任务。"; return 0 }
         session = Session()
+        session.voluntary = true
         session.queue = queue
         route = .session
         return queue.count
@@ -1571,6 +1584,11 @@ final class AppState {
         guard active() else { return false }
         trackLevelDaily()
         S.pendingNew = S.pendingNew.filter { S.cards[$0.word] == nil }
+        if let metadata = try? await api.lexiconMetadata() {
+            guard active() else { return false }
+            if S.newSupply?.revision != metadata.lexicon_revision { S.newSupply = nil }
+        }
+        guard active() else { return false }
         let planState = S, planDay = DayUtil.today()
         let now = Date()
         let cap = S.settings.dailyCap
@@ -1578,26 +1596,18 @@ final class AppState {
         let remaining = StudyEngine.remainingDailyCapacity(S.log, day: DayUtil.today(), cap: cap)
 
         let due = S.cards
-            .filter { (!completed.contains($0.key) || StudyEngine.needsSameDayReview($0.value, configurations: S.fsrsSchedulers ?? [:])) && !StudyEngine.isMastered($0.value) && (DayUtil.parseISO(StudyEngine.scheduledDue($0.value, configurations: S.fsrsSchedulers ?? [:])) ?? .distantFuture) <= now }
-            .sorted { (DayUtil.parseISO(StudyEngine.scheduledDue($0.value, configurations: S.fsrsSchedulers ?? [:])) ?? .distantFuture) < (DayUtil.parseISO(StudyEngine.scheduledDue($1.value, configurations: S.fsrsSchedulers ?? [:])) ?? .distantFuture) }
+            .filter { (!completed.contains($0.key) || StudyEngine.needsSameDayReview($0.value, configurations: S.fsrsSchedulers ?? [:])) && !StudyEngine.isMastered($0.value) && $0.value.fsrsIssue == nil && (DayUtil.parseISO(StudyEngine.scheduledDue($0.value, configurations: S.fsrsSchedulers ?? [:])) ?? .distantFuture) <= now }
+            .sorted {
+                let a = DayUtil.parseISO(StudyEngine.scheduledDue($0.value, configurations: S.fsrsSchedulers ?? [:])) ?? .distantFuture
+                let b = DayUtil.parseISO(StudyEngine.scheduledDue($1.value, configurations: S.fsrsSchedulers ?? [:])) ?? .distantFuture
+                return a == b ? $0.key < $1.key : a < b
+            }
             .map { $0.key }
-        // 提前巩固位：1~7 天前碰过、FSRS 未到期、未掌握，P=(1−R)×0.5，≤5 个
-        let earlyPool = S.cards.filter { pair in
-            let (w, c) = pair
-            guard !completed.contains(w) else { return false }
-            guard c.pendingFsrs?.events.isEmpty != false, !StudyEngine.isMastered(c), let dueD = DayUtil.parseISO(c.due), dueD > now else { return false }
-            guard let last = lastReviewDate(w) else { return false }
-            guard let lastD = DayUtil.localNoon(last) else { return false }
-            let elapsed = now.timeIntervalSince(lastD) / 86400
-            guard elapsed >= 1, elapsed <= 7 else { return false }
-            let r = StudyEngine.retrievability(c, elapsedDays: elapsed)
-            return Double.random(in: 0..<1) < (1 - r) * 0.5
-        }.map { $0.key }
         // 新词：pendingNew 优先，然后按 pointer 顺序取
         // 先为用户设置的新词目标留位；词库不足时剩余容量交给复习。
         let newPerDay = S.settings.newPerDay
         let learnedToday = Set(S.log.filter { $0.kind == "learn" && $0.d == DayUtil.today() }.map(\.word)).count
-        let nNew = min(max(0, newPerDay - learnedToday), remaining)
+        let nNew = min(max(0, newPerDay - learnedToday), remaining, StudyEngine.availableNewCount(S))
         var news: [NewWord] = []
         // 只清理已经入卡的旧待学项；本次选中但未学完的词必须留在 pendingNew。
         for w in S.pendingNew where news.count < nNew {
@@ -1608,12 +1618,16 @@ final class AppState {
             }
         }
         var cursor = S.pointer
-        var exhausted = false
+        var exhausted = StudyEngine.availableNewCount(S) == 0
+        var supplyWords = Set<String>(), lexiconRevision: String?, scanEnd = S.pointer
         var scanBatch = min(30, nNew + 2)
         while news.count < nNew && !exhausted {
             let want = min(30, max(scanBatch, nNew - news.count + 2))
             let result = try? await api.lexiconAt(pos: cursor, n: want)
             guard active(), let r = result else { return false }
+            lexiconRevision = r.lexicon_revision ?? lexiconRevision
+            for w in r.words where S.cards[w.word] == nil { supplyWords.insert(w.word) }
+            scanEnd = r.nextPos ?? (r.words.map(\.pos).max().map { $0 + 1 } ?? cursor)
             for w in r.words {
                 if news.count >= nNew { break }
                 if !completed.contains(w.word) && S.cards[w.word] == nil && !news.contains(where: { $0.word == w.word }) {
@@ -1643,16 +1657,13 @@ final class AppState {
         let repeats = due.filter { completed.contains($0) }
         let freshDue = due.filter { !completed.contains($0) }
         let reviews = repeats + freshDue.prefix(max(0, remaining - news.count))
-        let reviewSet = Set(reviews)
-        let early = earlyPool.filter { !reviewSet.contains($0) }
-            .prefix(min(5, max(0, remaining - news.count - reviews.count)))
-        let reviewsAll = reviews + early
+        let reviewsAll = reviews
         // Lower-band checks use the shared probe pool; never replace a reserved
         // new word with an untested random word from a skipped range.
 
         // v1.3 每日主动探测：3 个探测词（2 个后验上方区 / 1 个下方区）随机混入复习段，
         // 4选1 形式与复习测验无差别——用户无感知，证据全额（与定级同级 weight 1.0）
-        let probeBudget = max(0, remaining - reviewsAll.count - news.count)
+        let probeBudget = max(0, remaining - reviewsAll.filter { !completed.contains($0) }.count - news.count)
         let probes = probeBudget > 0 ? Array((await pickProbes(reviewWords: reviewsAll, news: news, active: active)).prefix(probeBudget)) : []
         guard active() else { return false }
         var revBlock: [Session.Item] = reviewsAll.map { .review(word: $0) }
@@ -1677,6 +1688,7 @@ final class AppState {
             return false
         }
         studyNotice = ""
+        if exhausted, let revision = lexiconRevision { S.newSupply = NewSupply(revision: revision, start: S.pointer, end: scanEnd, available: supplyWords.sorted()) }
         session = Session()
         session.day = planDay
         session.queue = queue

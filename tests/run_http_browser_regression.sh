@@ -7,8 +7,19 @@ python_cmd="${VOCAB_PYTHON:-python3}"
 node_cmd="${VOCAB_NODE:-node}"
 log="$(mktemp "${TMPDIR:-/tmp}/vocab-http-fixture.XXXXXX")"
 fixture_pid=""
+stop_fixture() {
+  [[ -n "$fixture_pid" ]] || return 0
+  kill "$fixture_pid" 2>/dev/null || true
+  for _ in $(seq 1 50); do
+    kill -0 "$fixture_pid" 2>/dev/null || break
+    sleep 0.1
+  done
+  kill -KILL "$fixture_pid" 2>/dev/null || true
+  wait "$fixture_pid" 2>/dev/null || true
+  fixture_pid=""
+}
 cleanup() {
-  if [[ -n "$fixture_pid" ]]; then kill "$fixture_pid" 2>/dev/null || true; wait "$fixture_pid" 2>/dev/null || true; fi
+  stop_fixture
   "$python_cmd" - "$log" <<'PY'
 import sys
 from pathlib import Path
@@ -37,6 +48,10 @@ scenarios=(
   server/test_state_capacity.py
   server/test_state_segments_http.py
   server/test_state_revision_http.py
+  server/test_study_policy.py
+  server/test_study_policy_migration.py
+  server/test_mastery_evidence_http.py
+  tests/fsrs_input_validation_http.py
   server/test_daily_study_http.py
   server/test_study_evidence_http.py
   server/test_fsrs_legacy_origin_http.py
@@ -56,6 +71,8 @@ scenarios=(
   server/test_oversize_stored_snapshot_http.py
   server/test_snapshot_retry_http.py
   server/test_snapshot_limits_http.py
+  tests/web_study_policy_check.cjs
+  tests/web_core_policy_e2e.cjs
   tests/web_study_e2e.cjs
   tests/web_daily_budget_e2e.cjs
   tests/web_daily_budget_sync_e2e.cjs
@@ -198,7 +215,5 @@ for scenario in "${scenarios[@]}"; do
   if [[ "$ready" != 1 ]]; then cat "$log" >&2; echo 'Isolated fixture did not start.' >&2; exit 1; fi
   echo "Running $scenario"
   if [[ "$scenario" == *.py ]]; then "$python_cmd" "$scenario"; else "$node_cmd" "$scenario"; fi
-  kill "$fixture_pid"
-  wait "$fixture_pid" || true
-  fixture_pid=""
+  stop_fixture
 done

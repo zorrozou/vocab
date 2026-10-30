@@ -76,12 +76,41 @@ struct PendingFsrs: Codable, Equatable {
     var schedulerKey: String? = nil
 }
 
+struct StudyGrade: Codable, Equatable {
+    var at: String
+    var day: String
+    var rating: Int
+    var kind: String
+    var verified: Bool
+    var priorAt: String? = nil
+    var guessed: Bool? = nil
+    var hinted: Bool? = nil
+}
+
+struct StudyEvidence: Codable, Equatable {
+    var version: Int = 1
+    var originAt: String
+    var legacy: Bool
+    var originIds: [String]
+    var events: [String: StudyGrade] = [:]
+}
+
+struct NewSupply: Codable, Equatable {
+    var revision: String
+    var start: Int
+    var end: Int
+    var available: [String]
+}
+
 struct CardState: Codable, Equatable {
     var stage: Int?           // 旧阶梯遗留（1~6），FSRS 化后删除
     var due: String?          // ISO8601 字符串
     var lt: Int?              // lapse today 计数（旧逻辑保留）
     var pos: Int?             // 词在学习序列中的位置
     var fsrs: FsrsState?
+    var studyEvidence: StudyEvidence? = nil
+    var fsrsIssue: String? = nil
+    var schedulerKey: String? = nil
     var easyStreak: Int?      // 连续“熟练”次数；其他评分清零，不改变 FSRS 间隔
     var pendingFsrs: PendingFsrs? = nil // 离线评分在服务器可用时按原时间重放
     var appliedFsrs: [String]? = nil   // 已应用事件 ID，避免旧设备恢复已处理的队列
@@ -346,6 +375,7 @@ struct LearningState: Codable, Equatable {
     var probeCount: Int = 0
     var posterior: [Double]?
     var posteriorHistory: PosteriorHistory?
+    var newSupply: NewSupply? = nil
     var pendingNew: [NewWord] = []
     var cards: [String: CardState] = [:]
     var log: [LogEntry] = []
@@ -391,6 +421,7 @@ struct LearningState: Codable, Equatable {
         probeCount = try c.decodeIfPresent(Int.self, forKey: .probeCount) ?? 0
         posterior = try c.decodeIfPresent([Double].self, forKey: .posterior)
         posteriorHistory = try c.decodeIfPresent(PosteriorHistory.self, forKey: .posteriorHistory)
+        newSupply = try c.decodeIfPresent(NewSupply.self, forKey: .newSupply)
         pendingNew = try c.decodeIfPresent([NewWord].self, forKey: .pendingNew) ?? []
         cards = try c.decodeIfPresent([String: CardState].self, forKey: .cards) ?? [:]
         log = try c.decodeIfPresent([LogEntry].self, forKey: .log) ?? []
@@ -586,6 +617,8 @@ struct PlacementSet: Codable {
 }
 
 struct LexiconAtResponse: Codable {
+    var lexicon_revision: String? = nil
+    var remaining_positions: Int? = nil
     var from: Int
     var words: [NewWord]
     var nextPos: Int?

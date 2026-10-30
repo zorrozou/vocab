@@ -11,7 +11,7 @@ const base=(process.env.VOCAB_TEST_BASE||'http://127.0.0.1:18765').replace(/\/$/
    S.log=[{d:'2026-10-08',word:'legacy',rating:3,kind:'review'},{d:'2026-10-28',word:'legacy',rating:3,kind:'exposure'}];showStats();
    return {bins:[...document.querySelectorAll('[data-retention-index]')].map(e=>Number(e.lastElementChild.textContent)),note:document.querySelector('#retention-note').textContent};
   });
-  assert.deepEqual(result.bins,[0,0,2,0,0]);assert(result.note.includes('1 词使用日期近似')&&result.note.includes('2 词缺少可用信息'));
+  assert.deepEqual(result.bins,[0,0,2,0,0]);assert(result.note.includes('2 词使用日期或参数近似')&&result.note.includes('2 词缺少可用信息'));
   console.log('PASS browser retention display uses review time, labels approximations and pending data');
  }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1);});

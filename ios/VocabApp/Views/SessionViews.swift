@@ -418,6 +418,10 @@ struct ReviewQuizView: View {
     }
 
     private func loadQuiz() async {
+        if StudyEngine.studyAdmissionIssue(app.S, word: word, kind: app.session.voluntary ? "drill" : "review", sessionDay: app.session.day, day: DayUtil.today()) != nil {
+            app.session.idx += 1
+            return
+        }
         let pos = card?.pos ?? app.S.pointer
         // 成熟卡（稳定度≥14 天）走反向回想；其余正向再认
         let mature = (card?.fsrs?.stability ?? 0) >= 14
@@ -629,6 +633,7 @@ struct AnswerCardView: View {
                                  onBusy: { shadowMsg = $0 },
                                  onResult: handleShadow)
                 if quizOk {
+                    GhostButton(title: "猜对了／其实没记住") { rate(1) }
                     HStack(spacing: 10) {
                         GhostButton(title: "困难") { rate(2) }
                         GhostButton(title: "记得") { rate(3) }
@@ -736,7 +741,7 @@ struct AnswerCardView: View {
         rated = true
         let owner = app.auth, sessionID = app.session.id, index = app.session.idx, generation = app.routeGeneration
         Task {
-            await app.review(word: word, rating: r, verifiedPos: verifiedPos)
+            await app.review(word: word, rating: r, verifiedPos: verifiedPos, guessed: quizOk && r == 1)
             guard app.auth == owner else { return }
             if app.session.id == sessionID {
                 app.session.reviewedToday += 1
@@ -863,16 +868,24 @@ struct DoneView: View {
         StudyEngine.remainingDailyCapacity(app.S.log, day: DayUtil.today(), cap: app.S.settings.dailyCap)
     }
     private func todayCount(_ kind: String) -> Int {
-        Set(app.S.log.filter { $0.d == DayUtil.today() && $0.kind == kind }.map(\.word)).count
+        let c = StudyEngine.dailyCounts(app.S, day: DayUtil.today())
+        return kind == "learn" ? c.learn : kind == "review" ? c.review : c.probe
     }
 
     var body: some View {
+        TimelineView(.periodic(from: .now, by: 1)) { context in
+            let _ = context.date
+            content
+        }
+    }
+
+    private var content: some View {
         VStack(spacing: 0) {
             TopBar()
             ScrollView {
                 VStack(spacing: 14) {
                     Card {
-                        Text(remainingCapacity == 0 && dailyPlan.dueAvailable > 0 ? "今日已达上限" : "本轮学习完成 🎉").font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
+                        Text(remainingCapacity == 0 && dailyPlan.dueAvailable > 0 && dailyPlan.duePlanned == 0 ? "今日已达上限" : StudyEngine.availableNewCount(app.S) == 0 && dailyPlan.duePlanned == 0 ? "词库已学完 · 复习仍按间隔安排" : "本轮学习完成 🎉").font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
                         HStack(spacing: 0) {
                             StatCell(number: "\(todayCount("review"))", label: "今日复习")
                                 .accessibilityElement(children: .combine)
@@ -880,6 +893,9 @@ struct DoneView: View {
                             StatCell(number: "\(todayCount("learn"))", label: "今日新词")
                             StatCell(number: "\(app.S.streak)", label: "连续天数")
                         }
+                        let counts = StudyEngine.dailyCounts(app.S, day: DayUtil.today())
+                        Text("今日 \(counts.total) / \(app.S.settings.dailyCap) 个不同词 · \(counts.attempts) 次练习")
+                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
                         if todayCount("probe") > 0 {
                             Text("每日上限还计入 \(todayCount("probe")) 个水平探测词；同一单词当天只计一次。")
                                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
@@ -893,11 +909,7 @@ struct DoneView: View {
                             let shown = app.S.track?.shownLevel ?? levelForPos(max(1, app.S.frontier))
                             Text("预计认识 \(StudyEngine.expectedKnown(app.S)) 词（\(levelDisplayName(shown))），明天从 \(app.S.pointer) 附近发词")
                                 .font(.system(size: 12)).foregroundStyle(Theme.accentLight)
-                            let todayLog = app.S.log.filter { $0.d == DayUtil.today() && ["learn", "review", "probe"].contains($0.kind) }
-                            let ups = todayLog.filter { $0.rating >= 2 }.count
-                            let downs = todayLog.filter { $0.rating == 1 }.count
-                            let probes = todayLog.filter { $0.kind == "probe" }.count
-                            Text("今日水平证据：↑\(ups) / ↓\(downs)（含 \(probes) 次水平探测）")
+                            Text("今日有效水平证据：" + StudyEngine.effectiveEvidenceSummary(app.S, day: DayUtil.today()))
                                 .font(.system(size: 12)).foregroundStyle(Theme.muted)
                             if let note = app.S.track?.lastNote, !note.isEmpty {
                                 Text(note).font(.system(size: 12)).foregroundStyle(Theme.muted)

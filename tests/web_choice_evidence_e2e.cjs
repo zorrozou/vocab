@@ -10,7 +10,7 @@ const {chromium}=require('playwright'),assert=require('assert');
    answerProbe({word:'pear',pos:2390,reverse:false},false);
    for(const [stability,verifiedPos] of [[30,2389],[1,2389],[30,null]]){
     S.log=[];S.posterior=GRID.map((_,i)=>i===0?1:0);
-    S.cards.apple={pos:2389,fsrs:{state:2,stability,difficulty:5,lastReview:'2020-01-01T00:00:00Z'}};
+    S.cards.apple={pos:2389,due:"2000-01-01T00:00:00Z",fsrs:{state:2,stability,difficulty:5,lastReview:'2020-01-01T00:00:00Z'}};
     await review('apple',3,false,false,verifiedPos);
    }
    return observedGuesses;

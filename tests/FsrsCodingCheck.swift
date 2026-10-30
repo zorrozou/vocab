@@ -11,6 +11,7 @@ enum APIClient {
         var rating: Int = 3
         var step: Int? = nil
         var last_review: String? = nil
+        var legacy_last_review_day: String? = nil
         var now: String? = nil
         var deterministic: Bool? = nil
         var scheduler_key: String? = nil
@@ -120,7 +121,7 @@ struct FsrsCodingCheck {
             LogEntry(d: "2026-10-05", word: "legacy", rating: 3, kind: "learn"),
             LogEntry(d: "2026-10-28", word: "legacy", rating: 3, kind: "exposure")]
         let retention = StudyEngine.retentionSummary(retentionCards, log: retentionLog, now: DayUtil.parseISO("2026-10-28T12:00:00Z")!)
-        precondition(retention.counts == [0, 0, 2, 1, 0] && retention.approximate == 1 && retention.unknown == 5)
+        precondition(retention.counts == [0, 0, 2, 1, 0] && retention.approximate == 3 && retention.unknown == 5)
         var backfill = LearningState()
         backfill.lastDay = "2026-10-25"; backfill.streak = 4
         StudyEngine.recordStudyDay(&backfill, day: "2026-10-24")

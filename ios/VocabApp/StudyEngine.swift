@@ -13,6 +13,7 @@ enum StudyEngine {
     static func referencedBackupSchedulers(_ state: LearningState) -> Set<String> {
         var referenced = Set<String>()
         for card in state.cards.values {
+            if let key = card.schedulerKey, !key.isEmpty { referenced.insert(key) }
             for key in (card.fsrsReplayVersions ?? [:]).values where !key.isEmpty { referenced.insert(key) }
             for group in [card.fsrsHistory, card.pendingFsrs].compactMap({ $0 }) {
                 if let key = group.schedulerKey, !key.isEmpty { referenced.insert(key) }
@@ -106,6 +107,10 @@ enum StudyEngine {
     /// Recheck at the synchronous start of grading: a queue can outlive its day,
     /// settings, or the progress pulled from another device.
     static func studyAdmissionIssue(_ s: LearningState, word: String, kind: String, sessionDay: String?, day: String) -> String? {
+        if ["review", "drill", "acceptance"].contains(kind), s.cards[word]?.fsrsIssue != nil { return "这个词的调度记录需要修复，原评分已保留，请先同步其他进度。" }
+        if kind == "review" {
+            guard let c = s.cards[word], !isMastered(c), let due = DayUtil.parseISO(scheduledDue(c, configurations: s.fsrsSchedulers ?? [:])), due <= Date() else { return "这个词的复习安排已更新，请重新加载今日任务。" }
+        }
         if let sessionDay, sessionDay != day { return "日期已变化，进度已保留。请重新开始今天的任务。" }
         if kind == "learn", s.cards[word] != nil { return "这个词的学习进度已更新，请重新加载今天的任务。" }
         if kind == "probe", s.cards[word] != nil || s.log.contains(where:{ $0.d == day && $0.kind == "probe" && $0.word == word }) {
@@ -138,11 +143,20 @@ enum StudyEngine {
 
     /// Recent retained learning and review records with repeated difficulty.
     /// Placement, probes and speech are different signals and do not count.
-    static func stubbornWords(_ s: LearningState) -> [(String, Int)] {
-        var counts: [String: Int] = [:]
-        for entry in s.log where (entry.kind == "learn" || entry.kind == "review") && entry.rating <= 2 {
-            counts[entry.word, default: 0] += 1
+    static func recentDifficult(_ s: LearningState, day: String) -> [String: (again: Int, hard: Int)] {
+        let since = DayUtil.addDays(day, -13)
+        var result: [String: (again: Int, hard: Int)] = [:], seen = Set<String>()
+        func add(_ word: String, _ id: String, _ d: String, _ rating: Int) {
+            guard d >= since, d <= day, rating <= 2, seen.insert(id).inserted else { return }
+            var row = result[word] ?? (0,0)
+            if rating == 1 { row.again += 1 } else { row.hard += 1 }; result[word] = row
         }
+        for (word,card) in s.cards { for (id,e) in card.studyEvidence?.events ?? [:] where e.kind != "unknown" { add(word,id,e.day,e.rating) } }
+        for (index,e) in s.log.enumerated() where ["learn","review"].contains(e.kind) { add(e.word,e.eventId ?? "legacy-\(index)",e.d,e.rating) }
+        return result
+    }
+    static func stubbornWords(_ s: LearningState) -> [(String, Int)] {
+        let counts = recentDifficult(s, day: DayUtil.today()).mapValues { $0.again + $0.hard }
         var result: [(String, Int)] = []
         for (word, count) in counts {
             guard count >= 2, let card = s.cards[word], !isMastered(card) else { continue }
@@ -165,17 +179,33 @@ enum StudyEngine {
     }
 
     /// 与建队列相同的去重、新词目标及每日容量规则；不预估随机探测和提前复习。
+    static func availableNewCount(_ s: LearningState) -> Int {
+        guard let supply = s.newSupply, s.pointer >= supply.start, s.pointer <= supply.end else { return Int.max }
+        return Set((supply.available + s.pendingNew.map(\.word)).filter { s.cards[$0] == nil }).count
+    }
+    struct DailyCounts {
+        var learn: Int, review: Int, probe: Int, attempts: Int
+        var total: Int { learn + review + probe }
+    }
+    static func dailyCounts(_ s: LearningState, day: String) -> DailyCounts {
+        let entries = s.log.filter { $0.d == day && ["learn", "review", "probe"].contains($0.kind) }
+        let news = Set(entries.filter { $0.kind == "learn" }.map(\.word))
+        let reviews = Set(entries.filter { $0.kind == "review" && !news.contains($0.word) }.map(\.word))
+        let probes = Set(entries.filter { $0.kind == "probe" && !news.contains($0.word) && !reviews.contains($0.word) }.map(\.word))
+        return DailyCounts(learn: news.count, review: reviews.count, probe: probes.count, attempts: entries.count)
+    }
+
     static func dailyPlanSummary(_ s: LearningState, day: String, now: Date) -> DailyPlanSummary {
         let completed = completedDailyWords(s.log, day: day)
         let remaining = max(0, s.settings.dailyCap - completed.count)
         let dueCards = s.cards.filter { word, card in
-            !isMastered(card) && (!completed.contains(word) || needsSameDayReview(card, configurations: s.fsrsSchedulers ?? [:])) &&
+            !isMastered(card) && card.fsrsIssue == nil && (!completed.contains(word) || needsSameDayReview(card, configurations: s.fsrsSchedulers ?? [:])) &&
                 (DayUtil.parseISO(scheduledDue(card, configurations: s.fsrsSchedulers ?? [:])) ?? .distantFuture) <= now
         }
         let repeats = dueCards.filter { completed.contains($0.key) }.count
         let due = dueCards.count
         let learned = Set(s.log.filter { $0.d == day && $0.kind == "learn" }.map(\.word)).count
-        let plannedNew = min(max(0, s.settings.newPerDay - learned), remaining)
+        let plannedNew = min(max(0, s.settings.newPerDay - learned), remaining, availableNewCount(s))
         let plannedDue = repeats + min(due - repeats, max(0, remaining - plannedNew))
         return DailyPlanSummary(completed: completed.count, dueAvailable: due, duePlanned: plannedDue, newPlanned: plannedNew, repeatPlanned: repeats)
     }
@@ -205,7 +235,7 @@ enum StudyEngine {
     /// Estimate with the default curve, using exact FSRS review times when
     /// present. Legacy day-only learning/review logs are approximate; sentence
     /// exposure and unprocessed offline ratings are not a confirmed review.
-    static func retentionSummary(_ cards: [String: CardState], log: [LogEntry], now: Date) -> RetentionSummary {
+    static func retentionSummary(_ cards: [String: CardState], log: [LogEntry], now: Date, configurations: [String: FsrsSchedulerConfig] = [:]) -> RetentionSummary {
         var latest: [String: Date] = [:]
         for event in log where event.kind == "learn" || event.kind == "review" {
             guard event.d.count == 10, DayUtil.parseISO(event.d) != nil,
@@ -225,8 +255,8 @@ enum StudyEngine {
                 else { timestamp = nil }
             } else { timestamp = latest[word] }
             guard let timestamp, now.timeIntervalSince1970.isFinite, timestamp <= now else { result.unknown += 1; continue }
-            if recorded == nil || recorded?.count == 10 { result.approximate += 1 }
-            let r = retrievability(card, elapsedDays: now.timeIntervalSince(timestamp) / 86400)
+            if recorded == nil || recorded?.count == 10 || schedulerConfiguration(card, configurations: configurations) == nil { result.approximate += 1 }
+            let r = retrievability(card, elapsedDays: now.timeIntervalSince(timestamp) / 86400, configurations: configurations)
             result.counts[r >= 0.95 ? 0 : r >= 0.9 ? 1 : r >= 0.8 ? 2 : r >= 0.6 ? 3 : 4] += 1
         }
         return result
@@ -344,10 +374,55 @@ enum StudyEngine {
         s.streak = streak
     }
 
+    static func legacyMastered(_ c: CardState) -> Bool {
+        if c.pendingFsrs?.events.contains(where: { !(2...4).contains($0.rating) }) == true { return false }
+        guard let f = c.fsrs else { return c.stage == 6 }
+        return f.state == 2 && f.stability.isFinite && f.stability >= 180 && (1...10).contains(f.difficulty)
+    }
+
+    static func anchorStudyEvidence(_ c: inout CardState, now: Date = Date()) {
+        guard c.studyEvidence == nil else { return }
+        let ids = (c.fsrsHistory?.events ?? []).map(\.id) + (c.pendingFsrs?.events ?? []).map(\.id) + (c.appliedFsrs ?? [])
+        c.studyEvidence = StudyEvidence(originAt: DayUtil.isoString(now), legacy: legacyMastered(c), originIds: Array(Set(ids)).sorted())
+    }
+
+    static func recordStudyGrade(_ c: inout CardState, rating: Int, kind: String, verified: Bool, guessed: Bool = false, hinted: Bool = false) -> PendingFsrsEvent {
+        anchorStudyEvidence(&c)
+        let prior = lastPractice(c)
+        let at = max(Date(), prior?.addingTimeInterval(0.001) ?? .distantPast)
+        let event = PendingFsrsEvent(id: UUID().uuidString.lowercased(), rating: rating, at: DayUtil.isoString(at))
+        c.studyEvidence?.events[event.id] = StudyGrade(at: event.at, day: DayUtil.today(), rating: rating, kind: kind, verified: verified && !guessed && !hinted, priorAt: prior.map(DayUtil.isoString), guessed: guessed, hinted: hinted)
+        return event
+    }
+
+    static func lastPractice(_ c: CardState) -> Date? {
+        let stamps = [c.fsrs?.lastReview] + (c.fsrsHistory?.events ?? []).map { Optional($0.at) } +
+            (c.pendingFsrs?.events ?? []).map { Optional($0.at) } + (c.studyEvidence?.events.values.map { Optional($0.at) } ?? [])
+        return stamps.compactMap { DayUtil.parseISO($0) }.max()
+    }
+
     static func isMastered(_ c: CardState) -> Bool {
-        if c.pendingFsrs?.events.isEmpty == false { return false }
-        if [1, 3].contains(c.fsrs?.state ?? 0) { return false }
-        return c.stage == 6 || (c.fsrs.map { $0.stability >= 180 } ?? false)
+        guard let e = c.studyEvidence else { return legacyMastered(c) }
+        guard e.version == 1 else { return false }
+        if let f = c.fsrs {
+            guard f.state == 2, f.stability.isFinite, f.stability > 0, (1...10).contains(f.difficulty) else { return false }
+        } else if c.stage != 6 || !e.legacy { return false }
+        let pending = Set((c.pendingFsrs?.events ?? []).map(\.id))
+        var days = Set<String>(), lastGap = 0.0, forgotten = false, previous: Date?
+        for (id, item) in e.events.sorted(by: { a, b in
+            let x = DayUtil.parseISO(a.value.at) ?? .distantPast, y = DayUtil.parseISO(b.value.at) ?? .distantPast
+            return x == y ? a.key < b.key : x < y
+        }) {
+            guard let at = DayUtil.parseISO(item.at) else { return false }
+            let prior = [previous, DayUtil.parseISO(item.priorAt)].compactMap { $0 }.max()
+            let gap = prior.map { at.timeIntervalSince($0) } ?? 0
+            previous = at
+            if item.rating == 1 { forgotten = true; days.removeAll(); lastGap = 0 }
+            else if !pending.contains(id), ["review", "drill"].contains(item.kind), item.verified, item.guessed != true, item.hinted != true, item.rating >= 3, gap >= 86400 {
+                days.insert(item.day); lastGap = gap
+            }
+        }
+        return (e.legacy && !forgotten) || ((c.fsrs?.stability ?? 0) >= 180 && days.count >= 3 && lastGap >= 7 * 86400)
     }
 
     // MARK: FSRS 请求构造（新卡 / FSRS 卡 / 旧阶梯卡迁移）
@@ -360,7 +435,7 @@ enum StudyEngine {
             return APIClient.FsrsIn(is_new: false, state: fsrs.state,
                                     stability: fsrs.stability, difficulty: fsrs.difficulty,
                                     due: fsrs.due, rating: rating, step: fsrs.step,
-                                    last_review: fsrs.lastReview ?? lr)
+                                    last_review: fsrs.lastReview ?? lr, legacy_last_review_day: fsrs.lastReview == nil ? lastReview : nil)
         }
         if isNewCard {
             return APIClient.FsrsIn(is_new: true, rating: rating)
@@ -371,7 +446,7 @@ enum StudyEngine {
         if let d = c?.due, d.count == 10 { due = d + "T12:00:00Z" }
         return APIClient.FsrsIn(is_new: false, state: 2,
                                 stability: legacyStab[stage] ?? 1, difficulty: 5,
-                                due: due, rating: rating, last_review: lr)
+                                due: due, rating: rating, last_review: lr, legacy_last_review_day: lastReview)
     }
 
     /// 应用服务端 FSRS 结果到卡片
@@ -456,7 +531,7 @@ enum StudyEngine {
     }
 
     static func scheduledDue(_ c: CardState, configurations: [String: FsrsSchedulerConfig] = [:]) -> String? {
-        provisionalSchedule(c, configurations: configurations)?.due ?? c.due
+        provisionalSchedule(c, configurations: configurations)?.due ?? c.due ?? c.fsrs?.due
     }
 
     static func needsSameDayReview(_ c: CardState, configurations: [String: FsrsSchedulerConfig] = [:]) -> Bool {
@@ -469,9 +544,15 @@ enum StudyEngine {
 
     // MARK: 记忆保持率（FSRS-6 遗忘曲线幂律近似）
 
-    static func retrievability(_ c: CardState, elapsedDays t: Double) -> Double {
-        let s0 = c.fsrs.map { max(0.2, $0.stability) } ?? 2
-        return pow(1 + 0.9805 * t / s0, -0.1542)
+    static func schedulerConfiguration(_ c: CardState, configurations: [String: FsrsSchedulerConfig]) -> FsrsSchedulerConfig? {
+        let key = c.schedulerKey ?? c.fsrsHistory?.events.last?.schedulerKey ?? c.fsrsHistory?.schedulerKey
+        return key.flatMap { configurations[$0] }
+    }
+    static func retrievability(_ c: CardState, elapsedDays t: Double, configurations: [String: FsrsSchedulerConfig] = [:]) -> Double {
+        let config = schedulerConfiguration(c, configurations: configurations)
+        let decay = config?.parameters.count == 21 ? config!.parameters[20] : 0.1542
+        guard let stability = c.fsrs?.stability, stability.isFinite, stability > 0, decay.isFinite, decay > 0 else { return .nan }
+        return pow(1 + (pow(0.9, -1 / decay) - 1) * max(0, floor(t)) / stability, -decay)
     }
 
     // MARK: 定级（网格贝叶斯，0~12000 步长 250）
@@ -493,6 +574,28 @@ enum StudyEngine {
             return v
         }
         return sum > 0 ? out.map { $0 / sum } : out
+    }
+
+    static func effectiveEvidenceSummary(_ s: LearningState, day: String) -> String {
+        let events = s.posteriorHistory?.events ?? [:]
+        var degree = events.mapValues { $0.parents.count }, children: [String: [String]] = [:]
+        for (id,e) in events { for parent in e.parents { children[parent,default:[]].append(id) } }
+        var ready = events.keys.filter { degree[$0] == 0 }, seen = Set<String>(), used: [String: Double] = [:]
+        var up = 0, down = 0, weight = 0.0
+        while !ready.isEmpty {
+            ready.sort { events[$0]!.day == events[$1]!.day ? $0 < $1 : events[$0]!.day < events[$1]!.day }
+            let id = ready.removeFirst(), e = events[id]!
+            var w = e.kind == "update" ? (e.weight ?? 0) : 0
+            let pieces = id.split(separator: "_")
+            if pieces.count == 4, ["p1", "r1"].contains(String(pieces[0])), pieces[2].count == 32, pieces[3].count == 32 {
+                let scope = pieces.prefix(3).joined(separator: ":")
+                if !seen.insert(scope).inserted { w = 0 }
+                else if pieces[0] == "r1" { w = min(w, max(0, 1.5 - (used[e.day] ?? 0))); used[e.day,default:0] += w }
+            }
+            if w > 1e-12, e.day == day { if e.resp == 1 { up += 1 } else { down += 1 }; weight += w }
+            for child in children[id] ?? [] { degree[child,default:0] -= 1; if degree[child] == 0 { ready.append(child) } }
+        }
+        return "↑\(up) / ↓\(down)（可追溯权重 \(String(format: "%.2f", weight))）"
     }
 
     static func passiveEvidenceWeight(_ s: LearningState, day: String) -> Double {

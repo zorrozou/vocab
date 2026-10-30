@@ -1,0 +1,775 @@
+[
+  {
+    "name": "legacy valid mastery retained",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z"
+    },
+    "mastered": true
+  },
+  {
+    "name": "old stage cannot override FSRS",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 1,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "stage": 6
+    },
+    "mastered": false
+  },
+  {
+    "name": "invalid state rejected",
+    "card": {
+      "fsrs": {
+        "state": 9,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z"
+    },
+    "mastered": false
+  },
+  {
+    "name": "new model value alone insufficient",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": false,
+        "events": {}
+      }
+    },
+    "mastered": false
+  },
+  {
+    "name": "three spaced successes graduate",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": false,
+        "events": {
+          "1": {
+            "at": "2026-03-02T08:00:00Z",
+            "priorAt": "2026-03-01T08:00:00Z",
+            "day": "2026-03-02",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "2": {
+            "at": "2026-03-09T08:00:00Z",
+            "priorAt": "2026-03-02T08:00:00Z",
+            "day": "2026-03-09",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "3": {
+            "at": "2026-03-16T08:00:00Z",
+            "priorAt": "2026-03-09T08:00:00Z",
+            "day": "2026-03-16",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          }
+        }
+      }
+    },
+    "mastered": true
+  },
+  {
+    "name": "immediate acceptance excluded",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": false,
+        "events": {
+          "1": {
+            "at": "2026-03-02T08:00:00Z",
+            "priorAt": "2026-03-01T08:00:00Z",
+            "day": "2026-03-02",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "2": {
+            "at": "2026-03-09T08:00:00Z",
+            "priorAt": "2026-03-02T08:00:00Z",
+            "day": "2026-03-09",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "3": {
+            "at": "2026-03-16T08:00:00Z",
+            "priorAt": "2026-03-09T08:00:00Z",
+            "day": "2026-03-16",
+            "rating": 3,
+            "kind": "acceptance",
+            "verified": true
+          }
+        }
+      }
+    },
+    "mastered": false
+  },
+  {
+    "name": "unverified self rating excluded",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": false,
+        "events": {
+          "1": {
+            "at": "2026-03-02T08:00:00Z",
+            "priorAt": "2026-03-01T08:00:00Z",
+            "day": "2026-03-02",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "2": {
+            "at": "2026-03-09T08:00:00Z",
+            "priorAt": "2026-03-02T08:00:00Z",
+            "day": "2026-03-09",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "3": {
+            "at": "2026-03-16T08:00:00Z",
+            "priorAt": "2026-03-09T08:00:00Z",
+            "day": "2026-03-16",
+            "rating": 3,
+            "kind": "review",
+            "verified": false
+          }
+        }
+      }
+    },
+    "mastered": false
+  },
+  {
+    "name": "last interval under seven days",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": false,
+        "events": {
+          "1": {
+            "at": "2026-03-02T08:00:00Z",
+            "priorAt": "2026-03-01T08:00:00Z",
+            "day": "2026-03-02",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "2": {
+            "at": "2026-03-09T08:00:00Z",
+            "priorAt": "2026-03-02T08:00:00Z",
+            "day": "2026-03-09",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "3": {
+            "at": "2026-03-16T08:00:00Z",
+            "priorAt": "2026-03-15T08:00:00Z",
+            "day": "2026-03-16",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          }
+        }
+      }
+    },
+    "mastered": false
+  },
+  {
+    "name": "not three distinct days",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": false,
+        "events": {
+          "1": {
+            "at": "2026-03-02T08:00:00Z",
+            "priorAt": "2026-03-01T08:00:00Z",
+            "day": "2026-03-02",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "2": {
+            "at": "2026-03-09T08:00:00Z",
+            "priorAt": "2026-03-02T08:00:00Z",
+            "day": "2026-03-09",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "3": {
+            "at": "2026-03-16T08:00:00Z",
+            "priorAt": "2026-03-09T08:00:00Z",
+            "day": "2026-03-09",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          }
+        }
+      }
+    },
+    "mastered": false
+  },
+  {
+    "name": "difficulty not recall",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": false,
+        "events": {
+          "1": {
+            "at": "2026-03-02T08:00:00Z",
+            "priorAt": "2026-03-01T08:00:00Z",
+            "day": "2026-03-02",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "2": {
+            "at": "2026-03-09T08:00:00Z",
+            "priorAt": "2026-03-02T08:00:00Z",
+            "day": "2026-03-09",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "3": {
+            "at": "2026-03-16T08:00:00Z",
+            "priorAt": "2026-03-09T08:00:00Z",
+            "day": "2026-03-16",
+            "rating": 2,
+            "kind": "review",
+            "verified": true
+          }
+        }
+      }
+    },
+    "mastered": false
+  },
+  {
+    "name": "pending final success cannot graduate",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": false,
+        "events": {
+          "1": {
+            "at": "2026-03-02T08:00:00Z",
+            "priorAt": "2026-03-01T08:00:00Z",
+            "day": "2026-03-02",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "2": {
+            "at": "2026-03-09T08:00:00Z",
+            "priorAt": "2026-03-02T08:00:00Z",
+            "day": "2026-03-09",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "3": {
+            "at": "2026-03-16T08:00:00Z",
+            "priorAt": "2026-03-09T08:00:00Z",
+            "day": "2026-03-16",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          }
+        }
+      },
+      "pendingFsrs": {
+        "base": {
+          "is_new": false,
+          "state": 2,
+          "stability": 180,
+          "difficulty": 5
+        },
+        "events": [
+          {
+            "id": "3",
+            "at": "2026-03-16T08:00:00Z",
+            "rating": 3
+          }
+        ]
+      }
+    },
+    "mastered": false
+  },
+  {
+    "name": "forgetting revokes mastery",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": false,
+        "events": {
+          "1": {
+            "at": "2026-03-02T08:00:00Z",
+            "priorAt": "2026-03-01T08:00:00Z",
+            "day": "2026-03-02",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "2": {
+            "at": "2026-03-09T08:00:00Z",
+            "priorAt": "2026-03-02T08:00:00Z",
+            "day": "2026-03-09",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "3": {
+            "at": "2026-03-16T08:00:00Z",
+            "priorAt": "2026-03-09T08:00:00Z",
+            "day": "2026-03-16",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "4": {
+            "at": "2026-03-17T08:00:00Z",
+            "day": "2026-03-17",
+            "rating": 1,
+            "kind": "review",
+            "verified": false
+          }
+        }
+      }
+    },
+    "mastered": false
+  },
+  {
+    "name": "pending success preserves old mastery",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": true,
+        "events": {
+          "x": {
+            "at": "2026-03-17T08:00:00Z",
+            "day": "2026-03-17",
+            "rating": 3,
+            "kind": "drill",
+            "verified": true
+          }
+        }
+      },
+      "pendingFsrs": {
+        "base": {
+          "is_new": false,
+          "state": 2,
+          "stability": 180,
+          "difficulty": 5
+        },
+        "events": [
+          {
+            "id": "x",
+            "at": "2026-03-17T08:00:00Z",
+            "rating": 3
+          }
+        ]
+      }
+    },
+    "mastered": true
+  },
+  {
+    "name": "offline Again revokes old mastery",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": true,
+        "events": {
+          "x": {
+            "at": "2026-03-17T08:00:00Z",
+            "day": "2026-03-17",
+            "rating": 1,
+            "kind": "drill",
+            "verified": true
+          }
+        }
+      },
+      "pendingFsrs": {
+        "base": {
+          "is_new": false,
+          "state": 2,
+          "stability": 180,
+          "difficulty": 5
+        },
+        "events": [
+          {
+            "id": "x",
+            "at": "2026-03-17T08:00:00Z",
+            "rating": 1
+          }
+        ]
+      }
+    },
+    "mastered": false
+  },
+  {
+    "name": "other device practice shortens actual interval",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": false,
+        "events": {
+          "1": {
+            "at": "2026-03-02T08:00:00Z",
+            "priorAt": "2026-03-01T08:00:00Z",
+            "day": "2026-03-02",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "2": {
+            "at": "2026-03-09T08:00:00Z",
+            "priorAt": "2026-03-02T08:00:00Z",
+            "day": "2026-03-09",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "3": {
+            "at": "2026-03-16T08:00:00Z",
+            "priorAt": "2026-03-09T08:00:00Z",
+            "day": "2026-03-16",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "between": {
+            "at": "2026-03-14T08:00:00Z",
+            "day": "2026-03-14",
+            "rating": 3,
+            "kind": "unknown",
+            "verified": false
+          }
+        }
+      }
+    },
+    "mastered": false
+  },
+  {
+    "name": "legacy success never silently requeues a familiar word",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 60,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": true,
+        "events": {
+          "x": {
+            "at": "2026-03-17T08:00:00Z",
+            "day": "2026-03-17",
+            "rating": 3,
+            "kind": "drill",
+            "verified": true
+          }
+        }
+      },
+      "pendingFsrs": {
+        "base": {
+          "is_new": false,
+          "state": 2,
+          "stability": 180,
+          "difficulty": 5
+        },
+        "events": [
+          {
+            "id": "x",
+            "at": "2026-03-17T08:00:00Z",
+            "rating": 3
+          }
+        ]
+      }
+    },
+    "mastered": true
+  },
+  {
+    "name": "guessed success excluded",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": false,
+        "events": {
+          "1": {
+            "at": "2026-03-02T08:00:00Z",
+            "priorAt": "2026-03-01T08:00:00Z",
+            "day": "2026-03-02",
+            "rating": 3,
+            "kind": "review",
+            "verified": true,
+            "guessed": true
+          },
+          "2": {
+            "at": "2026-03-09T08:00:00Z",
+            "priorAt": "2026-03-02T08:00:00Z",
+            "day": "2026-03-09",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "3": {
+            "at": "2026-03-16T08:00:00Z",
+            "priorAt": "2026-03-09T08:00:00Z",
+            "day": "2026-03-16",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          }
+        }
+      }
+    },
+    "mastered": false
+  },
+  {
+    "name": "hinted success excluded",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "studyEvidence": {
+        "version": 1,
+        "originAt": "2026-01-01T00:00:00Z",
+        "originIds": [],
+        "legacy": false,
+        "events": {
+          "1": {
+            "at": "2026-03-02T08:00:00Z",
+            "priorAt": "2026-03-01T08:00:00Z",
+            "day": "2026-03-02",
+            "rating": 3,
+            "kind": "review",
+            "verified": true,
+            "hinted": true
+          },
+          "2": {
+            "at": "2026-03-09T08:00:00Z",
+            "priorAt": "2026-03-02T08:00:00Z",
+            "day": "2026-03-09",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          },
+          "3": {
+            "at": "2026-03-16T08:00:00Z",
+            "priorAt": "2026-03-09T08:00:00Z",
+            "day": "2026-03-16",
+            "rating": 3,
+            "kind": "review",
+            "verified": true
+          }
+        }
+      }
+    },
+    "mastered": false
+  },
+  {
+    "name": "legacy migration with pending 3",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "pendingFsrs": {
+        "base": {
+          "is_new": false,
+          "state": 2,
+          "stability": 200,
+          "difficulty": 5,
+          "rating": 3
+        },
+        "events": [
+          {
+            "id": "new-offline",
+            "rating": 3,
+            "at": "2026-03-17T08:00:00Z"
+          }
+        ]
+      }
+    },
+    "mastered": true
+  },
+  {
+    "name": "legacy migration with pending 1",
+    "card": {
+      "fsrs": {
+        "state": 2,
+        "stability": 180,
+        "difficulty": 5,
+        "due": "2027-01-01T00:00:00Z"
+      },
+      "due": "2027-01-01T00:00:00Z",
+      "pendingFsrs": {
+        "base": {
+          "is_new": false,
+          "state": 2,
+          "stability": 200,
+          "difficulty": 5,
+          "rating": 1
+        },
+        "events": [
+          {
+            "id": "new-offline",
+            "rating": 1,
+            "at": "2026-03-17T08:00:00Z"
+          }
+        ]
+      }
+    },
+    "mastered": false
+  }
+]

@@ -884,6 +884,17 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
             state['cards']['apple']['pendingFsrs'] = {'base':base,'events':[{'id':uuid.uuid4().hex,'rating':1,'at':at}]}
         put_state(state, token)
         fixture.update(fsrs_offline=bool(body.get('offline')), fixed_quiz=True, personal_offline=False)
+        if body.get('short_steps'):
+            from fsrs import Scheduler
+            from datetime import timedelta
+            original = main.fsrs_for_user
+            from app.auth import identity_by_token
+            identity = identity_by_token(token)
+            def short_scheduler(uid, account_id=None):
+                if identity and account_id == identity[1]:
+                    return Scheduler(relearning_steps=[timedelta(seconds=8)],enable_fuzzing=False)
+                return original(uid,account_id)
+            main.fsrs_for_user = short_scheduler
         return account
 
     @main.app.post('/api/v1/__ui_fixture/queue-case')

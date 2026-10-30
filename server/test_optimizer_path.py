@@ -15,20 +15,23 @@ module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
 assert module.DEFAULT_DATA == root / 'server/data'
 now = datetime.now(timezone.utc)
 start = now - timedelta(days=60)
-events = [{'id':f'event-{i}', 'rating':(i % 4)+1,
-           'at':(start + timedelta(hours=i)).isoformat()} for i in range(400)]
-card = {'fsrsHistory':{'events':events}, 'appliedFsrs':[e['id'] for e in events]}
-state = {'cards':{'apple':card}, 'log':[{'d':'2020-01-01','word':'apple','kind':'review','rating':3}] * 500}
-assert len(module.collect_reviews(state, {'apple':7}, now)) == 400
-duplicate = {'cards':{'apple':{'fsrsHistory':{'events':events + [events[0]]}, 'appliedFsrs':card['appliedFsrs']}}}
-assert len(module.collect_reviews(duplicate, {'apple':7}, now)) == 400
-assert not module.collect_reviews({'cards':{'apple':{**card,'pendingFsrs':{'events':[events[-1]]}}}}, {'apple':7}, now)
-invalid = {'cards':{'apple':{'fsrsHistory':{'events':[{'id':'x','at':'2020-01-01','rating':3}]},'appliedFsrs':['x']}}}
-assert not module.collect_reviews(invalid, {'apple':7}, now)
-conflict = {'cards':{'apple':card, 'pear':{'fsrsHistory':{'events':[events[0]]},'appliedFsrs':[events[0]['id']]}}}
-try: module.collect_reviews(conflict, {'apple':7,'pear':8}, now)
-except ValueError: pass
-else: raise AssertionError('conflicting IDs accepted')
+cards = {}
+for n in range(20):
+    events = [{'id':f'{n}-{i}','rating':1 if (n+i)%5==0 else 3,'at':(start+timedelta(days=i*2,minutes=n)).isoformat()} for i in range(21)]
+    cards[f'word{n}'] = {'fsrsHistory':{'base':{'is_new':True},'events':events},'appliedFsrs':[e['id'] for e in events]}
+state = {'cards':cards}
+word2id = {w:i+1 for i,w in enumerate(cards)}
+reviews = module.collect_reviews(state, word2id, now)
+assert len(reviews)==420 and len(module.effective_reviews(reviews))==400
+assert module.split_reviews(reviews) is not None
+from copy import deepcopy
+partial=deepcopy(state);partial['cards']['word0']['fsrsHistory']['base']['is_new']=False
+assert len(module.effective_reviews(module.collect_reviews(partial,word2id,now)))==380
+hourly=[{'id':str(i),'rating':3,'at':(start+timedelta(hours=i)).isoformat()} for i in range(400)]
+hourly_state={'cards':{'word0':{'fsrsHistory':{'base':{'is_new':True},'events':hourly},'appliedFsrs':[e['id'] for e in hourly]}}}
+assert module.split_reviews(module.collect_reviews(hourly_state,word2id,now)) is None
+missing=deepcopy(state);missing['cards']['word0']['appliedFsrs'].pop()
+assert len(module.collect_reviews(missing,word2id,now))==399
 
 with tempfile.TemporaryDirectory(prefix='vocab-optimizer-') as tmp:
     data = Path(tmp); account = 'a' * 32; target = data / f'fsrs_optimal_account_{account}.json'
@@ -39,7 +42,7 @@ with tempfile.TemporaryDirectory(prefix='vocab-optimizer-') as tmp:
         db.execute('INSERT INTO account_state VALUES(?,?)', (account,json.dumps(state)))
     with sqlite3.connect(data / 'lexicon_v0.1.sqlite') as db:
         db.execute('CREATE TABLE lexicon_entry(id INTEGER,word TEXT)')
-        db.execute("INSERT INTO lexicon_entry VALUES(7,'apple')")
+        db.executemany("INSERT INTO lexicon_entry VALUES(?,?)",((i,w) for w,i in word2id.items()))
     captured = []
     class FakeOptimizer:
         def __init__(self, reviews): captured.extend(reviews)
@@ -47,17 +50,22 @@ with tempfile.TemporaryDirectory(prefix='vocab-optimizer-') as tmp:
     with patch.object(module, 'Optimizer', FakeOptimizer):
         assert module.optimize(7, data)
         result = json.loads(target.read_text())
-        assert result['review_count'] == 400 and len(captured) == 400
-        assert captured[0].review_datetime == datetime.fromisoformat(events[0]['at'])
-        assert captured[-1].review_datetime == datetime.fromisoformat(events[-1]['at'])
+        assert result['review_count'] == 400 and 320 <= len(captured) < 420
+        assert max(r.review_datetime for r in captured) < module.split_reviews(reviews)[1][0].review_datetime
         original = target.read_bytes()
+        for worse in ({'log_loss':.6,'brier':.2,'count':80}, {'log_loss':.5,'brier':.3,'count':80}):
+            with patch.object(module, 'validation_scores', side_effect=[{'log_loss':.5,'brier':.2,'count':80}, worse]):
+                assert not module.optimize(7, data)
+            assert target.read_bytes() == original
         with patch.object(module.os, 'replace', side_effect=OSError('simulated failure')):
             try: module.optimize(7, data)
             except OSError: pass
             else: raise AssertionError('failed write was not reported')
         assert target.read_bytes() == original
         assert not list(data.glob('.fsrs-optimal-*'))
-        state['cards']['apple']['appliedFsrs'].pop()
+        archives = list((data/'fsrs_parameter_history').glob('*.json'))
+        assert len(archives)==1 and archives[0].read_bytes()==original
+        state['cards']['word0']['appliedFsrs'].pop()
         with sqlite3.connect(data / 'users.db') as db:
             db.execute('UPDATE account_state SET state_json=?', (json.dumps(state),))
         assert not module.optimize(7, data)

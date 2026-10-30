@@ -37,7 +37,7 @@ struct StatsView: View {
                     }
                     Text("记忆保持率分布（FSRS）").font(.system(size: 16, weight: .bold))
                         .foregroundStyle(Theme.text).frame(maxWidth: .infinity, alignment: .leading)
-                    let retention = StudyEngine.retentionSummary(app.S.cards, log: app.S.log, now: Date())
+                    let retention = StudyEngine.retentionSummary(app.S.cards, log: app.S.log, now: Date(), configurations: app.S.fsrsSchedulers ?? [:])
                     let buckets = Array(zip(["≥95%", "90~95%", "80~90%", "60~80%", "<60%"], retention.counts))
                     let total = max(1, buckets.map(\.1).reduce(0, +))
                     ForEach(Array(buckets.enumerated()), id: \.offset) { index, b in
@@ -57,7 +57,7 @@ struct StatsView: View {
                         .accessibilityLabel("\(b.0)：\(b.1)词")
                         .accessibilityIdentifier("retention-bin-\(index)")
                     }
-                    Text("按默认曲线估算；\(retention.approximate) 词使用日期近似，\(retention.unknown) 词缺少可用信息或评分待同步，未计入分布。")
+                    Text("按对应参数曲线估算；\(retention.approximate) 词使用日期或参数近似，\(retention.unknown) 词缺少可用信息或评分待同步，未计入分布。")
                         .font(.system(size: 12)).foregroundStyle(Theme.muted)
                         .accessibilityIdentifier("retention-summary")
                     Text("未来 14 天负载预测").font(.system(size: 16, weight: .bold))
@@ -80,15 +80,18 @@ struct StatsView: View {
                     }
                     .frame(height: 84)
                     if !stubborn.isEmpty {
-                        Text("需要巩固（学习或复习至少 2 次困难／忘记）").font(.system(size: 16, weight: .bold))
+                        Text("需要巩固（最近 14 天至少 2 次困难／忘记）").font(.system(size: 16, weight: .bold))
                             .foregroundStyle(Theme.text).frame(maxWidth: .infinity, alignment: .leading)
-                        Text(stubborn.map { "\($0.0) ×\($0.1)" }.joined(separator: " · "))
+                        Text(stubborn.map { row in
+                            let counts = StudyEngine.recentDifficult(app.S, day: DayUtil.today())[row.0]
+                            return "\(row.0)：忘记 \(counts?.again ?? 0) · 困难 \(counts?.hard ?? 0)"
+                        }.joined(separator: " · "))
                             .font(.system(size: 14)).foregroundStyle(Theme.text)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                        Text("根据当前保留的学习记录统计，整理历史后数量可能变化。")
+                        Text("新评分按独立学习证据统计；旧记录仅统计仍可追溯的部分。")
                             .font(.system(size: 12)).foregroundStyle(Theme.muted)
                         // 顽固词特训：单独组队歼灭（纯复习队列，不进新词）
-                        PrimaryButton(title: "🔥 顽固词特训（\(drillWords.count) 词）", color: Theme.warn) {
+                        PrimaryButton(title: "最近 14 天薄弱词特训（\(drillWords.count) 词）", color: Theme.warn) {
                             guard !preparingDrill else { return }
                             preparingDrill = true; drillError = ""
                             let owner = app.auth, generation = app.routeGeneration
