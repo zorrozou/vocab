@@ -30,7 +30,7 @@ VOICE = os.environ.get("TTS_VOICE", "en-US-AriaNeural")
 BLACKLIST = {"n't"}  # 碎片词条，不作为学习目标
 BASE = os.environ.get("LLM_BASE_URL", "").rstrip("/")
 KEY = os.environ.get("LLM_API_KEY", "")
-MODEL = os.environ.get("LLM_MODEL", "glm-4.6")
+MODEL = os.environ.get("LLM_MODEL", "hy4-preview")
 
 db_lock = threading.Lock()
 counter_lock = threading.Lock()

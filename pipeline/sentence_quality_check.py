@@ -5,7 +5,7 @@ from collections import Counter
 
 BASE = os.environ.get("LLM_BASE_URL", "").rstrip("/")
 KEY = os.environ.get("LLM_API_KEY", "")
-MODEL = os.environ.get("LLM_MODEL", "glm-4.6")
+MODEL = os.environ.get("LLM_MODEL", "hy4-preview")
 N = int(os.environ.get("N", "210"))
 LEVEL = os.environ.get("LEVEL")   # 可选：只抽某个词库级别，便于分级复验
 random.seed(7)

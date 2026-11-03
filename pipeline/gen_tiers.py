@@ -19,7 +19,7 @@ MAX_RETRY = 3
 
 BASE = os.environ.get("LLM_BASE_URL", "").rstrip("/")
 KEY = os.environ.get("LLM_API_KEY", "")
-MODEL = os.environ.get("LLM_MODEL", "glm-4.6")
+MODEL = os.environ.get("LLM_MODEL", "hy4-preview")
 
 
 def call_llm(prompt):

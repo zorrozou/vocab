@@ -52,11 +52,11 @@ vocab-api (FastAPI, systemd)
    ├─ 个性化例句（客户端完成学习后提交，后台异步生成）
    └─ TTS 音频端点（edge-tts + 磁盘缓存 34,000+ 文件）
         │
-        ├─ 大模型：动态生成走 hy3（腾讯 lkeap）/ 批量脚本走 glm-5.2（智谱）
+        ├─ 大模型：在线生成与评审共用腾讯 Token Plan 接口和密钥，批量任务独立配置
         └─ 生产管线（pipeline/）：进程池批量生成例句、翻译、音频
 ```
 
-专用例句评审服务暂时不可用时，生成服务会用相同的六项标准另行评分，任一项低于 4 分的句子都需重写。同一天重新打开完成页时，相同的定制任务可取回已通过的例句，只补缺词。手动「换一句」仍会重新生成。
+腾讯混元生成例句后另发一次评审请求，六项评分中任一项低于 4 分都需重写。线上主模型为 `hy4-preview`，备用为 `hy3`，生成和评审共用同一 Token Plan 地址与密钥。2026-11-03 已实际验证两个模型，套餐目录本身不能证明密钥有调用权限。同一天重新打开完成页时，相同的定制任务可取回已通过的例句，只补缺词。手动「换一句」仍会重新生成。
 
 ## 目录
 
@@ -116,7 +116,7 @@ cd server
 
 ## 部署（摘要）
 
-1. `config/vocab-api.env.example` 复制为 `/etc/vocab-api/vocab-api.env`，填入 `LLM_API_KEY / LLM_BASE_URL / LLM_MODEL`；批量脚本配置放 `pipeline.env`
+1. `config/vocab-api.env.example` 复制为 `/etc/vocab-api/vocab-api.env`，设置腾讯 Token Plan 的密钥和主模型。仅将同一套餐接口已通过推理验证的备用模型填入 `LLM_FALLBACK_MODEL`。批量任务使用其授权范围内的独立凭证，放在 `pipeline.env`。
 2. 安装 `server/requirements.txt`，将词库和静态页面放入服务端 `data/` 与 `static/`；目录路径与 systemd unit 保持一致
 3. `systemctl enable --now vocab-api`（unit 见 config/）
 4. nginx 反代 `location /vocab/ → 127.0.0.1:8000/`（见 config/nginx-vocab.conf.snippet）；该示例状态上限为 8 MiB，更新线上配置后需测试并重载 nginx。正式部署还需配置有效 HTTPS 证书及客户端 HTTPS 地址。

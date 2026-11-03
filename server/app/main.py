@@ -39,9 +39,12 @@ STATIC_DIR = BASE_DIR / "static"
 PERSONAL_DB = DATA_DIR / "personal.db"
 LEXICON_DB = DATA_DIR / "lexicon_v0.1.sqlite"
 
-LLM_BASE = os.environ.get("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4").rstrip("/")
+LLM_BASE = os.environ.get("LLM_BASE_URL", "https://api.lkeap.cloud.tencent.com/plan/v3").rstrip("/")
 LLM_KEY = os.environ.get("LLM_API_KEY", "")
-LLM_MODEL = os.environ.get("LLM_MODEL", "glm-4.6")
+LLM_MODEL = os.environ.get("LLM_MODEL", "hy4-preview")
+LLM_FALLBACK_MODEL = os.environ.get("LLM_FALLBACK_MODEL", "").strip()
+HUNYUAN_MODELS = {"hy4-preview", "hy3"}
+_primary_retry_at = 0.0
 MAX_LEN = 12
 CONTENT_POS = ("n", "vt", "vi", "v", "a", "ad")
 
@@ -208,16 +211,8 @@ def init_db():
 
 
 def llm(prompt):
-    req = urllib.request.Request(
-        f"{LLM_BASE}/chat/completions",
-        data=json.dumps({"model": LLM_MODEL, "messages": [{"role": "user", "content": prompt}],
-                         "thinking": {"type": "disabled"}, "temperature": 0.7,
-                         **({"max_tokens": int(os.environ["LLM_MAX_TOKENS"])}
-                            if os.environ.get("LLM_MAX_TOKENS") else {})}).encode(),
-        headers={"Authorization": f"Bearer {LLM_KEY}", "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        # 保留多行：三档例句一次返回 A/B/C；单行提示也不受影响。
-        return json.loads(r.read())["choices"][0]["message"]["content"].strip().strip('"')
+    limit = os.environ.get("LLM_MAX_TOKENS")
+    return hunyuan_chat(prompt, temperature=0.7, max_tokens=int(limit) if limit else None).strip('"')
 
 
 def core_sense(wid, limit=50):
@@ -261,48 +256,63 @@ def assign_recalls(new_words, weak_words, seed):
     return {targets[i]: pool[i] for i in range(cap)}
 
 
-# 交叉评审模型配置（缺省用主模型；生产建议配成另一厂商以消除同模型盲区）
-JUDGE_BASE = os.environ.get("LLM_JUDGE_BASE_URL", LLM_BASE).rstrip("/")
-JUDGE_KEY = os.environ.get("LLM_JUDGE_API_KEY", LLM_KEY)
-JUDGE_MODEL = os.environ.get("LLM_JUDGE_MODEL", LLM_MODEL)
-
-
 class ReviewUnavailable(Exception):
-    """A review transport failure is different from a candidate receiving a low score."""
+    """An unavailable model is different from a sentence receiving a low score."""
 
 
-_judge_retry_at = 0.0
-
-
-def _request_review(prompt, base, key, model):
+def _request_chat(prompt, model, temperature, max_tokens):
+    body = {"model": model, "messages": [{"role": "user", "content": prompt}],
+            "thinking": {"type": "disabled"}, "temperature": temperature}
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
     req = urllib.request.Request(
-        f"{base}/chat/completions",
-        data=json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}],
-                         "thinking": {"type": "disabled"}, "temperature": 0.2}).encode(),
-        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
-    try:
-        with urllib.request.urlopen(req, timeout=120) as response:
-            return json.loads(response.read())["choices"][0]["message"]["content"].strip()
-    except HTTPError as exc:
-        raise ReviewUnavailable(f"HTTP {exc.code}") from exc
-    except (OSError, HTTPTransportError, ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
-        raise ReviewUnavailable(type(exc).__name__) from exc
+        f"{LLM_BASE}/chat/completions", data=json.dumps(body).encode(),
+        headers={"Authorization": f"Bearer {LLM_KEY}", "Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=120) as response:
+        return json.load(response)["choices"][0]["message"]["content"].strip()
+
+
+def hunyuan_chat(prompt, temperature, max_tokens=None):
+    global _primary_retry_at
+    if not LLM_KEY or LLM_BASE not in {
+        "https://tokenhub.tencentmaas.com/plan/v3",
+        "https://api.lkeap.cloud.tencent.com/plan/v3",
+    }:
+        raise ReviewUnavailable("腾讯混元接口或密钥未配置")
+    models = [LLM_MODEL]
+    if LLM_FALLBACK_MODEL and LLM_FALLBACK_MODEL != LLM_MODEL:
+        models.append(LLM_FALLBACK_MODEL)
+    if not HUNYUAN_MODELS.issuperset(models):
+        raise ReviewUnavailable("未配置可用的混元通用模型")
+    if len(models) > 1 and time.monotonic() < _primary_retry_at:
+        models.reverse()
+    for model in models:
+        try:
+            content = _request_chat(prompt, model, temperature, max_tokens)
+            if model == LLM_MODEL:
+                _primary_retry_at = 0.0
+            return content
+        except HTTPError as exc:
+            # 403002 is scoped to this individual model, unlike a bad shared key.
+            model_forbidden = False
+            if exc.code == 403:
+                try:
+                    model_forbidden = str(json.load(exc)["error"]["code"]) == "403002"
+                except (ValueError, KeyError, TypeError):
+                    pass
+            if not model_forbidden and exc.code not in (404, 408, 429, 500, 502, 503, 504):
+                raise ReviewUnavailable(f"HTTP {exc.code}") from exc
+            reason = f"HTTP {exc.code}"
+        except (OSError, HTTPTransportError, ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            reason = type(exc).__name__
+        logger.warning("腾讯混元暂不可用 model=%s reason=%s", model, reason)
+        if model == LLM_MODEL and len(models) > 1:
+            _primary_retry_at = time.monotonic() + 60
+    raise ReviewUnavailable("腾讯混元服务暂不可用")
 
 
 def judge_llm(prompt):
-    """Use a separate review request on the generation service only for an outage."""
-    global _judge_retry_at
-    primary = (JUDGE_BASE, JUDGE_KEY, JUDGE_MODEL)
-    fallback = (LLM_BASE, LLM_KEY, LLM_MODEL)
-    if primary == fallback:
-        return _request_review(prompt, *primary)
-    if time.monotonic() >= _judge_retry_at:
-        try:
-            return _request_review(prompt, *primary)
-        except ReviewUnavailable as exc:
-            _judge_retry_at = time.monotonic() + 300
-            logger.warning("例句评审服务不可用（%s），五分钟内使用备用评审", exc)
-    return _request_review(prompt, *fallback)
+    return hunyuan_chat(prompt, temperature=0.2)
 
 
 def quality_check(sentence, target, recall=None, translation=None):
@@ -402,6 +412,9 @@ def generate(device, date, weak_words, max_pos, job_id=None, job_lease=None, on_
                 out = llm(prompt + (f"\n上次需要修改：{err}" if err else ""))
                 cand, _, zh = out.partition("||")
                 cand, zh = cand.strip().strip('"'), zh.strip()
+            except ReviewUnavailable:
+                review_unavailable.set()
+                raise
             except Exception as exc:
                 err = "生成服务调用失败"
                 logger.warning("个性化生成服务调用失败：%s", type(exc).__name__)
@@ -512,8 +525,8 @@ def run_personal_job(job):
         try:
             generate(device, date, words, data.get("learned_max_pos", 300), job_id=job_id, job_lease=lease)
         except ReviewUnavailable as exc:
-            logger.warning("个性化任务评审暂不可用：%s", exc)
-            error = "例句评审服务暂不可用，请稍后重试"
+            logger.warning("个性化例句服务暂不可用：%s", exc)
+            error = "例句生成或评审服务暂不可用，请稍后重试"
         with sqlite3.connect(PERSONAL_DB, timeout=15) as conn:
             count = conn.execute("SELECT COUNT(*) FROM personal_job_sentences WHERE job_id=?", (job_id,)).fetchone()[0]
             if count == len(words):

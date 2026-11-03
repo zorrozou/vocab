@@ -13,29 +13,44 @@ from app import main as m
 
 from unittest.mock import patch
 from urllib.error import HTTPError
+from io import BytesIO
 
-# The production incident was an expired judging plan (HTTP 429). Both calls must
-# use the same rubric. A low or malformed review is final, never a failover trigger.
+# Generation and grading share the same Tencent key, endpoint and ordered models.
 real_quality = m.quality_check
 sample = ('I ate an apple after lunch.', 'apple', None, '午饭后我吃了一个苹果。')
-outage = HTTPError('https://review.invalid/', 429, 'limited', {}, None)
-with patch.object(m, 'JUDGE_BASE', 'https://review.invalid'), patch.object(m, 'LLM_BASE', 'https://generator.invalid'):
-    with patch('urllib.request.urlopen', side_effect=outage):
-        try:
-            m._request_review('review', m.JUDGE_BASE, '', 'reviewer')
-        except m.ReviewUnavailable as error:
-            assert str(error) == 'HTTP 429'
-        else:
-            raise AssertionError('outage must not become a low score')
-    m._judge_retry_at = 0
-    with patch.object(m, '_request_review', side_effect=[m.ReviewUnavailable('HTTP 429'), '5 5 4 5 5 5', '5 4 5 5 5 5']) as call:
-        assert real_quality(*sample) == real_quality(*sample) == 4
-        assert [args.args[1] for args in call.call_args_list] == [m.JUDGE_BASE, m.LLM_BASE, m.LLM_BASE]
-        assert len({args.args[0] for args in call.call_args_list}) == 1
+outage = HTTPError('https://api.lkeap.cloud.tencent.com/plan/v3', 429, 'limited', {}, None)
+with patch.object(m, 'LLM_BASE', 'https://api.lkeap.cloud.tencent.com/plan/v3'), patch.object(m, 'LLM_KEY', 'test'), \
+     patch.object(m, 'LLM_MODEL', 'hy4-preview'), patch.object(m, 'LLM_FALLBACK_MODEL', 'hy3'):
+    for invoke, reply, expected in [(lambda: m.llm('generate'), 'sample', 'sample'),
+                                    (lambda: real_quality(*sample), '5 5 4 5 5 5', 4)]:
+        m._primary_retry_at = 0
+        with patch.object(m, '_request_chat', side_effect=[outage, reply, reply]) as call:
+            assert invoke() == expected
+            first, second = [item.args for item in call.call_args_list]
+            assert (first[1], second[1]) == ('hy4-preview', 'hy3')
+            assert (first[0], first[2:]) == (second[0], second[2:])
+            assert invoke() == expected and call.call_args.args[1] == 'hy3'
+    m._primary_retry_at = 0
+    forbidden = HTTPError('test', 403, 'forbidden', {}, BytesIO(b'{"error":{"code":"403002"}}'))
+    with patch.object(m, '_request_chat', side_effect=[forbidden, 'sample']) as call:
+        assert m.llm('generate') == 'sample' and call.call_args.args[1] == 'hy3'
+    m._primary_retry_at = 0
     for scores, expected in [('5 5 3 5 5 5', 3), ('5', 0)]:
-        m._judge_retry_at = 0
-        with patch.object(m, '_request_review', return_value=scores) as call:
+        with patch.object(m, '_request_chat', return_value=scores) as call:
             assert real_quality(*sample) == expected and call.call_count == 1
+    with patch.object(m, '_request_chat', side_effect=HTTPError('test', 401, 'unauthorized', {}, None)) as call:
+        try:
+            m.llm('test')
+            raise AssertionError('invalid credential accepted')
+        except m.ReviewUnavailable:
+            assert call.call_count == 1
+    for setting, value in [('LLM_MODEL', 'glm-5.2'), ('LLM_BASE', 'https://other.invalid')]:
+        with patch.object(m, setting, value), patch.object(m, '_request_chat') as call:
+            try:
+                m.llm('test')
+                raise AssertionError('unexpected model or provider accepted')
+            except m.ReviewUnavailable:
+                call.assert_not_called()
 
 with tempfile.TemporaryDirectory() as tmp:
     m.PERSONAL_DB = Path(tmp) / 'personal.db'

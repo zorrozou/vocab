@@ -17,7 +17,7 @@ DB = ROOT / "data" / "lexicon_v0.1.sqlite"
 TIER_LEN = {1: 16, 2: 18, 3: 22}   # 打磨后允许略长（真实场景优先）
 BASE = os.environ.get("LLM_BASE_URL", "").rstrip("/")
 KEY = os.environ.get("LLM_API_KEY", "")
-MODEL = os.environ.get("LLM_MODEL", "glm-4.6")
+MODEL = os.environ.get("LLM_MODEL", "hy4-preview")
 
 db_lock = threading.Lock()
 counter = threading.Lock()

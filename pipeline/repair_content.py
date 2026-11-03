@@ -10,10 +10,10 @@ from app.content_quality import sentence_issue,valid_word,translation_issue
 from app.core_senses import OVERRIDES,apply_overrides
 
 def call(prompt):
-    base=os.environ.get('LLM_BASE_URL','https://open.bigmodel.cn/api/paas/v4').rstrip('/')
+    base=os.environ.get('LLM_BASE_URL','').rstrip('/')
     key=os.environ.get('LLM_API_KEY','')
     if not key: raise ValueError('LLM key unavailable')
-    body={'model':os.environ.get('LLM_MODEL','glm-4.6'),'messages':[{'role':'user','content':prompt}],
+    body={'model':os.environ.get('LLM_MODEL','hy4-preview'),'messages':[{'role':'user','content':prompt}],
           'thinking':{'type':'disabled'},'temperature':.2,'max_tokens':4500}
     req=urllib.request.Request(base+'/chat/completions',data=json.dumps(body).encode(),headers={'Content-Type':'application/json','Authorization':'Bearer '+key})
     for attempt in range(3):

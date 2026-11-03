@@ -21,7 +21,7 @@ TIER_DESC = {1: "基础句，3~10 个单词，简单句",
 
 BASE = os.environ.get("LLM_BASE_URL", "").rstrip("/")
 KEY = os.environ.get("LLM_API_KEY", "")
-MODEL = os.environ.get("LLM_MODEL", "glm-4.6")
+MODEL = os.environ.get("LLM_MODEL", "hy4-preview")
 
 db_lock = threading.Lock()
 counter_lock = threading.Lock()

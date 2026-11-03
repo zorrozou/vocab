@@ -32,7 +32,7 @@ Web 单页学习应用已功能完整上线（定级/学习/复习/FSRS/个性�
 | vocab-api | `~/vocab-api/`（systemd `vocab-api.service`，127.0.0.1:8000） | FastAPI；重启 `sudo systemctl restart vocab-api` |
 | 词库 | `~/vocab-api/data/lexicon_v0.1.sqlite` | 7.4MB，WAL 模式 |
 | 音频缓存 | **69,210 个 mp3（`data/tts_cache/`）** |
-| 模型配置 | `/etc/vocab-api/vocab-api.env`（服务）· `pipeline.env`（批量） | 服务=hy4-preview，评审/批量=glm-5.2；`run-pipeline` 包装命令注入批量配置 |
+| 模型配置 | `/etc/vocab-api/vocab-api.env`（服务）· `pipeline.env`（批量） | 在线生成与评审走同一腾讯 Token Plan 接口；`run-pipeline` 单独加载批量配置 |
 | nginx | `/etc/nginx/sites-enabled/default` | `location /vocab/` 反代；生产使用受信任的 IP 证书，`vocab-ip-cert-renew.timer` 自动续期。旧域名证书与 DNS 拦截问题不影响当前 IP 入口 |
 | 日志 | `journalctl -u vocab-api` · `~/vocab-api/*.log` | 量产日志在 vocab-api 根目录 |
 

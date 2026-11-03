@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""LLM 例句量产工厂（OpenAI 兼容接口：GLM / DeepSeek / Moonshot / Qwen …）
+"""腾讯混元例句量产工厂
 从环境变量读凭证，绝不打印：
   LLM_API_KEY   必填，API token
-  LLM_BASE_URL  默认 https://open.bigmodel.cn/api/paas/v4（GLM）
-  LLM_MODEL     默认 glm-4.6（按实际模型名设置，如 glm-5.2 / deepseek-chat …）
+  LLM_BASE_URL  批量服务的腾讯接口地址，须显式配置
+  LLM_MODEL     默认 hy4-preview
 用法:
   python llm_sentence_factory.py --start 1 --end 40          # 按学习序列位置量产
   python llm_sentence_factory.py --dry-run --start 1 --end 5 # 只打印 prompt 不调用
@@ -21,9 +21,9 @@ NEW_PER_DAY = 10
 MAX_LEN = 12
 MAX_RETRY = 3
 
-BASE = os.environ.get("LLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4").rstrip("/")
+BASE = os.environ.get("LLM_BASE_URL", "").rstrip("/")
 KEY = os.environ.get("LLM_API_KEY", "")
-MODEL = os.environ.get("LLM_MODEL", "glm-4.6")
+MODEL = os.environ.get("LLM_MODEL", "hy4-preview")
 
 
 def call_llm(messages, temperature=0.7):
