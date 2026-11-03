@@ -20,20 +20,20 @@ real_quality = m.quality_check
 sample = ('I ate an apple after lunch.', 'apple', None, '午饭后我吃了一个苹果。')
 outage = HTTPError('https://api.lkeap.cloud.tencent.com/plan/v3', 429, 'limited', {}, None)
 with patch.object(m, 'LLM_BASE', 'https://api.lkeap.cloud.tencent.com/plan/v3'), patch.object(m, 'LLM_KEY', 'test'), \
-     patch.object(m, 'LLM_MODEL', 'hy4-preview'), patch.object(m, 'LLM_FALLBACK_MODEL', 'hy3'):
+     patch.object(m, 'LLM_MODEL', 'hy4'), patch.object(m, 'LLM_FALLBACK_MODEL', 'hy4-preview'):
     for invoke, reply, expected in [(lambda: m.llm('generate'), 'sample', 'sample'),
                                     (lambda: real_quality(*sample), '5 5 4 5 5 5', 4)]:
         m._primary_retry_at = 0
         with patch.object(m, '_request_chat', side_effect=[outage, reply, reply]) as call:
             assert invoke() == expected
             first, second = [item.args for item in call.call_args_list]
-            assert (first[1], second[1]) == ('hy4-preview', 'hy3')
+            assert (first[1], second[1]) == ('hy4', 'hy4-preview')
             assert (first[0], first[2:]) == (second[0], second[2:])
-            assert invoke() == expected and call.call_args.args[1] == 'hy3'
+            assert invoke() == expected and call.call_args.args[1] == 'hy4-preview'
     m._primary_retry_at = 0
     forbidden = HTTPError('test', 403, 'forbidden', {}, BytesIO(b'{"error":{"code":"403002"}}'))
     with patch.object(m, '_request_chat', side_effect=[forbidden, 'sample']) as call:
-        assert m.llm('generate') == 'sample' and call.call_args.args[1] == 'hy3'
+        assert m.llm('generate') == 'sample' and call.call_args.args[1] == 'hy4-preview'
     m._primary_retry_at = 0
     for scores, expected in [('5 5 3 5 5 5', 3), ('5', 0)]:
         with patch.object(m, '_request_chat', return_value=scores) as call:

@@ -41,9 +41,9 @@ LEXICON_DB = DATA_DIR / "lexicon_v0.1.sqlite"
 
 LLM_BASE = os.environ.get("LLM_BASE_URL", "https://api.lkeap.cloud.tencent.com/plan/v3").rstrip("/")
 LLM_KEY = os.environ.get("LLM_API_KEY", "")
-LLM_MODEL = os.environ.get("LLM_MODEL", "hy4-preview")
+LLM_MODEL = os.environ.get("LLM_MODEL", "hy4")
 LLM_FALLBACK_MODEL = os.environ.get("LLM_FALLBACK_MODEL", "").strip()
-HUNYUAN_MODELS = {"hy4-preview", "hy3"}
+HUNYUAN_MODELS = {"hy4", "hy4-preview", "hy3"}
 _primary_retry_at = 0.0
 MAX_LEN = 12
 CONTENT_POS = ("n", "vt", "vi", "v", "a", "ad")
