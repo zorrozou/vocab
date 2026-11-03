@@ -20,6 +20,8 @@ from typing import Literal
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 import math
+from http.client import HTTPException as HTTPTransportError
+from urllib.error import HTTPError
 from functools import lru_cache
 
 from app.auth import identity_by_token, mount_auth, user_by_token
@@ -265,15 +267,42 @@ JUDGE_KEY = os.environ.get("LLM_JUDGE_API_KEY", LLM_KEY)
 JUDGE_MODEL = os.environ.get("LLM_JUDGE_MODEL", LLM_MODEL)
 
 
-def judge_llm(prompt):
-    """评审调用：走独立的评审模型配置（交叉模型，消除同模型自评盲区）"""
+class ReviewUnavailable(Exception):
+    """A review transport failure is different from a candidate receiving a low score."""
+
+
+_judge_retry_at = 0.0
+
+
+def _request_review(prompt, base, key, model):
     req = urllib.request.Request(
-        f"{JUDGE_BASE}/chat/completions",
-        data=json.dumps({"model": JUDGE_MODEL, "messages": [{"role": "user", "content": prompt}],
+        f"{base}/chat/completions",
+        data=json.dumps({"model": model, "messages": [{"role": "user", "content": prompt}],
                          "thinking": {"type": "disabled"}, "temperature": 0.2}).encode(),
-        headers={"Authorization": f"Bearer {JUDGE_KEY}", "Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=120) as r:
-        return json.loads(r.read())["choices"][0]["message"]["content"].strip()
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as response:
+            return json.loads(response.read())["choices"][0]["message"]["content"].strip()
+    except HTTPError as exc:
+        raise ReviewUnavailable(f"HTTP {exc.code}") from exc
+    except (OSError, HTTPTransportError, ValueError, KeyError, IndexError, TypeError, AttributeError) as exc:
+        raise ReviewUnavailable(type(exc).__name__) from exc
+
+
+def judge_llm(prompt):
+    """Use a separate review request on the generation service only for an outage."""
+    global _judge_retry_at
+    primary = (JUDGE_BASE, JUDGE_KEY, JUDGE_MODEL)
+    fallback = (LLM_BASE, LLM_KEY, LLM_MODEL)
+    if primary == fallback:
+        return _request_review(prompt, *primary)
+    if time.monotonic() >= _judge_retry_at:
+        try:
+            return _request_review(prompt, *primary)
+        except ReviewUnavailable as exc:
+            _judge_retry_at = time.monotonic() + 300
+            logger.warning("例句评审服务不可用（%s），五分钟内使用备用评审", exc)
+    return _request_review(prompt, *fallback)
 
 
 def quality_check(sentence, target, recall=None, translation=None):
@@ -287,8 +316,7 @@ def quality_check(sentence, target, recall=None, translation=None):
               "目标词实际使用义项与本课义项一致；中文完整准确对应英文且自然（不能遗漏否定、主客体或关键条件）。"
               "5=完全达标，4=可用于教学，3及以下=需要修改。\n"
               "只输出六个数字，以空格分隔，例如 5 5 4 5 5 5。不得省略维度或输出解释。")
-    try: return judge_score(judge_llm(prompt),6)
-    except Exception: return 0
+    return judge_score(judge_llm(prompt), 6)
 
 
 def validate_multi(cand, target, recalls, max_pos, max_len=16):
@@ -325,9 +353,8 @@ def validate_multi(cand, target, recalls, max_pos, max_len=16):
     return None
 
 
-def generate(device, date, weak_words, max_pos, job_id=None, job_lease=None):
-    """薄弱词定制：每个薄弱词配 1~2 个其他薄弱词，随机组合成真实场景句。
-    hy4 等慢速推理模型下按词并行（4 工人），整体耗时不随词数线性增长。"""
+def generate(device, date, weak_words, max_pos, job_id=None, job_lease=None, on_sentence=None):
+    """为薄弱词生成例句；搭配不自然时逐步减少复习词，只补齐本批缺失的目标词。"""
     import random as _r
     from concurrent.futures import ThreadPoolExecutor
     conn = sqlite3.connect(PERSONAL_DB, check_same_thread=False)
@@ -335,6 +362,9 @@ def generate(device, date, weak_words, max_pos, job_id=None, job_lease=None):
     rng = _r.Random(f"{device}{date}")
 
     def insert_sentence(target, recall, text, zh):
+        if on_sentence is not None:
+            on_sentence(target, recall, text, zh)
+            return
         if job_id:
             # 条件检查和写入必须是同一条 SQL，防止租约检查后被其他工人接管。
             conn.execute("""INSERT OR REPLACE INTO personal_job_sentences(job_id, target, recall, text, zh, created)
@@ -346,64 +376,65 @@ def generate(device, date, weak_words, max_pos, job_id=None, job_lease=None):
                          (device, date, target, recall, text, time.time(), zh))
         conn.commit()
 
+    review_unavailable = threading.Event()
+
     def gen_one(target):
         others = [w for w in weak_words if w != target]
         rng.shuffle(others)
-        recalls = others[:min(2, len(others))]   # 随机 1~2 个其他薄弱词
         t_sense = core_sense(WORD2ID.get(target, -1))
-        r_desc = "、".join(f'"{r}"（{core_sense(WORD2ID.get(r, -1), 20)}）' for r in recalls)
-        prompt = (f"为背单词 App 写一条英语例句。要求：\n"
-                  f"1. 必须包含目标词 \"{target}\"（核心词义，只使用此义项：{t_sense}）\n"
-                  + (f"2. 同时自然地包含这些复习词：{r_desc}\n" if recalls else "") +
-                  f"3. 【真实使用场景】描述日常/工作/学习中的真实情境，几个词要自然融入同一情境；"
-                  f"【地道】必须使用英语母语者日常真实会说的固定搭配和常用句型，严禁生造词组、中式英语或生硬拼凑\n"
-                  f"4. 句长 6~16 个单词，语法正确、表达地道、有意义\n"
-                  f"5. 其余用词为常见高频简单词\n"
-                  f"6. 输出格式：英文句子 || 中文翻译，一行，不要任何解释")
-        err = None
-        for _ in range(3):
+        previous_recalls, err = None, None
+        for recalls in (others[:2], others[:1], [], []):
+            if review_unavailable.is_set():
+                return 0
+            if recalls != previous_recalls:
+                err = None
+            previous_recalls = recalls
+            r_desc = "、".join(f'"{r}"（{core_sense(WORD2ID.get(r, -1), 20)}）' for r in recalls)
+            prompt = (f"为背单词 App 写一条英语例句。要求：\n"
+                      f"1. 必须包含目标词 \"{target}\"（核心词义，只使用此义项：{t_sense}）\n"
+                      + (f"2. 同时自然地包含这些复习词：{r_desc}\n" if recalls else "") +
+                      f"3. 【真实使用场景】描述日常/工作/学习中的真实情境，几个词要自然融入同一情境；"
+                      f"【地道】必须使用英语母语者日常真实会说的固定搭配和常用句型，严禁生造词组、中式英语或生硬拼凑\n"
+                      f"4. 句长 6~16 个单词，语法正确、表达地道、有意义\n"
+                      f"5. 其余用词为常见高频简单词\n"
+                      f"6. 输出格式：英文句子 || 中文翻译，一行，不要任何解释")
             try:
-                out = llm(prompt + (f"\n\n上次失败原因：{err}，请修正。" if err else ""))
+                out = llm(prompt + (f"\n上次需要修改：{err}" if err else ""))
                 cand, _, zh = out.partition("||")
-                cand = cand.strip().strip('"')
-                zh = zh.strip()
-            except Exception as e:
-                err = f"API错误:{e}"
+                cand, zh = cand.strip().strip('"'), zh.strip()
+            except Exception as exc:
+                err = "生成服务调用失败"
+                logger.warning("个性化生成服务调用失败：%s", type(exc).__name__)
                 time.sleep(2)
                 continue
             err = validate_multi(cand, target, recalls, max_pos)
-            if not err:
+            if err:
+                continue
+            try:
                 score = quality_check(cand, target, recalls[0] if recalls else None, zh)
-                if score < 4:
-                    err = f"自然度评分{score}<4，请换一个更自然、语义不矛盾的场景重写"
-                    continue
-                with ins_lock:
-                    insert_sentence(target, ",".join(recalls) if recalls else None, cand, zh)
-                ensure_tts(cand)   # 生成即产音频（本函数已在后台线程，无用户侧延迟）
-                return 1
-            time.sleep(0.2)
-        logger.warning("个性化组合句未通过，改为单词独句：device=%s target=%s reason=%s", device, target, err)
-        # 兜底：组合太难就只含目标词
-        try:
-            out = llm(f"为背单词 App 的单词 \"{target}\"（核心词义，只使用此义项：{t_sense}）写一条英语例句："
-                      f"真实日常场景、语法正确、自然地道，6~16 词，常见高频词。"
-                      f"必须使用英语母语者日常真实会说的固定搭配，严禁生造词组或中式英语。"
-                      f"输出格式：英文句子 || 中文翻译，一行，不要解释。")
-            cand, _, zh = out.partition("||")
-            cand = cand.strip().strip('"')
-            if not validate_multi(cand, target, [], max_pos) and quality_check(cand, target, None, zh.strip()) >= 4:
-                with ins_lock:
-                    insert_sentence(target, None, cand, zh.strip())
-                ensure_tts(cand)   # 生成即产音频
-                return 1
-        except Exception:
-            pass
+            except ReviewUnavailable:
+                review_unavailable.set()
+                raise
+            if score < 4:
+                err = f"评分 {score}/5，请改写为准确自然的真实场景，中文须完整对应英文"
+                continue
+            with ins_lock:
+                insert_sentence(target, ",".join(recalls) or None, cand, zh)
+            ensure_tts(cand)
+            return 1
+        logger.warning("薄弱词例句未生成 target=%r reason=%s", target[:40], err)
         return 0
 
-    with ThreadPoolExecutor(max_workers=4) as ex:
-        made = sum(ex.map(gen_one, weak_words))
-    conn.close()
-    return made
+    try:
+        ready = set()
+        if job_id:
+            ready = {r[0] for r in conn.execute(
+                "SELECT target FROM personal_job_sentences WHERE job_id=?", (job_id,))}
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            return sum(ex.map(gen_one, (word for word in weak_words if word not in ready)))
+    finally:
+        conn.close()
+
 
 class PersonalizeIn(BaseModel):
     device: str = Field(min_length=2, max_length=64)   # 登录用户设备号为 "u{uid}" 只有2位，与 GET 端点对齐
@@ -477,12 +508,21 @@ def run_personal_job(job):
     try:
         data = json.loads(payload)
         words = list(dict.fromkeys(data.get("weak_words") or []))
-        generate(device, date, words, data.get("learned_max_pos", 300), job_id=job_id, job_lease=lease)
+        error = None
+        try:
+            generate(device, date, words, data.get("learned_max_pos", 300), job_id=job_id, job_lease=lease)
+        except ReviewUnavailable as exc:
+            logger.warning("个性化任务评审暂不可用：%s", exc)
+            error = "例句评审服务暂不可用，请稍后重试"
         with sqlite3.connect(PERSONAL_DB, timeout=15) as conn:
             count = conn.execute("SELECT COUNT(*) FROM personal_job_sentences WHERE job_id=?", (job_id,)).fetchone()[0]
-            status = "complete" if count == len(words) else "partial"
-            conn.execute("UPDATE personal_jobs SET status=?, updated=?, lease_owner=NULL, lease_until=NULL WHERE id=? AND lease_owner=?",
-                         (status, time.time(), job_id, lease))
+            if count == len(words):
+                status, error = "complete", None
+            else:
+                status = "partial" if count else "failed"
+                error = error or ("部分目标词未生成可用例句" if count else "尚未生成可用例句")
+            conn.execute("UPDATE personal_jobs SET status=?, error=?, updated=?, lease_owner=NULL, lease_until=NULL WHERE id=? AND lease_owner=?",
+                         (status, error, time.time(), job_id, lease))
     except Exception:
         logger.exception("个性化任务失败 job=%s", job_id)
         with sqlite3.connect(PERSONAL_DB, timeout=15) as conn:
@@ -578,6 +618,27 @@ def demo_daily(pos: int = Query(default=1200, ge=1, le=4600)):
     return {"pos": pos, "new_words": new_words, "weak_pool": pool[-12:]}
 
 
+def reuse_daily_sentences(conn, job_id, body):
+    # Both clients create a new ID when reopening a partial batch. Carry forward
+    # its vetted rows only for the same automatic plan, never across a manual swap.
+    if not body.replace:
+        return "queued"
+    previous = conn.execute("""SELECT id, payload, status FROM personal_jobs
+        WHERE device=? AND date=? ORDER BY rowid DESC LIMIT 1""", (body.device, body.date)).fetchone()
+    if not previous or previous[2] not in ("partial", "complete"):
+        return "queued"
+    plan = json.loads(previous[1])
+    plan.pop("request_id", None)
+    if plan != body.model_dump(exclude={"request_id"}):
+        return "queued"
+    copied = conn.execute("""INSERT INTO personal_job_sentences(job_id,target,recall,text,zh,created)
+        SELECT ?,s.target,s.recall,s.text,s.zh,s.created FROM personal_job_sentences s
+        WHERE s.job_id=? AND trim(s.text)!='' AND trim(s.zh)!='' AND NOT EXISTS
+        (SELECT 1 FROM content_reports r WHERE r.owner=? AND r.kind='personal'
+         AND r.word=s.target AND r.text=s.text)""", (job_id, previous[0], body.device)).rowcount
+    return "complete" if copied == len(set(body.weak_words)) else "queued"
+
+
 @app.post("/api/v1/personalize")
 def personalize(body: PersonalizeIn, authorization: str = Header(default=""), x_guest_token: str = Header(default=""), request: Request = None):
     import uuid
@@ -601,9 +662,9 @@ def personalize(body: PersonalizeIn, authorization: str = Header(default=""), x_
         else:
             # 重复提交相同任务 ID 是轮询恢复，不消耗创建配额。
             check_rate(request, "personalize")
+            status = reuse_daily_sentences(conn, job_id, body)
             conn.execute("INSERT INTO personal_jobs(id, device, date, payload, status, created, updated) VALUES(?,?,?,?,?,?,?)",
-                         (job_id, body.device, body.date, payload, "queued", now, now))
-            status = "queued"
+                         (job_id, body.device, body.date, payload, status, now, now))
     _PERSONAL_WAKE.set()
     return {"queued": True, "date": body.date, "background": True, "job_id": job_id, "status": status}
 
@@ -1092,6 +1153,8 @@ def _generate_weave_job(key, device, date, word, weak, cap):
                 return
             time.sleep(0.2)
         logger.warning("巩固句生成未通过：device=%s word=%s weak=%s reason=%s", device, word, weak, err)
+    except ReviewUnavailable as exc:
+        logger.warning("巩固句评审暂不可用：%s", exc)
     finally:
         with _WEAVE_LOCK:
             _WEAVE_JOBS.discard(key)
@@ -1181,7 +1244,10 @@ def sentence_trio(word: str = Query(min_length=1, max_length=40), weak: str = ""
               f"输出恰好 {len(spec)} 行，不要其他解释。")
     err = None
 
+    review_offline = False
+
     def try_insert(tier, text, zh=""):
+        nonlocal review_offline
         lo, hi = TIER_RANGE[tier]
         ts = toks(text)
         if not (lo <= len(ts) <= hi):
@@ -1203,7 +1269,11 @@ def sentence_trio(word: str = Query(min_length=1, max_length=40), weak: str = ""
             return "缺召回词"
         # 与个性化例句同一质量门：语法/搭配/语义/场景/词义/翻译六项最低分 <4 则不落库，
         # 让上层用更自然的场景重试，避免"结构合法但不像人话"的句子进入缓存
-        score = quality_check(text, word, recall if tier == 1 else None, zh)
+        try:
+            score = quality_check(text, word, recall if tier == 1 else None, zh)
+        except ReviewUnavailable:
+            review_offline = True
+            return "评审服务暂不可用"
         if score < 4:
             return f"自然度评分{score}<4"
         sid = _lx.execute("SELECT id FROM sense WHERE wordId=? AND role='core'", (wid,)).fetchone()[0]
@@ -1229,12 +1299,16 @@ def sentence_trio(word: str = Query(min_length=1, max_length=40), weak: str = ""
                     e = try_insert(tier, body.strip().strip('"'), zh.strip())
                     if e:
                         err = f"{m.group(1)}行:{e}"
+                    if review_offline:
+                        break
     except Exception as e:
         err = f"API错误:{e}"
     # 第二轮：缺档逐档单独生成（每档最多 2 次）
     TIER_DESC = {1: "基础句，3~10 个单词，简单句", 2: "进阶句，10~16 个单词，含一个从句（when/because/that/which/who 等）",
                  3: "挑战句，10~20 个单词，含复合结构（从句/非谓语/介词短语组合）"}
     for tier in need:
+        if review_offline:
+            break
         if tier in have:
             continue
         single = (f"为背单词 App 的单词 \"{word}\"（核心词义，只使用此义项：{sense}）写一条英语例句：{TIER_DESC[tier]}。"
@@ -1252,6 +1326,8 @@ def sentence_trio(word: str = Query(min_length=1, max_length=40), weak: str = ""
             if not e:
                 break
             err = f"{labels[tier]}行:{e}"
+            if review_offline:
+                break
     _lxw.commit()
     return {"word": word,
             "sentences": [{"tier": t, "text": have[t][0], "zh": have[t][1]} for t in sorted(have)][:3],

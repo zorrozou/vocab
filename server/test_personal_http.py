@@ -11,7 +11,7 @@ def call(path, body=None, token=None):
 name = 'job_' + uuid.uuid4().hex[:10]
 auth = call('/api/v1/auth/register', {'username': name, 'password': 'test_password_123'})
 job_id = 'test-' + uuid.uuid4().hex
-payload = {'device': 'device-one', 'date': '2026-10-27', 'weak_words': ['apple','banana'],
+payload = {'device': 'device-one', 'date': '2026-10-27', 'weak_words': ['apple','table'],
            'learned_max_pos': 5000, 'sync': True, 'replace': True, 'request_id': job_id}
 assert call('/api/v1/personalize', payload, auth['token'])['job_id'] == job_id
 assert call('/api/v1/personalize', payload, auth['token'])['job_id'] == job_id
@@ -20,7 +20,11 @@ for _ in range(100):
     result = call('/api/v1/personalized/job?' + query, token=auth['token'])
     if result['status'] not in ('queued', 'running'): break
     time.sleep(.1)
-assert result['status'] == 'complete' and len(result['sentences']) == 2, result
+assert result['status'] == 'complete' and {r['target'] for r in result['sentences']} == {'apple', 'table'}, result
+reopened = call('/api/v1/personalize', {**payload, 'request_id': 'test-' + uuid.uuid4().hex}, auth['token'])
+assert reopened['status'] == 'complete' and reopened['job_id'] != job_id
+reopen_query = urllib.parse.urlencode({'job_id': reopened['job_id'], 'device': 'device-one'})
+assert call('/api/v1/personalized/job?' + reopen_query, token=auth['token'])['sentences'] == result['sentences']
 try:
     call('/api/v1/personalized/job?' + query)
     raise AssertionError('guest accessed another account task')

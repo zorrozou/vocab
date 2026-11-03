@@ -1,6 +1,6 @@
 const fs = require('fs'), vm = require('vm'), assert = require('assert');
 const html = fs.readFileSync('web/index.html', 'utf8');
-const code = html.slice(html.indexOf('let personalRefresh ='), html.indexOf('// Credentials are created'));
+const code = html.slice(html.indexOf('const personalJobErrors ='), html.indexOf('// Credentials are created'));
 const versions = html.slice(html.indexOf('function versionDevice()'), html.indexOf('function rejectPersonalSentence('));
 let status = 'running', posts = [], saves = 0, owner = 'u7';
 const job = {id: 'task-12345678', date: '2026-10-27', weakKey: 'apple,banana', weakWords: ['apple','banana'],
@@ -12,7 +12,7 @@ const ctx = {AUTH: null, S: {personalJobs: [job], personalized: {}, cards: {}}, 
     return {ok: true, json: async () => ({status, sentences: [
       {target: 'apple', text: 'An apple.', zh: '苹果'},
       ...(status === 'complete' ? [{target: 'banana', text: 'A banana.', zh: '香蕉'}] : [])]})};
-  }, JSON, Date, Math, setTimeout, crypto: require('crypto').webcrypto, Uint8Array,
+  }, JSON, Date, Math, AbortSignal, setTimeout, crypto: require('crypto').webcrypto, Uint8Array,
   localStorage:{getItem:()=>null,setItem:()=>{}}
 };
 vm.createContext(ctx); vm.runInContext(versions + '\n' + code, ctx);
@@ -56,5 +56,13 @@ vm.createContext(ctx); vm.runInContext(versions + '\n' + code, ctx);
   ctx.fetch = async () => ({ok:false, status:409});
   await ctx.refreshPersonalJobs();
   assert.equal(ctx.S.personalJobs[0].status, 'failed', 'old guest job collision must stop automatic retries');
+  ctx.document={createElement:()=>({textContent:''})};
+  ctx.personalSentence=word=>ctx.S.personalized[word];
+  const output={nodes:[],replaceChildren(n){this.nodes=[n]},append(n){this.nodes.push(n)}};
+  ctx.showPersonalJobResults({...job,status:'partial'},output);
+  assert(output.nodes[0].textContent.includes('部分'));
+  assert(output.nodes.some(n=>n.textContent.includes('A banana.')));
+  ctx.showPersonalJobResults({...job,status:'failed'},output);
+  assert(output.nodes[0].textContent.includes('未生成新例句'));
   console.log('PASS partial job recovery, idempotent restart and superseded result isolation');
 })().catch(e => { console.error(e); process.exit(1); });

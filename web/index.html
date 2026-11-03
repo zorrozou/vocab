@@ -2296,6 +2296,7 @@ setInterval(refreshStudyClock,1000);
 window.addEventListener("focus",refreshStudyClock);
 document.addEventListener("visibilitychange",()=>{ if (!document.hidden) refreshStudyClock(); });
 
+const personalJobErrors = new WeakMap();
 let personalRefresh = null;
 async function refreshPersonalJobs() {
   if (AUTH && !AUTH.accountId) return;
@@ -2319,6 +2320,7 @@ async function refreshPersonalJobs() {
         if (!r.ok) throw new Error("任务查询失败 " + r.status);
         const result = await r.json();
         if (S !== state || deviceId() !== owner) return;
+        if (result.error) personalJobErrors.set(job, result.error);
         if (job.status !== result.status) { job.status = result.status; changed = true; }
         if (result.status !== "superseded") {
           for (const row of result.sentences || []) {
@@ -2400,6 +2402,20 @@ async function localWeakPractice(words, target) {
   for(const row of rows){const p=document.createElement('p');p.textContent=row.word+'：'+row.text+' '+row.zh;target.append(p);}
   return true;
 }
+function showPersonalJobResults(job, target) {
+  if (!target) return;
+  const rows = job.weakWords.map(word => ({word, sentence: personalSentence(word)})).filter(row => row.sentence);
+  const message = document.createElement("p");
+  if (job.status === "complete") message.textContent = "薄弱词例句已就绪";
+  else if (job.status === "superseded") message.textContent = "本批任务已有更新，可重新进入完成页查看。";
+  else message.textContent = (personalJobErrors.get(job) || (job.status === "partial" ? "部分目标词未生成可用例句" : "本次未生成新例句")) + "。稍后重新进入完成页可重试。";
+  target.replaceChildren(message);
+  for (const {word, sentence} of rows) {
+    const line = document.createElement("p");
+    line.textContent = word + "：" + sentence.text + (sentence.zh ? " " + sentence.zh : "");
+    target.append(line);
+  }
+}
 let personalLastFailure=false;
 async function autoPersonalize() {
   if (AUTH && !AUTH.accountId) return;
@@ -2438,9 +2454,9 @@ async function autoPersonalize() {
     await refreshPersonalJobs();
     if (S !== state || deviceId() !== owner) return;
     if(personalLastFailure){if(!await localWeakPractice(weakToday,$("#genOut")))status("暂时无法生成，任务已保留；联网后会重试。");return;}
-    if (job.status === "complete") { status("✓ 薄弱词例句已就绪"); return; }
-    if (["partial", "failed", "superseded"].includes(job.status)) {
-      status("部分例句暂不可用，可稍后重新进入完成页重试；现有例句仍可使用。"); return;
+    if (["complete", "partial", "failed", "superseded"].includes(job.status)) {
+      showPersonalJobResults(job, $("#genOut"));
+      return;
     }
     await new Promise(res => setTimeout(res, 4000));
   }

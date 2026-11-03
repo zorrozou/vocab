@@ -4,7 +4,7 @@ import json, sqlite3, sys, time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from app.main import generate, init_db, PERSONAL_DB  # noqa: E402
+from app.main import generate, init_db, PERSONAL_DB, ReviewUnavailable  # noqa: E402
 
 
 def main():
@@ -19,16 +19,28 @@ def main():
             conn.execute("UPDATE requests SET processed=1 WHERE rowid=?", (rowid,))
             conn.commit()
             continue
-        # 幂等：重跑先清掉该设备当日旧句
-        conn.execute("DELETE FROM sentences WHERE device=? AND date=?", (device, date))
-        conn.commit()
-        n = generate(device, date, p.get("weak_words", []), p.get("learned_max_pos", 300))
-        conn.execute("UPDATE requests SET processed=1 WHERE rowid=?", (rowid,))
-        conn.commit()
-        total += n
-        print(f"[{time.strftime('%F %T')}] {device} {date}: 生成 {n} 条")
+        words = list(dict.fromkeys(p.get("weak_words", [])))
+        accepted = []
+        def collect(target, recall, text, zh):
+            accepted.append((device, date, target, recall, text, time.time(), zh))
+        try:
+            generate(device, date, words, p.get("learned_max_pos", 300), on_sentence=collect)
+        except ReviewUnavailable:
+            print(f"[{time.strftime('%F %T')}] 评审服务暂不可用，保留原句和待处理任务")
+            break
+        with conn:
+            if not conn.execute("UPDATE requests SET processed=1 WHERE rowid=? AND processed=0", (rowid,)).rowcount:
+                continue
+            if len(accepted) == len(words):
+                conn.execute("DELETE FROM sentences WHERE device=? AND date=?", (device, date))
+            else:
+                conn.executemany("DELETE FROM sentences WHERE device=? AND date=? AND target=?",
+                                 [row[:3] for row in accepted])
+            conn.executemany("INSERT INTO sentences(device,date,target,recall,text,created,zh) VALUES(?,?,?,?,?,?,?)", accepted)
+        total += len(accepted)
+        print(f"[{time.strftime('%F %T')}] {date}: 生成 {len(accepted)} 条")
     conn.close()
-    print(f"[{time.strftime('%F %T')}] 完成，处理 {len(rows)} 个请求，共 {total} 条")
+    print(f"[{time.strftime('%F %T')}] 本轮共生成 {total} 条")
 
 
 if __name__ == "__main__":
