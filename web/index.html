@@ -1494,7 +1494,7 @@ function home() {
     </div>
     ${plan.dueAvailable > plan.duePlanned ? `<p class="muted">另有 ${plan.dueAvailable - plan.duePlanned} 个词已到期，超出今日上限，暂未安排。</p>` : ""}
     ${plan.repeatPlanned ? `<p class="muted">其中 ${plan.repeatPlanned} 个是今天学过的词，按间隔再复习，不增加今日单词数。</p>` : ""}
-    <div class="row"><button class="act" id="bStart">${plan.completed ? "继续今天" : "开始今天"}</button></div>
+    <div class="row"><button class="act" id="bStart">${document.body.classList.contains("studio-home") ? (plan.completed ? "继续词汇练习" : "开始词汇练习") : (plan.completed ? "继续今天" : "开始今天")}</button></div>
     <p class="muted" id="startHint" style="margin-top:10px">先预留每日新词名额，再安排到期复习；水平探测也计入每日不同词上限。</p>
   </div>`;
   $("#bStart").onclick = async () => {
@@ -2222,7 +2222,7 @@ function recordStudyDay(date) {
 
 /* ---- 完成 + 自动触发个性化 ---- */
 function doneDay(refreshOnly = false) {
-  globalThis.VocabCoach?.page("home");
+  globalThis.VocabCoach?.page("other");
   const personalHTML = refreshOnly ? $("#genOut")?.innerHTML : null;
   if (!refreshOnly) prunePersonalized();
   const day = today();
@@ -2248,7 +2248,9 @@ function doneDay(refreshOnly = false) {
       <h2>今日薄弱词 · 个性化例句</h2>
       <div class="muted" id="genOut">正在为你的薄弱词定制例句…</div>
     </div>
+    <div class="row"><button class="ghost" id="doneHome">返回首页</button></div>
   </div>`;
+  $("#doneHome").onclick = home;
   renderDoneStatus();
   if (refreshOnly) { if (personalHTML != null) $("#genOut").innerHTML = personalHTML; }
   else autoPersonalize();

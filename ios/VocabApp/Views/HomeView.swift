@@ -13,6 +13,12 @@ struct HomeView: View {
     private var dailyPlan: StudyEngine.DailyPlanSummary {
         StudyEngine.dailyPlanSummary(app.S, day: DayUtil.today(), now: Date())
     }
+    private var vocabularyAction: String {
+        if starting {return "准备中…"}
+        if !startError.isEmpty {return "重新加载"}
+        if classic {return dailyPlan.completed > 0 ? "继续今天" : "开始今天"}
+        return dailyPlan.completed > 0 ? "继续词汇练习" : "开始词汇练习"
+    }
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -54,7 +60,7 @@ struct HomeView: View {
                     }
                 } else {
                     VStack(spacing: 6) {
-                        PrimaryButton(title: starting ? "准备中…" : (startError.isEmpty ? (dailyPlan.completed > 0 ? "继续今天" : "开始今天") : "重新加载")) {
+                        PrimaryButton(title: vocabularyAction) {
                             guard !starting else { return }
                             starting = true
                             startError = ""

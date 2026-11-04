@@ -13,6 +13,11 @@ const base=process.env.VOCAB_TEST_BASE||'http://127.0.0.1:18765/';
    if(!await buildQueue())throw Error('queue not ready');doneDay();
   });
   assert.equal(await page.locator('#bMore').count(),0);
+  assert.equal(await page.locator('#coachControls').isHidden(),true);
+  assert.equal(await page.locator('body.studio-home').count(),0);
+  await page.getByRole('button',{name:'返回首页',exact:true}).click();
+  assert.equal(await page.locator('body.studio-home').count(),1);
+  await page.evaluate(()=>doneDay());
   assert.equal(await page.evaluate(()=>dailyPlanSummary(S).newPlanned),0);
   assert((await page.locator('#app').innerText()).includes('词库已学完'));
   await page.evaluate(()=>{

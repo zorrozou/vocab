@@ -136,7 +136,7 @@ window.VocabCoach = (() => {
   function switchPage(next) {
     if(screen!==next || (run && run.owner!==key())){cancelAutoStart();stop();screen=next;fault='';note='';working=false;}
     box().hidden=screen==='other';
-    if(box().hidden)return;
+    if(box().hidden){document.body.classList.remove('studio-home');return;}
     if(!observer){observer=true;
       document.addEventListener('visibilitychange',()=>{if(!active())return;
         if(document.hidden){stopAudio();stop();app().inert=true;}else begin();});
