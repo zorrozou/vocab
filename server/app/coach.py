@@ -277,9 +277,11 @@ def mount_coach(app, database, identify, enabled, explain, author=None, assess=N
                 workers.release()
                 raise
         try:
-            doc=studio.prepare_material(author or explain,assess or explain,skill,goal,body.level,inputs(body),reason,previous)
+            doc=studio.prepare_material(author or explain,assess or explain,skill,goal,body.level,inputs(body),reason,
+                                        previous,studio.prior_evidence(past,skill))
         except Exception as exc:
-            logging.getLogger(__name__).warning("教练备课未采用：%s",type(exc).__name__)
+            reason=str(exc) if isinstance(exc,studio.MaterialRejected) else type(exc).__name__
+            logging.getLogger(__name__).warning("教练备课未采用：%s",reason)
             return {"ready":False,"message":"本次定制未通过或服务暂不可用，已为你保留教研课程。"}
         finally:
             workers.release()

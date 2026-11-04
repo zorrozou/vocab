@@ -103,6 +103,13 @@ with sqlite3.connect(":memory:") as db:
         assert test["cards"][-1]["passage"] in [x[1] for x in TRANSFER[test["skill"]]]
         test["answers"]=[{"ok":True,"expected":"行动","mode":"listen"}]*3
         coach.save(db,"trial",later,test)
+    # Repeated listening is evidence of a support need even when the chosen action was right.
+    repeated=dict(original,answers=[dict(ok=True,mode="listen",replay=True,expected="改去西门",
+                                         chosen="改去西门",responses=[{"learner":"PRIVATE"}])])
+    skill,reason,_,_=studio.choose([repeated],day2)
+    facts=studio.prior_evidence([repeated],skill)
+    assert skill==original["skill"] and "重听" in reason and "改去西门" in reason
+    assert len(facts)==1 and "PRIVATE" not in json.dumps(facts)
     assert not studio.participation(db,"trial",False)
 print('PASS voluntary paired assignment, separate class time and unseen delayed test materials')
 print('PASS personalized studio, verified generation, persisted goals, distinct diagnosis, undo, no raw reply, 7-/30-day follow-up')
