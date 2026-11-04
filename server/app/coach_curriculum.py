@@ -1,6 +1,6 @@
 """Each scene has a real decision, two distinct distractors and a check for each error."""
 GOALS = {"life": "日常听说", "work": "职场沟通", "read": "阅读理解"}
-SKILLS = {"condition": "理解条件与例外", "change": "跟上安排变化", "request": "判断意图与下一步"}
+SKILLS = {"condition": "理解条件与例外", "change": "跟上安排变化", "request": "判断意图与下一步", "detail": "比较数字与细节"}
 
 
 def scene(title, passage, question, options, proof, reply, checks):

@@ -570,7 +570,7 @@ mount_auth(app)
 from app.coach import mount_coach
 mount_coach(app, lambda: PERSONAL_DB, personal_owner,
             lambda: not (DATA_DIR / "coach.disabled").exists(), lambda prompt: llm(prompt),
-            author=lambda prompt: hunyuan_chat(prompt,temperature=0.55,max_tokens=3800),
+            author=lambda prompt: hunyuan_chat(prompt,temperature=0.55,max_tokens=5400),
             assess=lambda prompt: hunyuan_chat(prompt,temperature=0.15,max_tokens=360),
             valid_word=lambda w: w in WORD2ID)
 

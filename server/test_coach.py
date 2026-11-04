@@ -49,7 +49,7 @@ def test_lessons():
             if auth not in ("Bearer alice","Bearer bob"):raise HTTPException(401)
             return auth
         flag={"on":True}
-        coach.mount_coach(app,lambda:path,identify,lambda:flag["on"],lambda p:"unless 表示改变计划的条件。")
+        coach.mount_coach(app,lambda:path,identify,lambda:flag["on"],lambda p:'{"en":"Unless introduces the condition that changes the plan.","zh":"unless 表示改变计划的条件。"}' )
         routes={r.path.split("/")[-1]:r.endpoint for r in app.routes if r.path.startswith("/api/v1/coach/")}
         def post(path,client=A,who="alice",**kw):
             model={"clock":coach.ClockIn,"answer":coach.AnswerIn,"aid":coach.AidIn}.get(path,coach.LessonIn)
@@ -70,7 +70,8 @@ def test_lessons():
             result=post("answer",task=t['id'],choice=1-correct,mode="listen").json()
             assert result["count"]==3 and result["step"]==1 and result["task"]["hint"]
             assert post("answer",task=t["id"],choice=1-correct,mode="listen").json()==result
-            assert post("explanation").json()["ai"]
+            explanation=post("explanation").json()
+            assert explanation["ai"] and explanation["textEn"].startswith("Unless")
             assert post("clock",client=B,action="pulse").json()["busy"]
             post("clock",action="stop")
             post("clock",client=B,action="pulse")

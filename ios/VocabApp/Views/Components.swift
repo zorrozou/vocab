@@ -3,16 +3,17 @@ import SwiftUI
 // MARK: - 主题（对齐 web 深色卡片风）
 
 enum Theme {
-    static let bg = Color(.sRGB, red: 0.043, green: 0.055, blue: 0.075, opacity: 1)
-    static let card = Color(.sRGB, red: 0.105, green: 0.125, blue: 0.165, opacity: 1)
-    static let cardDeep = Color(.sRGB, red: 0.070, green: 0.082, blue: 0.102, opacity: 1)
-    static let accent = Color(.sRGB, red: 0.184, green: 0.435, blue: 0.929, opacity: 1)   // #2f6fed
-    static let accentLight = Color(.sRGB, red: 0.373, green: 0.612, blue: 0.925, opacity: 1) // #5f9cec
+    static let bg = Color(red:0.063,green:0.106,blue:0.125)
+    static let card = Color(red:0.098,green:0.157,blue:0.180)
+    static let cardDeep = Color(red:0.075,green:0.129,blue:0.149)
+    static let edge = Color(red:0.216,green:0.286,blue:0.306)
+    static let accent = Color(red:0.608,green:0.902,blue:0.812)
+    static let accentLight = accent
     static let ok = Color(.sRGB, red: 0.203, green: 0.780, blue: 0.540, opacity: 1)
     static let warn = Color(.sRGB, red: 0.910, green: 0.580, blue: 0.220, opacity: 1)
     static let bad = Color(.sRGB, red: 0.941, green: 0.467, blue: 0.467, opacity: 1)
-    static let muted = Color(.sRGB, red: 0.580, green: 0.620, blue: 0.680, opacity: 1)
-    static let text = Color(.sRGB, red: 0.910, green: 0.930, blue: 0.960, opacity: 1)
+    static let muted = Color(.sRGB, red: 0.686, green: 0.753, blue: 0.757, opacity: 1)
+    static let text = Color(.sRGB, red: 0.957, green: 0.945, blue: 0.914, opacity: 1)
 }
 
 // MARK: - 跟读共享组件（学习卡/复习答案卡通用）
@@ -29,13 +30,13 @@ struct ShadowHoldButton: View {
 
     var body: some View {
         Text(app.speech.state == .listening ? "🎤 松开结束" : "🎤 按住跟读")
-            .font(.system(size: 15, weight: .medium))
+            .font(.subheadline.weight(.medium))
             .frame(maxWidth: .infinity)
-            .padding(.vertical, 11)
+            .padding(.vertical, 10).frame(minHeight:44)
             .foregroundStyle(app.speech.state == .listening ? .white : Theme.text)
             .background(app.speech.state == .listening ? Theme.warn : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 10))
-            .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.muted.opacity(0.5)))
+            .background(Theme.cardDeep,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(Theme.edge))
             .contentShape(Rectangle())
             .onLongPressGesture(minimumDuration: 0.15, perform: {}) { pressing in
                 if pressing {
@@ -100,26 +101,26 @@ struct ShadowResultDisplay: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 10) {
-                Text("完整度").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                Text("完整度").font(.caption).foregroundStyle(Theme.muted)
                 Text("\(result.completeness)%")
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.body.weight(.bold))
                     .foregroundStyle(result.completeness >= 80 ? Theme.ok : Theme.warn)
                 if let confidence=result.confidence {
-                Text("置信度").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                Text("置信度").font(.caption).foregroundStyle(Theme.muted)
                 Text("\(confidence)%")
-                    .font(.system(size: 17, weight: .bold))
+                    .font(.body.weight(.bold))
                     .foregroundStyle(confidence >= 75 ? Theme.ok : Theme.warn)
                 }
             }
             Text("完整度是识别到的目标词比例；识别置信度不代表发音准确度。")
-                .font(.system(size: 11)).foregroundStyle(Theme.muted)
+                .font(.caption).foregroundStyle(Theme.muted)
             if !result.words.isEmpty {
                 result.words.reduce(Text("")) { acc, w in
                     acc + Text(w.text + " ").foregroundStyle(color(of: w.confidence))
                 }
-                .font(.system(size: 14))
+                .font(.subheadline)
             } else {
-                Text(result.text).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                Text(result.text).font(.footnote).foregroundStyle(Theme.muted)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -136,8 +137,8 @@ struct Card<Content: View>: View {
         VStack(spacing: 14) { content }
             .padding(18)
             .frame(maxWidth: 560)
-            .background(Theme.card)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .background(Theme.card,in:RoundedRectangle(cornerRadius:18))
+            .overlay(RoundedRectangle(cornerRadius:18).stroke(Theme.edge))
             .padding(.horizontal, 14)
     }
 }
@@ -151,9 +152,9 @@ struct PrimaryButton: View {
             Text(title)
                 .font(.body.weight(.semibold))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 13)
+                .padding(.vertical, 12).frame(minHeight:48)
                 .background(color)
-                .foregroundStyle(color == Theme.ok || color == Theme.warn ? Theme.bg : .white)
+                .foregroundStyle(color == Theme.bad ? .black : Theme.bg)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
         }
     }
@@ -168,9 +169,9 @@ struct GhostButton: View {
             Text(title)
                 .font(.body.weight(.medium))
                 .frame(maxWidth: .infinity)
-                .padding(.vertical, 11)
+                .padding(.vertical, 10).frame(minHeight:44)
                 .foregroundStyle(color)
-                .overlay(RoundedRectangle(cornerRadius: 10).stroke(Theme.muted.opacity(0.5)))
+                .background(Theme.cardDeep,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(Theme.edge))
         }
     }
 }
@@ -179,7 +180,7 @@ struct BigWord: View {
     let word: String
     var body: some View {
         Text(word)
-            .font(.largeTitle.weight(.bold))
+            .font(.system(.largeTitle,design:.serif).weight(.semibold))
             .lineLimit(2)
             .minimumScaleFactor(0.7)
             .foregroundStyle(Theme.text)
@@ -192,7 +193,7 @@ struct PlayButton: View {
     var body: some View {
         Button { app.audio.play(text, voice: app.S.settings.voice) } label: {
             Image(systemName: app.audio.playingText == text ? "speaker.wave.2.fill" : "play.circle.fill")
-                .font(.system(size: 22))
+                .font(.title2)
                 .foregroundStyle(Theme.accentLight)
         }
         .frame(minWidth: 44, minHeight: 44)
@@ -221,7 +222,7 @@ struct TagLabel: View {
     var color: Color = Theme.muted
     var body: some View {
         Text(text)
-            .font(.system(size: 11, weight: .medium))
+            .font(.caption.weight(.medium))
             .foregroundStyle(color)
             .padding(.horizontal, 6).padding(.vertical, 2)
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(color.opacity(0.6)))
@@ -250,7 +251,7 @@ struct SentenceRow: View {
             HStack(alignment: .top, spacing: 8) {
                 TagLabel(text: tag, color: tagColor)
                 Text(sentence.text)
-                    .font(.system(size: 16))
+                    .font(.body)
                     .foregroundStyle(Theme.text)
                     .frame(maxWidth: .infinity, alignment: .leading)
                 PlayButton(text: sentence.text)
@@ -272,7 +273,7 @@ struct SentenceRow: View {
                             ProgressView().scaleEffect(0.7)
                         } else {
                             Image(systemName: "arrow.clockwise")
-                                .font(.system(size: 16))
+                                .font(.body)
                                 .foregroundStyle(Theme.muted)
                         }
                     }
@@ -294,17 +295,17 @@ struct SentenceRow: View {
                         }
                     }
                 }
-            } label: { Text(reporting ? "正在提交…":"例句纠错").font(.caption).foregroundStyle(Theme.muted).frame(minHeight:32) }.disabled(reporting)
+            } label: { Text(reporting ? "正在提交…":"例句纠错").font(.caption).foregroundStyle(Theme.muted).frame(minHeight:44) }.disabled(reporting)
             if !reportMessage.isEmpty { Text(reportMessage).font(.caption).foregroundStyle(Theme.muted) }
             if let recallNote {
-                Text(recallNote).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                Text(recallNote).font(.caption).foregroundStyle(Theme.muted)
             }
             if let zh = sentence.zh, !zh.isEmpty {
-                Text(zh).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                Text(zh).font(.footnote).foregroundStyle(Theme.muted)
             }
             if swapError {
                 Text("暂时无法换句，请稍后重试。")
-                    .font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    .font(.footnote).foregroundStyle(Theme.muted)
             }
         }
         .opacity(swapping ? 0.35 : 1)
@@ -323,8 +324,14 @@ struct QuizOptionsView: View {
                 Button {
                     feedback.choose(i, correct: o.ok, commit: onPick)
                 } label: {
-                    Text(o.text)
-                        .font(.system(size: 16))
+                    HStack(spacing:12) {
+                        Text(String(UnicodeScalar(65+i)!)).font(.caption.monospaced().bold())
+                            .frame(minWidth:26,minHeight:26).background(Theme.card,in:RoundedRectangle(cornerRadius:7)).accessibilityHidden(true)
+                        Text(o.text).font(.body)
+                        if feedback.picked != nil && (o.ok || feedback.picked==i) {
+                            Image(systemName:o.ok ? "checkmark.circle.fill":"xmark.circle").accessibilityLabel(o.ok ? "正确":"错误")
+                        }
+                    }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 12).padding(.horizontal, 14)
                         .background(bg(for: i, ok: o.ok))
@@ -362,8 +369,20 @@ struct MeaningFeedbackButton: View {
                     catch { message="未提交："+error.localizedDescription }
                     running=false
                 }
-            }.font(.caption).foregroundStyle(Theme.muted).disabled(running)
+            }.font(.caption).foregroundStyle(Theme.muted).frame(minHeight:44).disabled(running)
             if !message.isEmpty { Text(message).font(.caption).foregroundStyle(Theme.muted) }
         }
+    }
+}
+
+struct NavigationAction:View {
+    let title:String
+    let action:()->Void
+    var body:some View {
+        Button(action:action) {
+            Label(title,systemImage:"chevron.backward").font(.subheadline.weight(.medium))
+                .padding(.horizontal,12).frame(minWidth:44,minHeight:44)
+                .background(Theme.cardDeep,in:RoundedRectangle(cornerRadius:12)).contentShape(Rectangle())
+        }.buttonStyle(.plain).foregroundStyle(Theme.accent)
     }
 }

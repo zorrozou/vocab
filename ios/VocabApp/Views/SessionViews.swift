@@ -83,7 +83,7 @@ struct LearnCardView: View {
                             PlayButton(text: item.word)
                         }
                         if let ph = currentItem.phonetic, !ph.isEmpty {
-                            Text("/\(ph)/").font(.system(size: 15)).foregroundStyle(Theme.muted)
+                            Text("/\(ph)/").font(.subheadline).foregroundStyle(Theme.muted)
                         }
                         sensesView
                     }
@@ -120,21 +120,21 @@ struct LearnCardView: View {
             let senses = (currentItem.senses ?? []).filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             ForEach(Array(senses.enumerated()), id: \.offset) { _, s in
                 HStack(alignment: .top, spacing: 6) {
-                    Text(s.pos ?? "·").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.accentLight)
-                    Text(s.text).font(.system(size: 15)).foregroundStyle(Theme.text)
+                    Text(s.pos ?? "·").font(.footnote.weight(.medium)).foregroundStyle(Theme.accentLight)
+                    Text(s.text).font(.subheadline).foregroundStyle(Theme.text)
                 }
             }
             if senses.isEmpty, let sense = currentItem.sense, !sense.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(sense).font(.system(size: 15)).foregroundStyle(Theme.text)
+                Text(sense).font(.subheadline).foregroundStyle(Theme.text)
             } else if senses.isEmpty && detailError.isEmpty {
                 HStack { Text("正在加载词义…"); ProgressView().scaleEffect(0.7) }
-                    .font(.system(size: 14)).foregroundStyle(Theme.muted)
+                    .font(.subheadline).foregroundStyle(Theme.muted)
             }
             if !senses.isEmpty { MeaningFeedbackButton(word:item.word,text:senses.map(\.text).joined(separator:"；")) }
             if !detailError.isEmpty {
-                Text(detailError).font(.system(size: 13)).foregroundStyle(Theme.bad)
+                Text(detailError).font(.footnote).foregroundStyle(Theme.bad)
                 Button("重新加载词义") { loadDetail() }
-                    .font(.system(size: 14, weight: .semibold))
+                    .font(.subheadline.weight(.semibold))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -165,12 +165,12 @@ struct LearnCardView: View {
             if personal == nil && trioLoading {
                 HStack {
                     TagLabel(text: "例句", color: Theme.muted)
-                    Text("正在补充例句…").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                    Text("正在补充例句…").font(.subheadline).foregroundStyle(Theme.muted)
                     ProgressView().scaleEffect(0.7)
                 }
             } else if personal == nil && !trioError.isEmpty {
-                Text(trioError).font(.system(size: 13)).foregroundStyle(Theme.muted)
-                Button("重新加载例句") { loadTrio() }.font(.system(size: 14, weight: .semibold))
+                Text(trioError).font(.footnote).foregroundStyle(Theme.muted)
+                Button("重新加载例句") { loadTrio() }.font(.subheadline.weight(.semibold))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -180,7 +180,7 @@ struct LearnCardView: View {
         Group {
             if app.speech.state == .listening {
                 Text(app.speech.liveText.isEmpty ? "请朗读例句，读完松开手…" : app.speech.liveText)
-                    .font(.system(size: 13)).foregroundStyle(Theme.accentLight)
+                    .font(.footnote).foregroundStyle(Theme.accentLight)
             } else if let r = shadowResult {
                 ShadowResultDisplay(result: r)
             } else if !shadowMsg.isEmpty {
@@ -192,9 +192,9 @@ struct LearnCardView: View {
                         }
                         #endif
                     }
-                    .font(.system(size: 13)).foregroundStyle(Theme.accentLight)
+                    .font(.footnote).foregroundStyle(Theme.accentLight)
                 } else {
-                    Text(shadowMsg).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    Text(shadowMsg).font(.footnote).foregroundStyle(Theme.muted)
                 }
             }
         }
@@ -387,13 +387,13 @@ struct ReviewQuizView: View {
                         .font(.system(size: 30, weight: .bold))
                         .foregroundStyle(Theme.text)
                         .multilineTextAlignment(.center)
-                    Text("选出对应的英文单词").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                    Text("选出对应的英文单词").font(.subheadline).foregroundStyle(Theme.muted)
                 } else {
                     HStack(alignment: .center, spacing: 10) {
                         BigWord(word: word)
                         PlayButton(text: word)
                     }
-                    Text("选出正确词义").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                    Text("选出正确词义").font(.subheadline).foregroundStyle(Theme.muted)
                 }
             }
             Spacer()
@@ -450,7 +450,7 @@ struct ReviewQuizView: View {
                     BigWord(word: word)
                     PlayButton(text: word)
                 }
-                Text("先回忆词义，再翻卡核对").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                Text("先回忆词义，再翻卡核对").font(.subheadline).foregroundStyle(Theme.muted)
             }
             Spacer()
         }
@@ -497,13 +497,13 @@ struct ProbeQuizView: View {
                                 .font(.system(size: 30, weight: .bold))
                                 .foregroundStyle(Theme.text)
                                 .multilineTextAlignment(.center)
-                            Text("选出对应的英文单词").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                            Text("选出对应的英文单词").font(.subheadline).foregroundStyle(Theme.muted)
                         } else {
                             HStack(alignment: .center, spacing: 10) {
                                 BigWord(word: item.word)
                                 PlayButton(text: item.word)
                             }
-                            Text("选出正确词义").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                            Text("选出正确词义").font(.subheadline).foregroundStyle(Theme.muted)
                         }
                     }
                     Spacer()
@@ -574,31 +574,31 @@ struct AnswerCardView: View {
                 VStack(spacing: 14) {
                     Card {
                         Text(quizOk ? "✓ 答对了——这次掌握程度？" : "✗ 正确答案")
-                            .font(.system(size: 18, weight: .bold))
+                            .font(.headline.weight(.bold))
                             .foregroundStyle(quizOk ? Theme.ok : Theme.bad)
                         HStack(alignment: .center, spacing: 10) {
                             BigWord(word: word)
                             PlayButton(text: word)
                         }
                         if let ph = detail?.phonetic, !ph.isEmpty {
-                            Text("/\(ph)/").font(.system(size: 15)).foregroundStyle(Theme.muted)
+                            Text("/\(ph)/").font(.subheadline).foregroundStyle(Theme.muted)
                         }
                         VStack(alignment: .leading, spacing: 4) {
                             ForEach(Array((detail?.senses ?? []).enumerated()), id: \.offset) { _, s in
                                 HStack(alignment: .top, spacing: 6) {
-                                    Text(s.pos ?? "·").font(.system(size: 13, weight: .medium)).foregroundStyle(Theme.accentLight)
-                                    Text(s.text).font(.system(size: 15)).foregroundStyle(Theme.text)
+                                    Text(s.pos ?? "·").font(.footnote.weight(.medium)).foregroundStyle(Theme.accentLight)
+                                    Text(s.text).font(.subheadline).foregroundStyle(Theme.text)
                                 }
                             }
                             if let senses=detail?.senses,!senses.isEmpty { MeaningFeedbackButton(word:word,text:senses.map(\.text).joined(separator:"；")) }
                             if detail == nil {
                                 if detailError.isEmpty {
                                     HStack { Text("正在加载词义…"); ProgressView().scaleEffect(0.7) }
-                                        .font(.system(size: 14)).foregroundStyle(Theme.muted)
+                                        .font(.subheadline).foregroundStyle(Theme.muted)
                                 } else {
-                                    Text(detailError).font(.system(size: 13)).foregroundStyle(Theme.bad)
+                                    Text(detailError).font(.footnote).foregroundStyle(Theme.bad)
                                     Button("重新加载词义") { Task { await loadDetail() } }
-                                        .font(.system(size: 14, weight: .semibold))
+                                        .font(.subheadline.weight(.semibold))
                                 }
                             }
                         }
@@ -607,7 +607,7 @@ struct AnswerCardView: View {
                     Card { sentenceArea }
                     if app.speech.state == .listening {
                         Text(app.speech.liveText.isEmpty ? "请朗读例句，读完松开手…" : app.speech.liveText)
-                            .font(.system(size: 13)).foregroundStyle(Theme.accentLight)
+                            .font(.footnote).foregroundStyle(Theme.accentLight)
                     } else if let r = shadowResult {
                         ShadowResultDisplay(result: r)
                     } else if !shadowMsg.isEmpty {
@@ -619,9 +619,9 @@ struct AnswerCardView: View {
                                 }
                                 #endif
                             }
-                            .font(.system(size: 13)).foregroundStyle(Theme.accentLight)
+                            .font(.footnote).foregroundStyle(Theme.accentLight)
                         } else {
-                            Text(shadowMsg).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                            Text(shadowMsg).font(.footnote).foregroundStyle(Theme.muted)
                         }
                     }
                 }
@@ -643,15 +643,15 @@ struct AnswerCardView: View {
                         PrimaryButton(title: "熟练", color: Theme.ok) { rate(4) }
                     }
                     Text("困难：费力想起 · 记得：正常想起 · 熟练：轻松想起")
-                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .font(.caption).foregroundStyle(Theme.muted)
                         .multilineTextAlignment(.center)
                 } else {
                     PrimaryButton(title: "继续 →") { app.commitUndoReview(); onNext() }
                     Text("已记为「忘记」，将按记忆间隔再次出现")
-                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .font(.caption).foregroundStyle(Theme.muted)
                     // 手滑误点救星：撤销这次「忘记」，回到本题重来
                     Button("点错了？撤销这次「忘记」") { onUndo() }
-                        .font(.system(size: 13))
+                        .font(.footnote)
                         .foregroundStyle(Theme.accentLight)
                 }
             }
@@ -683,7 +683,7 @@ struct AnswerCardView: View {
             if personal == nil && sentences.isEmpty {
                 HStack {
                     TagLabel(text: "例句", color: Theme.muted)
-                    Text("生成中…").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                    Text("生成中…").font(.subheadline).foregroundStyle(Theme.muted)
                 }
             }
         }
@@ -798,7 +798,7 @@ struct AcceptanceQuizView: View {
                     GhostButton(title: "稍后再做") { app.markDayDone(); app.route = .home }
                 }
                 Text("答对 → 按记忆间隔复习 · 答错 → 进入薄弱词，定制例句")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .font(.caption).foregroundStyle(Theme.muted)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -888,7 +888,7 @@ struct DoneView: View {
             ScrollView {
                 VStack(spacing: 14) {
                     Card {
-                        Text(remainingCapacity == 0 && dailyPlan.dueAvailable > 0 && dailyPlan.duePlanned == 0 ? "今日已达上限" : StudyEngine.availableNewCount(app.S) == 0 && dailyPlan.duePlanned == 0 ? "词库已学完 · 复习仍按间隔安排" : "本轮学习完成 🎉").font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
+                        Text(remainingCapacity == 0 && dailyPlan.dueAvailable > 0 && dailyPlan.duePlanned == 0 ? "今日已达上限" : StudyEngine.availableNewCount(app.S) == 0 && dailyPlan.duePlanned == 0 ? "词库已学完 · 复习仍按间隔安排" : "本轮学习完成 🎉").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
                         HStack(spacing: 0) {
                             StatCell(number: "\(todayCount("review"))", label: "今日复习")
                                 .accessibilityElement(children: .combine)
@@ -898,47 +898,47 @@ struct DoneView: View {
                         }
                         let counts = StudyEngine.dailyCounts(app.S, day: DayUtil.today())
                         Text("今日 \(counts.total) / \(app.S.settings.dailyCap) 个不同词 · \(counts.attempts) 次练习")
-                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            .font(.caption).foregroundStyle(Theme.muted)
                         if todayCount("probe") > 0 {
                             Text("每日上限还计入 \(todayCount("probe")) 个水平探测词；同一单词当天只计一次。")
-                                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                                .font(.caption).foregroundStyle(Theme.muted)
                         }
                         if dailyPlan.repeatPlanned > 0 {
                             Text("还有 \(dailyPlan.repeatPlanned) 个今天学过的词需要按间隔再复习，不增加今日单词数。")
-                                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                                .font(.caption).foregroundStyle(Theme.muted)
                         }
                         // v2.0 词级知识预测：预计认识词数 + 滞回级别 + 今日证据
                         if app.S.calibrated, app.S.posterior != nil {
                             let shown = app.S.track?.shownLevel ?? levelForPos(max(1, app.S.frontier))
                             Text("预计认识 \(StudyEngine.expectedKnown(app.S)) 词（\(levelDisplayName(shown))），明天从 \(app.S.pointer) 附近发词")
-                                .font(.system(size: 12)).foregroundStyle(Theme.accentLight)
+                                .font(.caption).foregroundStyle(Theme.accentLight)
                             Text("今日有效水平证据：" + StudyEngine.effectiveEvidenceSummary(app.S, day: DayUtil.today()))
-                                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                                .font(.caption).foregroundStyle(Theme.muted)
                             if let note = app.S.track?.lastNote, !note.isEmpty {
-                                Text(note).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                                Text(note).font(.caption).foregroundStyle(Theme.muted)
                             }
                         }
                         if app.dueLaterTodayCount(onlyCompleted: remainingCapacity == 0) > 0 && dailyPlan.duePlanned == 0 {
                             Text("⏰ 今天晚些时候还有 \(app.dueLaterTodayCount(onlyCompleted: remainingCapacity == 0)) 个词到期，记得回来")
-                                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                                .font(.caption).foregroundStyle(Theme.muted)
                         }
                     }
                     Card {
                         Text("今日薄弱词 · 个性化例句")
-                            .font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.text)
-                        Text(genStatus).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                            .font(.headline.weight(.bold)).foregroundStyle(Theme.text)
+                        Text(genStatus).font(.footnote).foregroundStyle(Theme.muted)
                         ForEach(Array(genRows.enumerated()), id: \.offset) { _, r in
                             VStack(alignment: .leading, spacing: 4) {
                                 HStack(alignment: .top, spacing: 8) {
                                     TagLabel(text: "个性化", color: Theme.warn)
-                                    Text(r.text).font(.system(size: 15)).foregroundStyle(Theme.text)
+                                    Text(r.text).font(.subheadline).foregroundStyle(Theme.text)
                                         .frame(maxWidth: .infinity, alignment: .leading)
                                     PlayButton(text: r.text)
                                 }
                                 Text("（复习词：\(([r.target] + (r.recall?.split(separator: ",").map(String.init) ?? [])).joined(separator: "、"))）")
-                                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                                    .font(.caption).foregroundStyle(Theme.muted)
                                 if let zh = r.zh, !zh.isEmpty {
-                                    Text(zh).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                                    Text(zh).font(.footnote).foregroundStyle(Theme.muted)
                                 }
                             }
                         }
@@ -962,7 +962,7 @@ struct DoneView: View {
                     }
                 } else if dailyPlan.dueAvailable > 0 && remainingCapacity == 0 {
                     Text("今日已达上限，还有 \(dailyPlan.dueAvailable) 词到期；可在设置中调整上限。")
-                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .font(.caption).foregroundStyle(Theme.muted)
                     GhostButton(title: "调整每日上限", color: Theme.accentLight) { app.route = .settings }
                         .accessibilityIdentifier("adjust-daily-cap")
                 }
@@ -994,9 +994,9 @@ struct SessionHeader: View {
     var body: some View {
         VStack(spacing: 8) {
             HStack {
-                Text(title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
+                Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
                 Spacer()
-                Button("退出") {
+                NavigationAction(title:"退出") {
                     app.audio.stop()
                     app.commitUndoReview()
                     app.route = .home

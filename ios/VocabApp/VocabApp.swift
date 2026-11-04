@@ -12,6 +12,7 @@ struct VocabApp: App {
                 .environment(app)
                 .environment(coachClock)
                 .preferredColorScheme(.dark)
+                .tint(Theme.accent)
                 .task { await app.boot() }
         }
     }
@@ -23,7 +24,7 @@ struct RootView: View {
 
     var body: some View {
         ZStack {
-            Color(.sRGB, red: 0.043, green: 0.055, blue: 0.075, opacity: 1).ignoresSafeArea()
+            Theme.bg.ignoresSafeArea()
             switch app.route {
             case .welcome:
                 WelcomeView()

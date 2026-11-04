@@ -38,7 +38,7 @@ struct HomeView: View {
                         chips
                     }
                     if !app.studyNotice.isEmpty {
-                        Text(app.studyNotice).font(.system(size: 14)).foregroundStyle(Theme.warn)
+                        Text(app.studyNotice).font(.subheadline).foregroundStyle(Theme.warn)
                             .accessibilityIdentifier("study-plan-notice")
                     }
                     if !app.S.calibrated {
@@ -78,7 +78,7 @@ struct HomeView: View {
                             }
                         }.accessibilityIdentifier("start-today")
                         if !startError.isEmpty {
-                            Text(startError).font(.system(size: 12)).foregroundStyle(Theme.bad)
+                            Text(startError).font(.caption).foregroundStyle(Theme.bad)
                         }
                     }
                 }
@@ -103,28 +103,28 @@ struct HomeView: View {
 
     private var placementIntro: some View {
         Card {
-            Text(app.S.placementVersion == nil ? "首次使用 · 智能定级" : "重新定级").font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
+            Text(app.S.placementVersion == nil ? "首次使用 · 智能定级" : "重新定级").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
             Text("共 30 道词义选择题，约需几分钟。难度会随作答调整，结果用于估计适合你的新词起点。可以中途退出，之后继续。")
-                .font(.system(size: 15)).foregroundStyle(Theme.text)
+                .font(.subheadline).foregroundStyle(Theme.text)
                 .multilineTextAlignment(.center)
             if app.S.probeCount > 0 {
                 Text("已完成 \(app.S.probeCount)/30\(app.S.probeCount >= 4 ? " · 当前估计 ≈\(Int(StudyEngine.postMean(app.S)))" : "")")
-                    .font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    .font(.footnote).foregroundStyle(Theme.muted)
             }
-            Text("开始按钮在屏幕底部 👇").font(.system(size: 12)).foregroundStyle(Theme.muted)
+            Text("开始按钮在屏幕底部 👇").font(.caption).foregroundStyle(Theme.muted)
         }
     }
 
     private var todayCard: some View {
         let plan = dailyPlan
         return Card {
-            Text("今日任务").font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
+            Text("今日任务").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
             // 今日进度：已完成 / 目标（复习+新词），一眼看到还差多少
             VStack(spacing: 4) {
                 HStack {
-                    Text("今日进度（预计）").font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    Text("今日进度（预计）").font(.caption).foregroundStyle(Theme.muted)
                     Spacer()
-                    Text("\(plan.completed) / \(plan.totalPlanned)").font(.system(size: 12, weight: .semibold)).foregroundStyle(Theme.accentLight)
+                    Text("\(plan.completed) / \(plan.totalPlanned)").font(.caption.weight(.semibold)).foregroundStyle(Theme.accentLight)
                 }
                 ProgressBar(value: plan.totalPlanned > 0 ? Double(plan.completed) / Double(plan.totalPlanned) : 0)
             }
@@ -145,13 +145,13 @@ struct HomeView: View {
             }
             if plan.dueAvailable > plan.duePlanned {
                 Text("另有 \(plan.dueAvailable - plan.duePlanned) 个词已到期，超出今日上限，暂未安排。")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .font(.caption).foregroundStyle(Theme.muted)
             }
             if plan.repeatPlanned > 0 {
                 Text("其中 \(plan.repeatPlanned) 个是今天学过的词，按间隔再复习，不增加今日单词数。")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .font(.caption).foregroundStyle(Theme.muted)
             }
-            Text("先预留每日新词名额，再安排到期复习；实际队列可能包含探测或提前复习。").font(.system(size: 12)).foregroundStyle(Theme.muted)
+            Text("先预留每日新词名额，再安排到期复习；实际队列可能包含探测或提前复习。").font(.caption).foregroundStyle(Theme.muted)
         }
     }
 }
@@ -162,19 +162,19 @@ struct TopBar: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
-                Text("词航").font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.text)
+                Text("词航").font(.title3.weight(.bold)).foregroundStyle(Theme.text)
                 Text(app.auth.map { "· \($0.nickname)" } ?? "· 游客（进度仅本机）")
-                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                    .font(.caption).foregroundStyle(Theme.muted)
                     .lineLimit(1).truncationMode(.tail)
                 Spacer(minLength: 4)
                 Button { app.route = .stats } label: {
-                    Image(systemName: "chart.bar").foregroundStyle(Theme.accentLight).frame(width: 44, height: 44)
+                    Image(systemName: "chart.bar").foregroundStyle(Theme.accentLight).frame(width: 44, height: 44).background(Theme.card,in:RoundedRectangle(cornerRadius:12))
                 }.accessibilityLabel("统计").accessibilityIdentifier("stats-menu")
                 Button { app.route = .settings } label: {
-                    Image(systemName: "gearshape").foregroundStyle(Theme.accentLight).frame(width: 44, height: 44)
+                    Image(systemName: "gearshape").foregroundStyle(Theme.accentLight).frame(width: 44, height: 44).background(Theme.card,in:RoundedRectangle(cornerRadius:12))
                 }.accessibilityLabel("设置").accessibilityIdentifier("settings-menu")
                 Button { app.route = app.isGuest ? .welcome : .userMenu } label: {
-                    Image(systemName: "person.circle").foregroundStyle(Theme.accentLight).frame(width: 44, height: 44)
+                    Image(systemName: "person.circle").foregroundStyle(Theme.accentLight).frame(width: 44, height: 44).background(Theme.card,in:RoundedRectangle(cornerRadius:12))
                 }.accessibilityLabel("账号").accessibilityIdentifier("account-menu")
             }
             if app.syncFailed {
@@ -183,26 +183,26 @@ struct TopBar: View {
                         Text("同步未完成，请查看详情")
                         Image(systemName: "chevron.right")
                     }
-                    .font(.system(size: 13, weight: .medium))
+                    .font(.footnote.weight(.medium))
                     .foregroundStyle(Theme.warn)
                     .frame(minHeight: 44, alignment: .leading)
                 }
                 .accessibilityIdentifier("sync-status")
             }
             if app.credentialSaveFailed {
-                Text("⚠️ 登录凭证未保存，重启后需重新登录").font(.system(size: 11)).foregroundStyle(Theme.warn)
+                Text("⚠️ 登录凭证未保存，重启后需重新登录").font(.caption).foregroundStyle(Theme.warn)
             }
             if app.localSaveFailed {
                 Button("本机保存失败，打开设置导出进度") { app.route = .settings }
-                    .font(.system(size: 13)).foregroundStyle(Theme.warn).frame(minHeight: 44)
+                    .font(.footnote).foregroundStyle(Theme.warn).frame(minHeight: 44)
             }
             if !app.fsrsReplayError.isEmpty {
                 Button("评分参数冲突，打开设置查看") { app.route = .settings }
-                    .font(.system(size: 13)).foregroundStyle(Theme.warn).frame(minHeight: 44)
+                    .font(.footnote).foregroundStyle(Theme.warn).frame(minHeight: 44)
             }
             if app.S.cards.values.contains(where: { $0.pendingFsrs != nil }) {
                 Button("评分待同步，打开账号查看") { app.route = app.isGuest ? .welcome : .userMenu }
-                    .font(.system(size: 13)).foregroundStyle(Theme.warn).frame(minHeight: 44)
+                    .font(.footnote).foregroundStyle(Theme.warn).frame(minHeight: 44)
                     .accessibilityIdentifier("pending-sync-status")
             }
         }
@@ -215,8 +215,8 @@ struct Chip: View {
     let value: String
     var body: some View {
         VStack(spacing: 2) {
-            Text(value).font(.system(size: 14, weight: .bold)).foregroundStyle(Theme.text)
-            Text(label).font(.system(size: 10)).foregroundStyle(Theme.muted)
+            Text(value).font(.subheadline.weight(.bold)).foregroundStyle(Theme.text)
+            Text(label).font(.caption2).foregroundStyle(Theme.muted)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 8)
@@ -231,11 +231,11 @@ struct StatCell: View {
     var body: some View {
         VStack(spacing: 3) {
             Text(number)
-                .font(.system(size: 26, weight: .bold))
+                .font(.title.weight(.bold))
                 .foregroundStyle(Theme.accentLight)
                 .lineLimit(1)
                 .minimumScaleFactor(0.55)   // "≈4150 · 四级" 这类长文自动缩到放得下
-            Text(label).font(.system(size: 12)).foregroundStyle(Theme.muted)
+            Text(label).font(.caption).foregroundStyle(Theme.muted)
         }
         .frame(maxWidth: .infinity)
     }

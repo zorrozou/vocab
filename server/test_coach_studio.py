@@ -11,7 +11,7 @@ from app.coach_curriculum import CASES, TRANSFER
 now=1793750400
 client=str(uuid4())
 calls=[]
-cards=[dict(c) for c in CASES["condition"].values()]
+cards=[dict(c,english=studio.english_copy(c)) for c in CASES["condition"].values()]
 cards[0]["passage"]="Please telephone the store about your raincoat if you cannot collect it before closing."
 cards[1]["passage"]="Unless our finance team revises the amount, the written estimate goes to our customer after lunch."
 cards[2]["passage"]="Another person has reserved the book you are using, so take it back before the Tuesday deadline."
@@ -23,7 +23,7 @@ def assess(prompt):
         return json.dumps({"relation":"MATCH","student_quote":json.loads(prompt[prompt.index('{\"student\"'):])["student"]})
     if "verdict" in prompt:
         data=json.loads(prompt[prompt.index("{"):])
-        return json.dumps({"verdict":"表达清楚","tip":"沟通行动清楚。","scene_quote":data["情境原文"][:15],"learner_quote":data["学生实际说的英语"][:10]})
+        return json.dumps({"verdict":"表达清楚","tip":"沟通行动清楚。","tipEn":"Your intended action is clear.","scene_quote":data["情境原文"][:15],"learner_quote":data["学生实际说的英语"][:10]})
     return '["PASS","PASS","PASS"]'
 with tempfile.TemporaryDirectory() as tmp:
     path=Path(tmp)/"personal.db"

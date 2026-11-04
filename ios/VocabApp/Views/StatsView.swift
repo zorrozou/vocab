@@ -3,6 +3,7 @@ import SwiftUI
 /// 学习统计：记忆保持率分布 + 未来 14 天负载 + 顽固词（移植自 web showStats）
 struct StatsView: View {
     @Environment(AppState.self) private var app
+    @Environment(\.dynamicTypeSize) private var textSize
     @State private var preparingDrill = false
     @State private var drillError = ""
 
@@ -23,9 +24,9 @@ struct StatsView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("学习统计").font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.text)
+                Text("学习统计").font(.headline.weight(.bold)).foregroundStyle(Theme.text)
                 Spacer()
-                Button("返回") { app.route = .home }.foregroundStyle(Theme.muted)
+                NavigationAction(title:"返回") { app.route = .home }
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
             ScrollView {
@@ -36,42 +37,44 @@ struct StatsView: View {
                         StatCell(number: "\(app.S.streak)", label: "连续天数")
                     }
                     LearningHealthView().id(app.auth?.accountId ?? "guest")
-                    Text("记忆保持率分布（FSRS）").font(.system(size: 16, weight: .bold))
+                    Text("记忆保持率分布（FSRS）").font(.body.weight(.bold))
                         .foregroundStyle(Theme.text).frame(maxWidth: .infinity, alignment: .leading)
                     let retention = StudyEngine.retentionSummary(app.S.cards, log: app.S.log, now: Date(), configurations: app.S.fsrsSchedulers ?? [:])
                     let buckets = Array(zip(["≥95%", "90~95%", "80~90%", "60~80%", "<60%"], retention.counts))
                     let total = max(1, buckets.map(\.1).reduce(0, +))
                     ForEach(Array(buckets.enumerated()), id: \.offset) { index, b in
-                        HStack(spacing: 8) {
-                            Text(b.0).font(.system(size: 11)).foregroundStyle(Theme.muted).frame(width: 52, alignment: .leading)
-                            GeometryReader { g in
-                                ZStack(alignment: .leading) {
-                                    RoundedRectangle(cornerRadius: 4).fill(Theme.cardDeep).frame(height: 10)
-                                    RoundedRectangle(cornerRadius: 4).fill(Theme.accent)
-                                        .frame(width: g.size.width * CGFloat(b.1) / CGFloat(total), height: 10)
-                                }
-                            }
-                            .frame(height: 10)
-                            Text("\(b.1)").font(.system(size: 11)).foregroundStyle(Theme.text).frame(width: 30, alignment: .trailing)
+                        VStack(alignment:.leading,spacing:4) {
+                            HStack {
+                                Text(b.0)
+                                Spacer()
+                                Text("\(b.1) 词").monospacedDigit()
+                            }.font(.footnote).foregroundStyle(Theme.text)
+                            ProgressBar(value:Double(b.1)/Double(total))
                         }
                         .accessibilityElement(children: .ignore)
                         .accessibilityLabel("\(b.0)：\(b.1)词")
                         .accessibilityIdentifier("retention-bin-\(index)")
                     }
                     Text("按对应参数曲线估算；\(retention.approximate) 词使用日期或参数近似，\(retention.unknown) 词缺少可用信息或评分待同步，未计入分布。")
-                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .font(.caption).foregroundStyle(Theme.muted)
                         .accessibilityIdentifier("retention-summary")
-                    Text("未来 14 天负载预测").font(.system(size: 16, weight: .bold))
+                    Text("未来 14 天负载预测").font(.body.weight(.bold))
                         .foregroundStyle(Theme.text).frame(maxWidth: .infinity, alignment: .leading)
                     let loads = loads14
                     let maxL = max(1, loads.map(\.1).max() ?? 1)
+                    if textSize.isAccessibilitySize {
+                        ForEach(loads,id:\.0) { day,count in
+                            HStack {Text(day);Spacer();Text("\(count) 词").monospacedDigit()}
+                                .font(.subheadline).accessibilityElement(children:.combine).accessibilityIdentifier("forecast-\(day)")
+                        }
+                    }else{
                     HStack(alignment: .bottom, spacing: 3) {
                         ForEach(Array(loads.enumerated()), id: \.offset) { _, l in
                             VStack(spacing: 2) {
                                 RoundedRectangle(cornerRadius: 3)
                                     .fill(Theme.accent)
                                     .frame(height: max(3, 60 * CGFloat(l.1) / CGFloat(maxL)))
-                                Text(String(l.0.suffix(5))).font(.system(size: 8)).foregroundStyle(Theme.muted)
+                                Text(String(l.0.suffix(2))).font(.caption2.monospacedDigit()).foregroundStyle(Theme.muted)
                             }
                             .frame(maxWidth: .infinity)
                             .accessibilityElement(children: .ignore)
@@ -80,17 +83,18 @@ struct StatsView: View {
                         }
                     }
                     .frame(height: 84)
+                    }
                     if !stubborn.isEmpty {
-                        Text("需要巩固（最近 14 天至少 2 次困难／忘记）").font(.system(size: 16, weight: .bold))
+                        Text("需要巩固（最近 14 天至少 2 次困难／忘记）").font(.body.weight(.bold))
                             .foregroundStyle(Theme.text).frame(maxWidth: .infinity, alignment: .leading)
                         Text(stubborn.map { row in
                             let counts = StudyEngine.recentDifficult(app.S, day: DayUtil.today())[row.0]
                             return "\(row.0)：忘记 \(counts?.again ?? 0) · 困难 \(counts?.hard ?? 0)"
                         }.joined(separator: " · "))
-                            .font(.system(size: 14)).foregroundStyle(Theme.text)
+                            .font(.subheadline).foregroundStyle(Theme.text)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         Text("新评分按独立学习证据统计；旧记录仅统计仍可追溯的部分。")
-                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            .font(.caption).foregroundStyle(Theme.muted)
                         // 顽固词特训：单独组队歼灭（纯复习队列，不进新词）
                         PrimaryButton(title: "最近 14 天薄弱词特训（\(drillWords.count) 词）", color: Theme.warn) {
                             guard !preparingDrill else { return }
@@ -105,10 +109,10 @@ struct StatsView: View {
                         }
                         .disabled(drillWords.isEmpty || preparingDrill)
                         .padding(.top, 4)
-                        if !drillError.isEmpty { Text(drillError).font(.system(size: 12)).foregroundStyle(Theme.bad) }
+                        if !drillError.isEmpty { Text(drillError).font(.caption).foregroundStyle(Theme.bad) }
                         if drillWords.count < stubborn.count {
                             Text("已为今日新词预留名额；超过上限的词暂不安排。")
-                                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                                .font(.caption).foregroundStyle(Theme.muted)
                         }
                     }
                 }

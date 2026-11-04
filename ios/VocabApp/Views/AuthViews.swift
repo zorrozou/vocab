@@ -8,13 +8,14 @@ struct WelcomeView: View {
     var body: some View {
         VStack(spacing: 0) {
             Spacer()
-            Text("词航").font(.system(size: 44, weight: .bold)).foregroundStyle(Theme.text)
-            Text("每天 10 个词，按遗忘曲线记住它们")
-                .font(.system(size: 15)).foregroundStyle(Theme.muted).padding(.top, 6)
+            Image(systemName:"book.pages").font(.largeTitle).foregroundStyle(Theme.accent).accessibilityHidden(true).padding(.bottom,8)
+            Text("词航").font(.largeTitle.weight(.bold)).foregroundStyle(Theme.text)
+            Text("听懂一则消息，读懂一段英语，记牢今天的词。")
+                .font(.subheadline).foregroundStyle(Theme.muted).padding(.top, 6)
             Spacer()
             Card {
                 Text("登录后进度可跨设备同步；\n游客模式进度仅保存在本机。")
-                    .font(.system(size: 15)).foregroundStyle(Theme.text)
+                    .font(.subheadline).foregroundStyle(Theme.text)
                     .multilineTextAlignment(.center)
                 PrimaryButton(title: "登录") { app.route = .auth(login: true) }
                 GhostButton(title: "注册新账号") { app.route = .auth(login: false) }
@@ -42,7 +43,7 @@ struct AuthView: View {
             Spacer()
             Card {
                 Text(isLogin ? "登录" : "注册")
-                    .font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
+                    .font(.title2.weight(.bold)).foregroundStyle(Theme.text)
                 TextField("用户名（字母/数字/下划线，3~20 位）", text: $username)
                     .accessibilityIdentifier("auth-username")
                     .textContentType(.username)
@@ -77,7 +78,7 @@ struct AuthView: View {
                 }
                 GhostButton(title: "返回", color: Theme.muted) { app.route = .welcome }
                 if !msg.isEmpty {
-                    Text(msg).font(.system(size: 13)).foregroundStyle(Theme.bad)
+                    Text(msg).font(.footnote).foregroundStyle(Theme.bad)
                 }
             }
             Spacer()
@@ -103,14 +104,14 @@ struct UserMenuView: View {
             Spacer()
             Card {
                 if let a = app.auth {
-                    Text(a.nickname).font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
-                    Text("@\(a.username)\(app.syncFailed ? " · 同步失败" : "")").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    Text(a.nickname).font(.title2.weight(.bold)).foregroundStyle(Theme.text)
+                    Text("@\(a.username)\(app.syncFailed ? " · 同步失败" : "")").font(.footnote).foregroundStyle(Theme.muted)
                     if app.syncFailed && msg.isEmpty {
                         Text((app.syncMsg.isEmpty || app.syncMsg == "✓ 已同步") ? "同步未完成，请重试或查看账号状态。" : app.syncMsg)
-                            .font(.system(size: 13)).foregroundStyle(Theme.warn)
+                            .font(.footnote).foregroundStyle(Theme.warn)
                     }
                     if !app.fsrsReplayError.isEmpty {
-                        Text(app.fsrsReplayError).font(.system(size: 13)).foregroundStyle(Theme.warn)
+                        Text(app.fsrsReplayError).font(.footnote).foregroundStyle(Theme.warn)
                     }
                     GhostButton(title: "立即同步") {
                         Task { await app.pushNow(); msg = app.syncMsg }
@@ -153,7 +154,7 @@ struct UserMenuView: View {
                         if !app.switchAccount() { msg = app.syncMsg }
                     }
                     Text("切换账号会先保留本机进度；退出登录会先尝试同步。")
-                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .font(.caption).foregroundStyle(Theme.muted)
                     PrimaryButton(title: "退出登录", color: Theme.bad) {
                         let owner = app.auth
                         Task {
@@ -164,7 +165,7 @@ struct UserMenuView: View {
                 }
                 GhostButton(title: "返回学习", color: Theme.muted) { app.route = .home }
                 if !msg.isEmpty {
-                    Text(msg).font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    Text(msg).font(.footnote).foregroundStyle(Theme.muted)
                 }
             }
             Spacer()

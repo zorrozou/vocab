@@ -2,6 +2,9 @@ import XCTest
 
 /// Run only against the isolated loopback fixture; never touches a production account.
 final class VocabUITests: XCTestCase {
+    private func capture(_ label:String,app:XCUIApplication) {
+        let shot=XCTAttachment(screenshot:app.screenshot());shot.name=label;shot.lifetime = .keepAlways;add(shot)
+    }
     func testListeningCoachAndClassicSwitch() throws {
         continueAfterFailure = false
         let app=XCUIApplication()
@@ -11,15 +14,18 @@ final class VocabUITests: XCTestCase {
         if guest.waitForExistence(timeout:4) {guest.tap()}
         if app.buttons["coach-enable"].exists {app.buttons["coach-enable"].tap()}
         let bank=app.buttons["coach-bank"]
-        XCTAssertTrue(bank.waitForExistence(timeout:15));bank.tap()
+        XCTAssertTrue(bank.waitForExistence(timeout:15));capture("studio-home",app:app);bank.tap()
+        XCTAssertTrue(app.staticTexts["You want to pick up the raincoat tomorrow. What should you do?"].waitForExistence(timeout:20))
         let transcript=app.buttons["coach-transcript"]
-        XCTAssertTrue(transcript.waitForExistence(timeout:18));transcript.tap()
-        let wrong=app.buttons["今天必须取走"]
+        XCTAssertTrue(transcript.waitForExistence(timeout:18));XCTAssertGreaterThanOrEqual(transcript.frame.height,44);capture("studio-listen",app:app);transcript.tap()
+        let wrong=app.buttons.matching(NSPredicate(format:"label CONTAINS %@", "今天必须取走")).firstMatch
         XCTAssertTrue(wrong.waitForExistence(timeout:5));wrong.tap()
-        XCTAssertTrue(app.staticTexts["一起看这条线索"].waitForExistence(timeout:10))
+        XCTAssertTrue(app.staticTexts["一起看这条线索"].waitForExistence(timeout:10));capture("studio-feedback",app:app)
+        app.buttons.matching(NSPredicate(format:"label CONTAINS %@", "请 AI 再讲一句")).firstMatch.tap()
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label BEGINSWITH %@", "课程题解 ·")).firstMatch.waitForExistence(timeout:12))
         app.buttons["coach-next"].tap()
         XCTAssertTrue(app.staticTexts["今天是唯一可取的日子吗？"].waitForExistence(timeout:8))
-        app.buttons["暂停并返回首页"].tap()
+        app.buttons["coach-pause"].tap()
         app.buttons["切回经典界面"].tap()
         XCTAssertTrue(app.buttons["coach-enable"].waitForExistence(timeout:5));app.buttons["coach-enable"].tap()
         app.buttons["coach-start"].tap()
@@ -32,6 +38,20 @@ final class VocabUITests: XCTestCase {
         app.buttons["coach-option-0"].tap()
         XCTAssertTrue(app.buttons["coach-next"].waitForExistence(timeout:10));app.buttons["coach-next"].tap()
         XCTAssertTrue(app.staticTexts["今日教练课完成"].waitForExistence(timeout:8))
+    }
+
+    func testLargeTextNavigation() throws {
+        let app=XCUIApplication()
+        app.launchArguments=["-UIPreferredContentSizeCategoryName","UICTContentSizeCategoryAccessibilityL"]
+        app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765"
+        app.launch()
+        let guest=app.buttons["先逛逛（游客模式）"]
+        if guest.waitForExistence(timeout:3){guest.tap()}
+        let settings=app.buttons["settings-menu"];XCTAssertTrue(settings.waitForExistence(timeout:12));settings.tap()
+        let back=app.buttons["返回"];XCTAssertTrue(back.waitForExistence(timeout:6));XCTAssertGreaterThanOrEqual(back.frame.height,44)
+        capture("large-settings",app:app);back.tap()
+        app.buttons["stats-menu"].tap();XCTAssertTrue(back.waitForExistence(timeout:6));capture("large-stats",app:app);back.tap()
+        XCTAssertTrue(settings.waitForExistence(timeout:6))
     }
 
     func testCoachTimeLimitInClassic() throws {

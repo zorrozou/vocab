@@ -6,6 +6,7 @@ struct StudioReview: Decodable { let day:String; let interval:Int; let ok:Bool }
 struct StudioStudy:Decodable {let on:Bool;let pairs,fixed,adaptive:Int}
 struct StudioDashboard: Decodable {
     let study:StudioStudy
+    let titleEn:String?
     let currentGoal:String
     let day,goal,focus,reason,source,title:String
     let used,limit:Int
@@ -18,9 +19,9 @@ struct StudioDashboard: Decodable {
     let weak:[String]
 }
 struct StudioPreparation:Decodable {let ready:Bool;let message:String}
-struct StudioReply:Decodable {let verdict,tip,example:String;let attempt:Int?}
+struct StudioReply:Decodable {let verdict,tip,example:String;let tipEn:String?;let attempt:Int?}
 enum StudioTheme {
-    static let mint=Color(red:0.47,green:0.88,blue:0.78)
+    static let mint=Theme.accent
     static let panel=Color(red:0.08,green:0.13,blue:0.15)
     static let names=["life":"日常听说","work":"职场沟通","read":"阅读理解"]
     static let gradient=LinearGradient(colors:[Color(red:0.07,green:0.22,blue:0.20),panel],startPoint:.topLeading,endPoint:.bottomTrailing)
@@ -34,6 +35,8 @@ enum StudioTheme {
 struct CoachHomeCard:View {
     @Environment(AppState.self) private var app
     @AppStorage("coach.classic.interface.v1") private var classic=false
+    @Environment(\.dynamicTypeSize) private var textSize
+    private var columns:AnyLayout {textSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment:.leading)):AnyLayout(HStackLayout(alignment:.top))}
     @State private var tab=0
     @State private var report:StudioDashboard?
     @State private var preparing=false
@@ -77,21 +80,27 @@ struct CoachHomeCard:View {
                 VStack(alignment:.leading,spacing:14){
                     Picker("工作室栏目",selection:$tab){
                         Text("今日课堂").tag(0);Text("学习档案").tag(1);Text("我的目标").tag(2)
-                    }.pickerStyle(.segmented).onChange(of:tab){_,newTab in
+                    }.pickerStyle(.segmented).controlSize(.large).onChange(of:tab){_,newTab in
                         waiting=UUID();preparing=false;message=""
                         if newTab==0 {Task{await reload()}}
                     }
                     if tab==0 {
                         Text("听读工作室  /  "+(StudioTheme.names[report?.currentGoal ?? "life"] ?? "日常听说")).font(.caption.bold()).foregroundStyle(StudioTheme.mint)
-                        Text(report?.title ?? "准备今天的听读课").font(.title.bold())
+                        LessonPair(en:report?.titleEn ?? "Today’s lesson",zh:report?.title ?? "准备今天的听读课",font:.system(.largeTitle,design:.serif))
                         Text(report?.reason ?? "先理解消息，再换一个情境做决定。").font(.subheadline)
                         if let d=report {
                             Text(d.focus+" · "+(d.source.isEmpty ? (d.prepared ? "AI 材料已就绪":"教研材料可用") : d.source)).font(.caption).foregroundStyle(StudioTheme.mint)
-                            HStack {ForEach(["01 理解消息","02 核对行动","03 换境验证"],id:\.self){label in Text(label).font(.caption2.bold()).padding(5).background(.black.opacity(0.2),in:Capsule())}}
-                            Button(d.complete ? "查看今日成果":d.started ? "继续今日课程":preparing ? "正在为你备课…":"进入今日教练课"){Task{await begin()}}
-                                .buttonStyle(.borderedProminent).tint(StudioTheme.mint).foregroundStyle(.black).disabled(preparing).accessibilityIdentifier("coach-start")
-                            if !d.started && !d.prepared {Button("直接使用教研课程"){enter()}.accessibilityIdentifier("coach-bank")}
-                            if d.minutes.count==3 {HStack{metric("\(d.minutes[0]) 分","听读任务");metric("\(d.minutes[1]) 分","词汇复习");metric("\(d.minutes[2]) 分","可选回应")}}
+                            columns {
+                                LessonPair(en:"01 Understand",zh:"理解消息",font:.caption.bold())
+                                LessonPair(en:"02 Choose",zh:"核对行动",font:.caption.bold())
+                                LessonPair(en:"03 Try again",zh:"换境验证",font:.caption.bold())
+                            }
+                            LessonAction(en:d.complete ? "View recap":d.started ? "Resume lesson":preparing ? "Preparing lesson…":"Start lesson",
+                                zh:d.complete ? "查看今日成果":d.started ? "继续今日课程":preparing ? "正在为你备课…":"进入今日教练课",icon:"arrow.right",primary:true){
+                                Task{await begin()}
+                            }.disabled(preparing).accessibilityIdentifier("coach-start")
+                            if !d.started && !d.prepared {LessonAction(en:"Use prepared material",zh:"直接使用教研课程",icon:"book"){enter()}.accessibilityIdentifier("coach-bank")}
+                            if d.minutes.count==3 {columns{metric("\(d.minutes[0]) 分","听读任务");metric("\(d.minutes[1]) 分","词汇复习");metric("\(d.minutes[2]) 分","可选回应")}}
                             Text("按剩余时间安排，30 分钟收课，最多 40 分钟。").font(.caption).foregroundStyle(.secondary)
                             if !d.weak.isEmpty {Text("近期练词线索 · "+d.weak.joined(separator:" / ")).font(.caption)}
                             if d.legacy {Button("接着完成上一版的课"){enter(1)}}
@@ -99,7 +108,7 @@ struct CoachHomeCard:View {
                     } else if tab==1 {
                         Text("近 7 天 · 学习档案").font(.title2.bold())
                         if let d=report {
-                            HStack {metric("\(d.signals["listen"] ?? 0)","首听答对");metric("\(d.signals["replay"] ?? 0)","重听答对");metric("\(d.signals["read"] ?? 0)","独立读懂")}
+                            columns {metric("\(d.signals["listen"] ?? 0)","首听答对");metric("\(d.signals["replay"] ?? 0)","重听答对");metric("\(d.signals["read"] ?? 0)","独立读懂")}
                             Text("借助提示答对 \(d.signals["assisted"] ?? 0) 次 · 需要再练 \(d.signals["miss"] ?? 0) 次").font(.caption)
                             ForEach(d.skills,id:\.label){s in HStack{Text(s.label);Spacer();Text(s.attempts>0 ? "\(s.independent)/\(s.attempts) 次独立":"待观察").foregroundStyle(.secondary)}.font(.subheadline)}
                             Divider();Text("课堂手记").bold()
@@ -115,7 +124,7 @@ struct CoachHomeCard:View {
                         ForEach(["life","work","read"],id:\.self){g in
                             Button((report?.goal==g ? "✓  ":"")+(StudioTheme.names[g] ?? g)){
                                 waiting=UUID();preparing=false;message="";Task{await reload(g)}
-                            }.buttonStyle(.bordered)
+                            }.buttonStyle(.bordered).controlSize(.large)
                         }
                         Text("可选的学习方式对照").bold()
                         Text("开启后，两类练习使用相同教研材料，只比较相近训练时间、相同延迟和模态的陌生题。可以随时退出。").font(.caption)
@@ -123,7 +132,7 @@ struct CoachHomeCard:View {
                         Text("目标随账号保存，已开始的一课保留原教材。").font(.caption).foregroundStyle(.secondary)
                     }
                     if !message.isEmpty {Text(message).font(.caption)}
-                    Button("切回经典界面"){waiting=UUID();preparing=false;classic=true}.font(.caption)
+                    Button("切回经典界面"){waiting=UUID();preparing=false;classic=true}.frame(minHeight:44).font(.footnote)
                 }.padding(18).frame(maxWidth:.infinity,alignment:.leading)
                  .background(StudioTheme.gradient,in:RoundedRectangle(cornerRadius:20))
                  .overlay(RoundedRectangle(cornerRadius:20).stroke(StudioTheme.mint.opacity(0.28)))
@@ -133,5 +142,43 @@ struct CoachHomeCard:View {
             if let value=try? await APIClient.shared.coachAvailable(){available=value}
             if available && !classic {await reload()}
         }.onDisappear {waiting=UUID();preparing=false}
+    }
+}
+
+/// English carries the action. Chinese stays readable at the user's chosen text size.
+struct LessonPair:View {
+    var en:String?
+    let zh:String
+    var font:Font = .body.weight(.semibold)
+    var primary:Color = Theme.text
+    var secondary:Color = Theme.muted
+    var body:some View {
+        VStack(alignment:.leading,spacing:3) {
+            if let en,!en.isEmpty {
+                Text(verbatim:en).font(font).foregroundStyle(primary)
+                Text(verbatim:zh).font(.footnote).foregroundStyle(secondary)
+            } else {Text(verbatim:zh).font(font).foregroundStyle(primary)}
+        }.fixedSize(horizontal:false,vertical:true)
+    }
+}
+
+struct LessonAction:View {
+    let en:String
+    let zh:String
+    var icon:String?=nil
+    var primary=false
+    let action:()->Void
+    var body:some View {
+        Button(action:action) {
+            HStack(spacing:12) {
+                if let icon {Image(systemName:icon).accessibilityHidden(true)}
+                LessonPair(en:en,zh:zh,font:.body.weight(.semibold),primary:primary ? Theme.bg:Theme.text,
+                           secondary:primary ? Color(red:0.13,green:0.27,blue:0.24):Theme.muted)
+                Spacer(minLength:0)
+            }.padding(.horizontal,14).padding(.vertical,9).frame(minHeight:48)
+             .background(primary ? Theme.accent:Theme.cardDeep,in:RoundedRectangle(cornerRadius:12))
+             .overlay(RoundedRectangle(cornerRadius:12).stroke(primary ? Color.clear:Theme.edge))
+             .contentShape(Rectangle())
+        }.buttonStyle(.plain)
     }
 }

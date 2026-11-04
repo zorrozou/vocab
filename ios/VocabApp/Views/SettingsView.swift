@@ -156,15 +156,15 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack {
-                Text("设置").font(.system(size: 18, weight: .bold)).foregroundStyle(Theme.text)
+                Text("设置").font(.headline.weight(.bold)).foregroundStyle(Theme.text)
                 Spacer()
-                Button("返回") { app.route = .home }.foregroundStyle(Theme.muted)
+                NavigationAction(title:"返回") { app.route = .home }
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
             ScrollView {
                 Card {
                     if !app.fsrsReplayError.isEmpty {
-                        Text(app.fsrsReplayError).font(.system(size: 13)).foregroundStyle(Theme.warn)
+                        Text(app.fsrsReplayError).font(.footnote).foregroundStyle(Theme.warn)
                     }
                     settingSection(id: "new", title: "每日新词数",
                                    options: [5, 10, 15, 20],
@@ -178,9 +178,9 @@ struct SettingsView: View {
                     }
                     if app.auth != nil {
                         Text("两端共用今日名单。已发出的词会继续占用名额，降低数量或调整新词比例可能从明天生效；提高总上限可增加今天的名额。")
-                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            .font(.caption).foregroundStyle(Theme.muted)
                     }
-                    Text("朗读嗓音").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    Text("朗读嗓音").font(.footnote).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                         ForEach(voices, id: \.0) { v, name in
@@ -190,9 +190,10 @@ struct SettingsView: View {
                                 app.audio.play("The quick brown fox jumps over the lazy dog.", voice: v)
                             } label: {
                                 Text(name)
-                                    .font(.system(size: 14, weight: selected ? .semibold : .regular))
+                                    .font(.subheadline.weight(selected ? .semibold : .regular))
                                     .frame(maxWidth: .infinity).padding(.vertical, 10)
                                     .foregroundStyle(selected ? Theme.accentLight : Theme.text)
+                            .background(selected ? Theme.accent.opacity(0.12):Theme.cardDeep,in:RoundedRectangle(cornerRadius:8))
                                     .overlay(RoundedRectangle(cornerRadius: 8)
                                         .stroke(selected ? Theme.accent : Theme.muted.opacity(0.4)))
                             }
@@ -202,18 +203,18 @@ struct SettingsView: View {
                 .padding(.top, 12)
 
                 Card {
-                    Text("定级").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    Text("定级").font(.footnote).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     GhostButton(title: "重新定级（30 题重测词汇边界）") {
                         showReplaceConfirm = true
                     }
                     Text("随时可测。已学单词、复习进度、连续天数全部保留，只更新词汇边界和后续新词起点。")
-                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .font(.caption).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
                 Card {
-                    Text("估值校验").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    Text("估值校验").font(.footnote).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     GhostButton(title: validationLoading ? "正在准备校验…" : "独立水平校验（24 题，不影响学习计划）") {
                         guard !validationLoading else { return }
@@ -230,25 +231,25 @@ struct SettingsView: View {
                         }
                     }.disabled(validationLoading)
                     if !validationError.isEmpty {
-                        Text(validationError).font(.system(size: 13)).foregroundStyle(Theme.warn)
+                        Text(validationError).font(.footnote).foregroundStyle(Theme.warn)
                     }
                     if let r = app.S.evalReport {
                         Text("上次 \(r.date)：独立 ≈\(r.mean)，当前 ≈\(r.appMean)，差值 \(r.delta > 0 ? "+" : "")\(r.delta)")
-                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            .font(.caption).foregroundStyle(Theme.muted)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     } else {
                         Text("用独立题目检验当前估值偏差，不修改后验、卡片或发词位置。")
-                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            .font(.caption).foregroundStyle(Theme.muted)
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }
 
                 Card {
-                    Text("学习数据").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    Text("学习数据").font(.footnote).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if (try? JSONEncoder().encode(app.S).count) ?? 0 > 6 * 1024 * 1024 {
                         Text("学习状态接近同步大小上限，请先同步其他设备，再整理已同步的历史。")
-                            .font(.system(size: 12)).foregroundStyle(Theme.warn)
+                            .font(.caption).foregroundStyle(Theme.warn)
                     }
                     GhostButton(title: exporting ? "正在准备备份…" : "导出本机学习进度") {
                         prepareExport(app.S)
@@ -350,7 +351,7 @@ struct SettingsView: View {
                             }
                         }.disabled(exporting)
                         if !largeRestoreExportMessage.isEmpty {
-                            Text(largeRestoreExportMessage).font(.system(size: 12)).foregroundStyle(Theme.warn)
+                            Text(largeRestoreExportMessage).font(.caption).foregroundStyle(Theme.warn)
                                 .accessibilityIdentifier("large-restore-export-message")
                         }
                         GhostButton(title: restoring ? "正在处理…" : "整理已同步的历史") { showCheckpointConfirm = true }
@@ -358,7 +359,7 @@ struct SettingsView: View {
                     }
                     if !app.unverifiedStateURLs.isEmpty {
                         Text("发现归属未确认的旧存档。请先导出核对，再决定是否恢复。")
-                            .font(.system(size: 12)).foregroundStyle(Theme.warn)
+                            .font(.caption).foregroundStyle(Theme.warn)
                         ForEach(Array(app.unverifiedStateURLs.enumerated()), id: \.element) { index, url in
                             GhostButton(title: "导出未确认的旧存档 \(index + 1)") {
                                 do {
@@ -386,21 +387,21 @@ struct SettingsView: View {
                         showingImporter = true
                     }.disabled(restoring)
                     Text("导出文件包含学习记录，不包含密码或登录凭证，请妥善保管。游客更换设备或清除应用数据后，旧的云端例句任务无法继续取回，可重新生成。")
-                        .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        .font(.caption).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     if !exportError.isEmpty {
-                        Text(exportError).font(.system(size: 12)).foregroundStyle(Theme.warn)
+                        Text(exportError).font(.caption).foregroundStyle(Theme.warn)
                     }
                     if !restoreMessage.isEmpty {
-                        Text(restoreMessage).font(.system(size: 12)).foregroundStyle(Theme.muted)
+                        Text(restoreMessage).font(.caption).foregroundStyle(Theme.muted)
                     }
                 }
 
                 Card {
-                    Text("复习提醒").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    Text("复习提醒").font(.footnote).foregroundStyle(Theme.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                     HStack {
-                        Text("每日提醒").font(.system(size: 15)).foregroundStyle(Theme.text)
+                        Text("每日提醒").font(.subheadline).foregroundStyle(Theme.text)
                         Spacer()
                         Toggle("", isOn: Binding(
                             get: { app.S.settings.notifyEnabled },
@@ -415,7 +416,7 @@ struct SettingsView: View {
                         .accessibilityIdentifier("setting-reminder-enabled")
                     }
                     if app.S.settings.notifyEnabled {
-                        Text("提醒时间").font(.system(size: 13)).foregroundStyle(Theme.muted)
+                        Text("提醒时间").font(.footnote).foregroundStyle(Theme.muted)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         HStack(spacing: 8) {
                             ForEach([20, 21, 22], id: \.self) { h in
@@ -424,29 +425,30 @@ struct SettingsView: View {
                                 } label: {
                                     Text("\(h):00")
                                         .font(.system(size: 15, weight: app.S.settings.notifyHour == h ? .semibold : .regular))
-                                        .frame(maxWidth: .infinity).padding(.vertical, 9)
+                                        .padding(.vertical, 9).frame(maxWidth:.infinity,minHeight:44)
                                         .foregroundStyle(app.S.settings.notifyHour == h ? Theme.accentLight : Theme.text)
+                            .background(app.S.settings.notifyHour == h ? Theme.accent.opacity(0.12):Theme.cardDeep,in:RoundedRectangle(cornerRadius:8))
                                         .overlay(RoundedRectangle(cornerRadius: 8)
                                             .stroke(app.S.settings.notifyHour == h ? Theme.accent : Theme.muted.opacity(0.4)))
                                 }
                             }
                         }
                         Text("纯本地通知，不联网。如果当天已完成学习，忽略提醒即可。")
-                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            .font(.caption).foregroundStyle(Theme.muted)
                             .frame(maxWidth: .infinity, alignment: .leading)
                         switch NotificationService.status {
                         case .denied:
                             Text("系统通知权限未开启，请在系统设置中允许词航发送通知。")
-                                .font(.system(size: 12)).foregroundStyle(Theme.warn)
+                                .font(.caption).foregroundStyle(Theme.warn)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         case .failed:
                             Text("提醒设置失败，请重试。")
-                                .font(.system(size: 12)).foregroundStyle(Theme.warn)
+                                .font(.caption).foregroundStyle(Theme.warn)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                             Button("重试设置提醒") { NotificationService.apply(settings: app.S.settings) }
                         case .invalidTime:
                             Text("提醒时间无效，请重新选择。")
-                                .font(.system(size: 12)).foregroundStyle(Theme.warn)
+                                .font(.caption).foregroundStyle(Theme.warn)
                                 .frame(maxWidth: .infinity, alignment: .leading)
                         case .disabled, .checking, .scheduled:
                             EmptyView()
@@ -572,17 +574,19 @@ struct SettingsView: View {
     private func settingSection(id: String, title: String, options: [Int], current: Int,
                                 onPick: @escaping (Int) -> Void) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(title).font(.system(size: 13)).foregroundStyle(Theme.muted)
+            Text(title).font(.footnote).foregroundStyle(Theme.muted)
             LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: options.count > 4 ? 3 : options.count), spacing: 8) {
                 ForEach(options, id: \.self) { n in
                     Button { onPick(n) } label: {
                         Text("\(n)")
-                            .font(.system(size: 15, weight: n == current ? .semibold : .regular))
-                            .frame(maxWidth: .infinity).padding(.vertical, 9)
+                            .font(.body.weight(n == current ? .semibold : .regular))
+                            .padding(.vertical, 9).frame(maxWidth:.infinity,minHeight:44)
                             .foregroundStyle(n == current ? Theme.accentLight : Theme.text)
+                            .background(n == current ? Theme.accent.opacity(0.12):Theme.cardDeep,in:RoundedRectangle(cornerRadius:8))
                             .overlay(RoundedRectangle(cornerRadius: 8)
                                 .stroke(n == current ? Theme.accent : Theme.muted.opacity(0.4)))
                     }
+                    .accessibilityAddTraits(n == current ? .isSelected:[])
                     .accessibilityIdentifier("setting-\(id)-\(n)")
                     .accessibilityValue(n == current ? "已选择" : "未选择")
                 }
@@ -621,9 +625,9 @@ struct ValidationView: View {
                 if v.idx >= v.words.count, v.failed > 0 {
                     VStack(spacing: 14) {
                         Spacer()
-                        Text("校验暂不可用").font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
+                        Text("校验暂不可用").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
                         Text("部分题目加载失败，本次结果不作为估值依据。请重试。")
-                            .font(.system(size: 14)).foregroundStyle(Theme.muted)
+                            .font(.subheadline).foregroundStyle(Theme.muted)
                         Spacer()
                         PrimaryButton(title: retrying ? "正在准备…" : "重新校验") { restartValidation() }.disabled(retrying)
                         GhostButton(title: "返回设置") { app.closeValidation() }
@@ -646,16 +650,16 @@ struct ValidationView: View {
                                 if reverse, let prompt = quiz?.prompt {
                                     Text(prompt).font(.system(size: 30, weight: .bold))
                                         .foregroundStyle(Theme.text).multilineTextAlignment(.center)
-                                    Text("选出对应的英文单词").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                                    Text("选出对应的英文单词").font(.subheadline).foregroundStyle(Theme.muted)
                                 } else {
                                     HStack(spacing: 10) {
                                         BigWord(word: v.words[v.idx].word)
                                         PlayButton(text: v.words[v.idx].word)
                                     }
-                                    Text("选出正确词义").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                                    Text("选出正确词义").font(.subheadline).foregroundStyle(Theme.muted)
                                 }
                                 Text("只用于检验估值偏差，不影响学习计划")
-                                    .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                                    .font(.caption).foregroundStyle(Theme.muted)
                             }
                             Spacer()
                         }
@@ -702,16 +706,16 @@ struct ValidationView: View {
     private func resultView(_ r: EvalReport) -> some View {
         VStack(spacing: 14) {
             Spacer()
-            Text("独立校验结果").font(.system(size: 24, weight: .bold)).foregroundStyle(Theme.text)
-            Text("≈\(r.mean)").font(.system(size: 44, weight: .bold)).foregroundStyle(Theme.accentLight)
+            Text("独立校验结果").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
+            Text("≈\(r.mean)").font(.largeTitle.weight(.bold)).foregroundStyle(Theme.accentLight)
             Text("独立估值（±\(r.std)） · 答对 \(r.correct)/\(r.count)")
-                .font(.system(size: 13)).foregroundStyle(Theme.muted)
+                .font(.footnote).foregroundStyle(Theme.muted)
             Text("当前学习系统估值：\(r.appMean)\n差值（当前 − 独立）：\(r.delta > 0 ? "+" : "")\(r.delta)")
-                .font(.system(size: 16)).foregroundStyle(Theme.text).multilineTextAlignment(.center)
+                .font(.body).foregroundStyle(Theme.text).multilineTextAlignment(.center)
             Text(abs(r.delta) <= 500 ? "与当前估值基本一致" : (r.delta > 0 ? "当前估值可能偏高" : "当前估值可能偏低"))
-                .font(.system(size: 14)).foregroundStyle(Theme.warn)
+                .font(.subheadline).foregroundStyle(Theme.warn)
             Text("本次校验没有修改你的后验、卡片或后续发词位置。")
-                .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                .font(.caption).foregroundStyle(Theme.muted)
             Spacer()
             PrimaryButton(title: "返回设置") { app.closeValidation() }
             GhostButton(title: retrying ? "正在准备…" : "重新校验") { restartValidation() }.disabled(retrying)

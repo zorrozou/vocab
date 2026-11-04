@@ -35,9 +35,9 @@ struct PlacementView: View {
                     HStack {
                         Text("智能定级 · 第 \(probeCount + 1)/30 题 · 第 \(currentBand) 区间")
                             .accessibilityIdentifier("placement-progress")
-                            .font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.text)
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
                         Spacer()
-                        Button("退出") { app.route = .home }.foregroundStyle(Theme.muted)
+                        NavigationAction(title:"退出") { app.route = .home }
                     }
                     .padding(.horizontal, 16).padding(.vertical, 10)
                     ProgressBar(value: min(1, Double(probeCount) / 30.0))
@@ -54,7 +54,7 @@ struct PlacementView: View {
                                 BigWord(word: quiz.word)
                                 PlayButton(text: quiz.word)
                             }
-                            Text("选出正确词义").font(.system(size: 14)).foregroundStyle(Theme.muted)
+                            Text("选出正确词义").font(.subheadline).foregroundStyle(Theme.muted)
                         }
                     }
                     Spacer()
@@ -67,7 +67,7 @@ struct PlacementView: View {
                             GhostButton(title: "不认识") { answer(quiz, ok: false, guessed: false) }
                         }
                         Text("不确定请点「不认识」，不要猜")
-                            .font(.system(size: 12)).foregroundStyle(Theme.muted)
+                            .font(.caption).foregroundStyle(Theme.muted)
                     }
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
@@ -162,14 +162,14 @@ struct PlacementView: View {
         VStack {
             Spacer()
             Card {
-                Text("定级完成").font(.system(size: 22, weight: .bold)).foregroundStyle(Theme.text)
+                Text("定级完成").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
                 Text("预计认识 \(StudyEngine.expectedKnown(app.S)) 词")
-                    .font(.system(size: 34, weight: .bold)).foregroundStyle(Theme.accentLight)
+                    .font(.largeTitle.weight(.bold)).foregroundStyle(Theme.accentLight)
                 Text("当前级别：\(levelDisplayName(levelForPos(boundary))) · 发词位置 \(boundary)\n\(scoreText)\n新词将从这个位置开始，\(app.S.pendingNew.count) 个答错词会优先补学")
-                    .font(.system(size: 14)).foregroundStyle(Theme.muted)
+                    .font(.subheadline).foregroundStyle(Theme.muted)
                     .multilineTextAlignment(.center)
                 Text("这是近似估计，可随学习逐步调整。")
-                    .font(.system(size: 13)).foregroundStyle(Theme.muted)
+                    .font(.footnote).foregroundStyle(Theme.muted)
                 PrimaryButton(title: startingStudy ? "正在准备…" : "开始学习") {
                     guard !startingStudy else { return }
                     startingStudy = true

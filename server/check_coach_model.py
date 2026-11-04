@@ -15,7 +15,7 @@ def main():
         return hunyuan_chat(prompt, temperature=0.15, max_tokens=360)
 
     def write(prompt):
-        return hunyuan_chat(prompt, temperature=0.55, max_tokens=3800)
+        return hunyuan_chat(prompt, temperature=0.55, max_tokens=5400)
 
     material = prepare_material(write, edit, "condition", "work", 2500, ["confirm"], "区分条件和事实")
     print(f"Reviewed {len(material['cards'])} new scenes.")

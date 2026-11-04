@@ -15,6 +15,7 @@ from fastapi import Header, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.coach_material import PACK
+from app.coach_english import LEGACY
 from app import coach_studio as studio
 from app.limits import check_rate
 
@@ -185,7 +186,8 @@ def task(lesson,step):
     correct=sha256(ident.encode()).digest()[0]%2
     options=[values[2],values[3]] if correct==0 else [values[3],values[2]]
     aids=lesson.get("aids",{}).get(ident,{})
-    return {"id":ident,"shown":"transcript" in aids.values(),"plays":sum(v=="play" for v in aids.values()),"passage":values[0],"question":values[1],"options":options,
+    q,en_right,en_wrong,_=LEGACY[values[1]]
+    return {"questionEn":q,"optionsEn":[en_right,en_wrong] if correct==0 else [en_wrong,en_right],"id":ident,"shown":"transcript" in aids.values(),"plays":sum(v=="play" for v in aids.values()),"passage":values[0],"question":values[1],"options":options,
             "kind":"listen" if step%2==0 else "read",
             "purpose":("先独立理解" if step==0 else "带着线索再试" if step==1 and needs_help else "换个情境验证"),
             "hint":("先区分已知事实和对方要求的行动。" if step==1 and needs_help else "")},correct,values
@@ -200,8 +202,21 @@ def present(lesson):
         extras={"edition":2,"source":lesson["source"],"title":lesson["cards"][0]["title"],
                 "words":lesson["words"],"interval":lesson["interval"],"response":lesson.get("response")}
         extras["debrief"]=studio.debrief(lesson)
+    last=None
+    if answers:
+        last=dict(answers[-1])
+        step=len(answers)-1
+        previous,right,values=task(lesson,step)
+        if previous.get("optionsEn"):
+            if lesson.get("edition")==2:
+                index={"receive":0,"diagnose":0,"apply":1,"transfer":2}[previous["stage"]]
+                proof=studio.english_copy(lesson["cards"][index])["proof"]
+            else:
+                proof=LEGACY[values[1]][3]
+            last.update(expectedEn=previous["optionsEn"][right],explanationEn=proof,
+                        title=previous.get("title"),titleEn=previous.get("titleEn"))
     return {**extras,"day":lesson["day"],"track":lesson["track"],"focus":studio.SKILLS[lesson["skill"]] if lesson.get("edition")==2 else PACK[lesson["skill"]]["label"],
-            "reason":lesson["reason"],"step":len(answers),"count":count,"last":answers[-1] if answers else None,
+            "reason":lesson["reason"],"step":len(answers),"count":count,"last":last,
             "task":task(lesson,len(answers))[0] if len(answers)<count else None,
             "independent":sum(a["ok"] and a["mode"]!="assisted" and not a.get("replay") for a in answers)}
 
@@ -245,7 +260,7 @@ def mount_coach(app, database, identify, enabled, explain, author=None, assess=N
             cached=json.loads(prep[0]) if prep and prep[0] and not report["study"]["on"] else None
             ready=bool(cached and studio.SKILLS[cached["skill"]]==report["focus"])
             if ready and not report["started"]:
-                report.update(title=cached["cards"][0]["title"],source="AI 定制")
+                report.update(title=cached["cards"][0]["title"],titleEn=studio.english_copy(cached["cards"][0]).get("title"),source="AI 定制")
             previous=load_lesson(conn,who,day)
             report.update(used=info["used"],limit=info["limit"],prepared=ready,
                           legacy=bool(previous and present(previous)["task"]),weak=inputs(body))
@@ -367,9 +382,9 @@ def mount_coach(app, database, identify, enabled, explain, author=None, assess=N
                 raise HTTPException(409,"请先完成一道题")
             index=len(current["answers"])-1
             answer=current["answers"][index]
-            fallback={"text":answer["explanation"],"ai":False}
-            if answer.get("ai"):
-                return {"text":answer["ai"],"ai":True}
+            fallback={"text":answer["explanation"],"textEn":present(current)["last"].get("explanationEn"),"ai":False}
+            if answer.get("ai") and answer.get("aiEn"):
+                return {"text":answer["ai"],"textEn":answer["aiEn"],"ai":True}
             if answer.get("requested",0)>time.time()-120:
                 return fallback
             answer["requested"]=time.time()
@@ -377,18 +392,21 @@ def mount_coach(app, database, identify, enabled, explain, author=None, assess=N
             prompt,_,_=task(current,index)
         # Scores, dates, and memory never come from a model. No identity or raw learner text is sent.
         try:
-            out=explain("你是英语教师。根据固定题解用两句中文解释一个关键英文短语，帮助学生理解其所选答案。不要新增事实，不评价发音。"
+            raw=explain("你是英语教师。用一句浅显英文解释一个关键短语，再给对应的一句简体中文。只输出 JSON 对象，"
+                        "en 是英文，zh 是中文。根据下面的原文、问题、所选答案与固定题解，不新增事实，不评价发音。"
                         +json.dumps([prompt["passage"],prompt["question"],prompt["options"][answer["choice"]],answer["explanation"]],ensure_ascii=False))
-            if not isinstance(out,str) or not 4<=len(out.strip())<=400 or any(c in out for c in "<>{}"):
+            data=studio.json_result(raw)
+            en,zh=data["en"],data["zh"]
+            if not all(studio.string(v,400) for v in (en,zh)) or not re.search(r"[A-Za-z]",en) or re.search(r"[\u3400-\u9fff]",en) or not re.search(r"[\u3400-\u9fff]",zh):
                 return fallback
         except Exception:
             return fallback
         with connect() as conn:
             latest=load_lesson(conn,who,day,body.edition)
             if latest and len(latest["answers"])>index and latest["answers"][index]["id"]==answer["id"]:
-                latest["answers"][index]["ai"]=out.strip()
+                latest["answers"][index].update(ai=zh.strip(),aiEn=en.strip())
                 save(conn,who,day,latest)
-        return {"text":out.strip(),"ai":True}
+        return {"text":zh.strip(),"textEn":en.strip(),"ai":True}
 
 
     @app.post("/api/v1/coach/undo")
@@ -428,7 +446,7 @@ def mount_coach(app, database, identify, enabled, explain, author=None, assess=N
             result=studio.reply_feedback(assess or explain,prompt["passage"],last["expected"],body.text,last["reply"])
             result["attempt"]=body.attempt
         except Exception:
-            return {"verdict":"暂无法判断","tip":"这次没有取得可靠反馈。可以对照参考说法自行检查，稍后重试。","example":last["reply"]}
+            return {"verdict":"暂无法判断","tipEn":"Compare your reply with the example, or try again later.","tip":"这次没有取得可靠反馈。可以对照参考说法自行检查，稍后重试。","example":last["reply"]}
         with connect() as conn:
             latest=load_lesson(conn,who,day,2)
             for a in latest["answers"]:
