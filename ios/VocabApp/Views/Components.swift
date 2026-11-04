@@ -1,19 +1,50 @@
 import SwiftUI
 
-// MARK: - 主题（对齐 web 深色卡片风）
+enum AppAppearance:String,CaseIterable,Identifiable {
+    static let storageKey = "vocab.appearance.v1"
+    case system, light, dark
+    var id:Self { self }
+    var label:String {
+        switch self {
+        case .system: "跟随系统"
+        case .light: "浅色"
+        case .dark: "深色"
+        }
+    }
+    var interfaceStyle:UIUserInterfaceStyle {
+        switch self {
+        case .system: .unspecified
+        case .light: .light
+        case .dark: .dark
+        }
+    }
+}
 
 enum Theme {
-    static let bg = Color(red:0.063,green:0.106,blue:0.125)
-    static let card = Color(red:0.098,green:0.157,blue:0.180)
-    static let cardDeep = Color(red:0.075,green:0.129,blue:0.149)
-    static let edge = Color(red:0.216,green:0.286,blue:0.306)
-    static let accent = Color(red:0.608,green:0.902,blue:0.812)
+    private static func adaptive(light:UInt32,dark:UInt32) -> Color {
+        func rgb(_ hex:UInt32) -> UIColor {
+            UIColor(red:CGFloat((hex >> 16) & 255)/255,green:CGFloat((hex >> 8) & 255)/255,
+                    blue:CGFloat(hex & 255)/255,alpha:1)
+        }
+        let day=rgb(light),night=rgb(dark)
+        return Color(uiColor:UIColor { traits in traits.userInterfaceStyle == .dark ? night:day })
+    }
+
+    static let bg = adaptive(light:0xf5f4eb,dark:0x101b20)
+    static let card = adaptive(light:0xfffdf7,dark:0x19282e)
+    static let cardDeep = adaptive(light:0xedf1e9,dark:0x132126)
+    static let edge = adaptive(light:0xc1cbc1,dark:0x37494e)
+    static let accent = adaptive(light:0x17644f,dark:0x9be6cf)
     static let accentLight = accent
-    static let ok = Color(.sRGB, red: 0.203, green: 0.780, blue: 0.540, opacity: 1)
-    static let warn = Color(.sRGB, red: 0.910, green: 0.580, blue: 0.220, opacity: 1)
-    static let bad = Color(.sRGB, red: 0.941, green: 0.467, blue: 0.467, opacity: 1)
-    static let muted = Color(.sRGB, red: 0.686, green: 0.753, blue: 0.757, opacity: 1)
-    static let text = Color(.sRGB, red: 0.957, green: 0.945, blue: 0.914, opacity: 1)
+    static let onAccent = adaptive(light:0xffffff,dark:0x102a26)
+    static let onAccentCaption = adaptive(light:0xe2f4e8,dark:0x254b42)
+    static let ok = adaptive(light:0x236241,dark:0x34c78a)
+    static let warn = adaptive(light:0x795013,dark:0xe89438)
+    static let bad = adaptive(light:0x8a302f,dark:0xf07777)
+    static let muted = adaptive(light:0x51645b,dark:0xafc0c1)
+    static let text = adaptive(light:0x20332e,dark:0xf4f1e9)
+    static let heroStart = adaptive(light:0xdceee1,dark:0x123833)
+    static let heroEnd = adaptive(light:0xf4efdf,dark:0x142126)
 }
 
 // MARK: - 跟读共享组件（学习卡/复习答案卡通用）
@@ -33,7 +64,7 @@ struct ShadowHoldButton: View {
             .font(.subheadline.weight(.medium))
             .frame(maxWidth: .infinity)
             .padding(.vertical, 10).frame(minHeight:44)
-            .foregroundStyle(app.speech.state == .listening ? .white : Theme.text)
+            .foregroundStyle(app.speech.state == .listening ? Theme.onAccent : Theme.text)
             .background(app.speech.state == .listening ? Theme.warn : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 10))
             .background(Theme.cardDeep,in:RoundedRectangle(cornerRadius:12)).overlay(RoundedRectangle(cornerRadius:12).stroke(Theme.edge))
@@ -154,7 +185,7 @@ struct PrimaryButton: View {
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 12).frame(minHeight:48)
                 .background(color)
-                .foregroundStyle(color == Theme.bad ? .black : Theme.bg)
+                .foregroundStyle(Theme.onAccent)
                 .clipShape(RoundedRectangle(cornerRadius: 10))
         }
     }

@@ -22,9 +22,8 @@ struct StudioPreparation:Decodable {let ready:Bool;let message:String}
 struct StudioReply:Decodable {let verdict,tip,example:String;let tipEn:String?;let attempt:Int?}
 enum StudioTheme {
     static let mint=Theme.accent
-    static let panel=Color(red:0.08,green:0.13,blue:0.15)
     static let names=["life":"日常听说","work":"职场沟通","read":"阅读理解"]
-    static let gradient=LinearGradient(colors:[Color(red:0.07,green:0.22,blue:0.20),panel],startPoint:.topLeading,endPoint:.bottomTrailing)
+    static let gradient=LinearGradient(colors:[Theme.heroStart,Theme.heroEnd],startPoint:.topLeading,endPoint:.bottomTrailing)
     @MainActor static func context(_ body:inout CoachBody,_ app:AppState) {
         body.edition=2;body.level=min(20000,max(0,app.S.frontier))
         body.due=min(100,StudyEngine.dailyPlanSummary(app.S,day:DayUtil.today(),now:Date()).duePlanned)
@@ -70,7 +69,7 @@ struct CoachHomeCard:View {
     }
     private func metric(_ v:String,_ label:String)->some View {
         VStack(alignment:.leading,spacing:4){Text(v).font(.title3.bold());Text(label).font(.caption).foregroundStyle(.secondary)}
-          .frame(maxWidth:.infinity,alignment:.leading).padding(10).background(.black.opacity(0.23),in:RoundedRectangle(cornerRadius:10))
+          .frame(maxWidth:.infinity,alignment:.leading).padding(10).background(Theme.cardDeep,in:RoundedRectangle(cornerRadius:10))
     }
     var body:some View {
         Group {
@@ -171,9 +170,9 @@ struct LessonAction:View {
     var body:some View {
         Button(action:action) {
             HStack(spacing:12) {
-                if let icon {Image(systemName:icon).accessibilityHidden(true)}
-                LessonPair(en:en,zh:zh,font:.body.weight(.semibold),primary:primary ? Theme.bg:Theme.text,
-                           secondary:primary ? Color(red:0.13,green:0.27,blue:0.24):Theme.muted)
+                if let icon {Image(systemName:icon).foregroundStyle(primary ? Theme.onAccent:Theme.accent).accessibilityHidden(true)}
+                LessonPair(en:en,zh:zh,font:.body.weight(.semibold),primary:primary ? Theme.onAccent:Theme.text,
+                           secondary:primary ? Theme.onAccentCaption:Theme.muted)
                 Spacer(minLength:0)
             }.padding(.horizontal,14).padding(.vertical,9).frame(minHeight:48)
              .background(primary ? Theme.accent:Theme.cardDeep,in:RoundedRectangle(cornerRadius:12))

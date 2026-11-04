@@ -3,6 +3,7 @@ import Network
 
 @main
 struct VocabApp: App {
+    @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
     @State private var app = AppState()
     @State private var coachClock = CoachClock()
 
@@ -11,10 +12,39 @@ struct VocabApp: App {
             RootView()
                 .environment(app)
                 .environment(coachClock)
-                .preferredColorScheme(.dark)
+                .background(WindowAppearance(preference:appearance))
                 .tint(Theme.accent)
                 .task { await app.boot() }
         }
+    }
+}
+
+/// Apply the device preference to this scene's window. Unspecified keeps UIKit's
+/// live system traits, including after returning from a manual override.
+private struct WindowAppearance:UIViewRepresentable {
+    let preference:AppAppearance
+
+    final class Anchor:UIView {
+        var style:UIUserInterfaceStyle = .unspecified {
+            didSet { updateWindow() }
+        }
+        override func didMoveToWindow() {
+            super.didMoveToWindow()
+            updateWindow()
+        }
+        private func updateWindow() {
+            guard let window,window.overrideUserInterfaceStyle != style else { return }
+            window.overrideUserInterfaceStyle = style
+        }
+    }
+    func makeUIView(context:Context) -> Anchor {
+        let anchor=Anchor()
+        anchor.isUserInteractionEnabled=false
+        anchor.accessibilityElementsHidden=true
+        return anchor
+    }
+    func updateUIView(_ anchor:Anchor,context:Context) {
+        anchor.style=preference.interfaceStyle
     }
 }
 

@@ -32,6 +32,8 @@ struct RawRecoveryBackup: FileDocument {
 
 /// 设置：每日新词 / 每日上限 / 朗读嗓音（与 web 设置项一致）
 struct SettingsView: View {
+    @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
+    @Environment(\.dynamicTypeSize) private var appearanceTextSize
     @Environment(AppState.self) private var app
     @State private var showReplaceConfirm = false
     @State private var showCheckpointConfirm = false
@@ -163,6 +165,16 @@ struct SettingsView: View {
             .padding(.horizontal, 16).padding(.vertical, 10)
             ScrollView {
                 Card {
+                    VStack(alignment:.leading,spacing:8) {
+                        Text("外观").font(.headline)
+                        if appearanceTextSize.isAccessibilitySize {
+                            appearancePicker.pickerStyle(.menu)
+                        }else{
+                            appearancePicker.pickerStyle(.segmented)
+                        }
+                        Text("此设备使用的外观。跟随系统时，系统切换外观会立即生效。").font(.footnote).foregroundStyle(Theme.muted)
+                    }.frame(maxWidth:.infinity,alignment:.leading)
+                    Divider()
                     if !app.fsrsReplayError.isEmpty {
                         Text(app.fsrsReplayError).font(.footnote).foregroundStyle(Theme.warn)
                     }
@@ -569,6 +581,12 @@ struct SettingsView: View {
         } message: {
             Text("重新回答最多 30 道词义选择题（自适应难度、全新随机卷），更新词汇边界和新词起点。已学单词与进度全部保留。")
         }
+    }
+
+    private var appearancePicker:some View {
+        Picker("外观",selection:$appearance){
+            ForEach(AppAppearance.allCases){option in Text(option.label).tag(option)}
+        }.accessibilityIdentifier("appearance-picker").controlSize(.large)
     }
 
     private func settingSection(id: String, title: String, options: [Int], current: Int,

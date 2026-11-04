@@ -2,8 +2,9 @@
 # Runs only on a designated booted simulator and a separate throwaway app identifier.
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
-if [[ $# -lt 1 || $# -gt 2 ]]; then echo 'Usage: run_ios_ui_regression.sh SIMULATOR_UDID [core-policy|guest|relearning|offline-relearning|queue-budget|shared-plan|shared-evidence|mastery-budget|static-swap|reminder|reminder-sync|account|offline|normal-interop|normal-recovery-interop|normal-backup-interop|normal-checkpoint-interop|normal-reload-interop|large-reload-interop|large-reload-oversize-interop|recovery|recovery-relogin|file|pull-fence|missing-delta|incremental-read|incremental-pruned|interop|replace|personal|identity|legacy|legacy-date|forecast|retention|budget|undo|queue|queue-switch|queue-pages|queue-end|acceptance-switch|meaning|manual-sync|delta-replay|staged-replay|staged-large-replay|large-login|large-restore-resume|large-restore-conflict|large-restore-new|large-restore-interrupt|large-restore-cancel-interrupt|large-checkpoint-interrupt|large-checkpoint-cancel-interrupt|backup-scheduler|disk-failure|fsrs-relogin]' >&2; exit 2; fi
+if [[ $# -lt 1 || $# -gt 2 ]]; then echo 'Usage: run_ios_ui_regression.sh SIMULATOR_UDID [appearance|core-policy|guest|relearning|offline-relearning|queue-budget|shared-plan|shared-evidence|mastery-budget|static-swap|reminder|reminder-sync|account|offline|normal-interop|normal-recovery-interop|normal-backup-interop|normal-checkpoint-interop|normal-reload-interop|large-reload-interop|large-reload-oversize-interop|recovery|recovery-relogin|file|pull-fence|missing-delta|incremental-read|incremental-pruned|interop|replace|personal|identity|legacy|legacy-date|forecast|retention|budget|undo|queue|queue-switch|queue-pages|queue-end|acceptance-switch|meaning|manual-sync|delta-replay|staged-replay|staged-large-replay|large-login|large-restore-resume|large-restore-conflict|large-restore-new|large-restore-interrupt|large-restore-cancel-interrupt|large-checkpoint-interrupt|large-checkpoint-cancel-interrupt|backup-scheduler|disk-failure|fsrs-relogin]' >&2; exit 2; fi
 case "${2:-guest}" in
+  appearance) method=testListeningCoachAndClassicSwitch ;;
   maintenance) method=testLearningMaintenanceControls ;;
   core-policy) method=testCorePolicyGuessAndTimedContinuation ;;
   guest) method=testGuestPlacementAndFirstStudy ;;
@@ -71,6 +72,7 @@ test_id="com.zorro.vocab.regression.$(uuidgen | tr '[:upper:]' '[:lower:]' | tr 
 watch_pid=""
 cleanup() {
   if [[ -n "$watch_pid" ]]; then kill "$watch_pid" 2>/dev/null || true; wait "$watch_pid" 2>/dev/null || true; fi
+  if [[ -n "${appearance_before:-}" ]]; then xcrun simctl ui "$udid" appearance "$appearance_before" || true; fi
   xcrun simctl uninstall "$udid" "$test_id.uitests.xctrunner" >/dev/null 2>&1 || true
   xcrun simctl uninstall "$udid" "$test_id" >/dev/null 2>&1 || true
   /usr/bin/python3 - "$test_tmp" <<'PY'
@@ -260,6 +262,22 @@ elif [[ "${2:-guest}" == "missing-delta" ]]; then
   xcodebuild "${xcode_args[@]}" "-only-testing:VocabUITests/VocabUITests/$method" test-without-building
   wait "$watch_pid"
   watch_pid=""
+elif [[ "${2:-guest}" == "appearance" ]]; then
+  appearance_before="$(xcrun simctl ui "$udid" appearance)"
+  xcrun simctl ui "$udid" appearance light
+  # Drive the simulated OS, not the app, while a question is on screen.
+  (
+    for mode in dark light; do
+      until grep -q "VOCAB_REQUEST_SYSTEM_$mode" "$test_tmp/appearance.log" 2>/dev/null; do sleep 0.25; done
+      xcrun simctl ui "$udid" appearance "$mode"
+      [[ "$(xcrun simctl ui "$udid" appearance)" == "$mode" ]]
+    done
+  ) &
+  watch_pid=$!
+  TEST_RUNNER_VOCAB_VERIFY_OS_APPEARANCE=1 xcodebuild "${xcode_args[@]}" \
+    "-only-testing:VocabUITests/VocabUITests/testAppearancePreference" "-only-testing:VocabUITests/VocabUITests/$method" test | tee "$test_tmp/appearance.log"
+  grep -q VOCAB_REQUEST_SYSTEM_light "$test_tmp/appearance.log"
+  wait "$watch_pid"; watch_pid=""
 else
   xcodebuild "${xcode_args[@]}" "-only-testing:VocabUITests/VocabUITests/$method" test
 fi

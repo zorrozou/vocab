@@ -5,6 +5,23 @@ final class VocabUITests: XCTestCase {
     private func capture(_ label:String,app:XCUIApplication) {
         let shot=XCTAttachment(screenshot:app.screenshot());shot.name=label;shot.lifetime = .keepAlways;add(shot)
     }
+    private func lightBackground(_ app:XCUIApplication) -> Bool {
+        let image=app.screenshot().image
+        guard let cg=image.cgImage,
+              let pixel=cg.cropping(to:CGRect(x:2,y:cg.height/2,width:1,height:1)) else {return false}
+        var rgba=[UInt8](repeating:0,count:4)
+        rgba.withUnsafeMutableBytes { buffer in
+            let ctx=CGContext(data:buffer.baseAddress,width:1,height:1,bitsPerComponent:8,bytesPerRow:4,
+                              space:CGColorSpaceCreateDeviceRGB(),bitmapInfo:CGImageAlphaInfo.premultipliedLast.rawValue)
+            ctx?.draw(pixel,in:CGRect(x:0,y:0,width:1,height:1))
+        }
+        return rgba[1]>150
+    }
+    private func expectLight(_ expected:Bool, app:XCUIApplication,timeout:TimeInterval=8) {
+        let ready=XCTNSPredicateExpectation(predicate:NSPredicate { _,_ in self.lightBackground(app)==expected },object:nil)
+        XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:timeout),.completed)
+    }
+
     func testListeningCoachAndClassicSwitch() throws {
         continueAfterFailure = false
         let app=XCUIApplication()
@@ -18,6 +35,17 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts["You want to pick up the raincoat tomorrow. What should you do?"].waitForExistence(timeout:20))
         let transcript=app.buttons["coach-transcript"]
         XCTAssertTrue(transcript.waitForExistence(timeout:18));XCTAssertGreaterThanOrEqual(transcript.frame.height,44);capture("studio-listen",app:app);transcript.tap()
+        if ProcessInfo.processInfo.environment["VOCAB_VERIFY_OS_APPEARANCE"]=="1" {
+            let question=app.staticTexts["You want to pick up the raincoat tomorrow. What should you do?"]
+            for mode in ["dark","light"] {
+                print("VOCAB_REQUEST_SYSTEM_\(mode)")
+                fflush(stdout)
+                expectLight(mode=="light",app:app,timeout:60)
+                XCTAssertTrue(question.exists)
+                XCTAssertTrue(app.buttons["coach-option-0"].isEnabled)
+                capture("lesson-system-\(mode)",app:app)
+            }
+        }
         let wrong=app.buttons.matching(NSPredicate(format:"label CONTAINS %@", "今天必须取走")).firstMatch
         XCTAssertTrue(wrong.waitForExistence(timeout:5));wrong.tap()
         XCTAssertTrue(app.staticTexts["一起看这条线索"].waitForExistence(timeout:10));capture("studio-feedback",app:app)
@@ -38,6 +66,34 @@ final class VocabUITests: XCTestCase {
         app.buttons["coach-option-0"].tap()
         XCTAssertTrue(app.buttons["coach-next"].waitForExistence(timeout:10));app.buttons["coach-next"].tap()
         XCTAssertTrue(app.staticTexts["今日教练课完成"].waitForExistence(timeout:8))
+    }
+
+    func testAppearancePreference() throws {
+        continueAfterFailure = false
+        let app=XCUIApplication()
+        app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765"
+        app.launch()
+        let guest=app.buttons["先逛逛（游客模式）"]
+        if guest.waitForExistence(timeout:3) {guest.tap()}
+        func settings() {
+            let button=app.buttons["settings-menu"]
+            XCTAssertTrue(button.waitForExistence(timeout:10))
+            button.tap()
+        }
+        settings()
+        let picker=app.segmentedControls["appearance-picker"]
+        picker.buttons["跟随系统"].tap()
+        let ambient=lightBackground(app)
+        picker.buttons["浅色"].tap();expectLight(true,app:app)
+        capture("appearance-light-settings",app:app)
+        picker.buttons["深色"].tap();expectLight(false,app:app)
+        capture("appearance-dark-settings",app:app)
+        app.terminate();app.launch();settings()
+        XCTAssertTrue(picker.buttons["深色"].isSelected);expectLight(false,app:app)
+        picker.buttons[ambient ? "深色":"浅色"].tap();expectLight(!ambient,app:app)
+        picker.buttons["跟随系统"].tap();expectLight(ambient,app:app)
+        XCTAssertTrue(picker.buttons["跟随系统"].isSelected)
+        app.buttons["返回"].tap()
     }
 
     func testLargeTextNavigation() throws {
