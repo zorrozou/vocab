@@ -62,6 +62,8 @@ struct Auth: Equatable {
     let token: String
 }
 
+enum SettingsSection: Int { case daily, appearance, reminders, level, offline, backup, recovery }
+
 enum Route: Equatable {
     case welcome
     case auth(login: Bool)
@@ -1245,9 +1247,16 @@ final class AppState {
         }
     }
 
+    var initialSettingsSection = SettingsSection.daily
+
+    func openSettings(_ section: SettingsSection) {
+        initialSettingsSection = section
+        route = .settings
+    }
+
     func closeValidation() {
         validation = nil
-        route = .settings
+        openSettings(.level)
     }
 
     @discardableResult

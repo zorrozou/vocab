@@ -36,7 +36,7 @@ struct CoachHomeCard:View {
     @AppStorage("coach.classic.interface.v1") private var classic=false
     @Environment(\.dynamicTypeSize) private var textSize
     private var columns:AnyLayout {textSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment:.leading)):AnyLayout(HStackLayout(alignment:.top))}
-    @State private var tab=0
+    let tab: Int
     @State private var report:StudioDashboard?
     @State private var preparing=false
     @State private var message=""
@@ -71,113 +71,182 @@ struct CoachHomeCard:View {
         VStack(alignment:.leading,spacing:4){Text(v).font(.title3.bold());Text(label).font(.caption).foregroundStyle(.secondary)}
           .frame(maxWidth:.infinity,alignment:.leading).padding(10).background(Theme.cardDeep,in:RoundedRectangle(cornerRadius:10))
     }
-    var body:some View {
+    var body: some View {
         Group {
-            if !available { EmptyView() }
-            else if classic { Button("开启听读教练"){classic=false;Task{await reload()}}.accessibilityIdentifier("coach-enable") }
-            else {
-                VStack(alignment:.leading,spacing:14){
-                    Picker("工作室栏目",selection:$tab){
-                        Text("今日课堂").tag(0);Text("学习档案").tag(1);Text("我的目标").tag(2)
-                    }.pickerStyle(.segmented).controlSize(.large).onChange(of:tab){_,newTab in
-                        waiting=UUID();preparing=false;message=""
-                        if newTab==0 {Task{await reload()}}
-                    }
-                    if tab==0 {
-                        Text("听读工作室  /  "+(StudioTheme.names[report?.currentGoal ?? "life"] ?? "日常听说")).font(.caption.bold()).foregroundStyle(StudioTheme.mint)
-                        LessonPair(en:report?.titleEn ?? "Today’s lesson",zh:report?.title ?? "准备今天的听读课",font:.system(.largeTitle,design:.serif))
-                        Text(report?.reason ?? "先理解消息，再换一个情境做决定。").font(.subheadline)
-                        if let d=report {
-                            Text(d.focus+" · "+(d.source.isEmpty ? (d.prepared ? "AI 材料已就绪":"教研材料可用") : d.source)).font(.caption).foregroundStyle(StudioTheme.mint)
-                            columns {
-                                LessonPair(en:"01 Understand",zh:"理解消息",font:.caption.bold())
-                                LessonPair(en:"02 Choose",zh:"核对行动",font:.caption.bold())
-                                LessonPair(en:"03 Try again",zh:"换境验证",font:.caption.bold())
-                            }
-                            LessonAction(en:d.complete ? "View recap":d.started ? "Resume lesson":preparing ? "Preparing lesson…":"Start lesson",
-                                zh:d.complete ? "查看今日成果":d.started ? "继续今日课程":preparing ? "正在为你备课…":"进入今日教练课",icon:"arrow.right",primary:true){
-                                Task{await begin()}
+            if !available {
+                VStack {
+                    Text("听读教练暂不可用"); Button("切回经典界面") { classic = true }
+                }
+            } else {
+                ScreenPages(spacing: 12) {
+                    if tab == 0 {
+                        Text("听读工作室  /  " + (StudioTheme.names[report?.currentGoal ?? "life"] ?? "日常听说")).font(.caption.bold())
+                            .foregroundStyle(StudioTheme.mint)
+                        LessonPair(
+                            en: report?.titleEn ?? "Today’s lesson", zh: report?.title ?? "准备今天的听读课", font: .system(.title, design: .serif))
+                        ReadingText(text: report?.reason ?? "先理解消息，再换一个情境做决定。", font: .subheadline)
+                        if let d = report {
+                            Text(d.focus + " · " + (d.source.isEmpty ? (d.prepared ? "AI 材料已就绪" : "教研材料可用") : d.source)).font(.caption)
+                                .foregroundStyle(StudioTheme.mint)
+                            LessonAction(
+                                en: d.complete
+                                    ? "View recap" : d.started ? "Resume lesson" : preparing ? "Preparing lesson…" : "Start lesson",
+                                zh: d.complete ? "查看今日成果" : d.started ? "继续今日课程" : preparing ? "正在为你备课…" : "进入今日教练课", icon: "arrow.right",
+                                primary: true
+                            ) {
+                                Task { await begin() }
                             }.disabled(preparing).accessibilityIdentifier("coach-start")
-                            if !d.started && !d.prepared {LessonAction(en:"Use prepared material",zh:"直接使用教研课程",icon:"book"){enter()}.accessibilityIdentifier("coach-bank")}
-                            if d.minutes.count==3 {columns{metric("\(d.minutes[0]) 分","听读任务");metric("\(d.minutes[1]) 分","词汇复习");metric("\(d.minutes[2]) 分","可选回应")}}
+                            if !d.started && !d.prepared {
+                                LessonAction(en: "Use prepared material", zh: "直接使用教研课程", icon: "book") { enter() }.accessibilityIdentifier(
+                                    "coach-bank")
+                            }
+                            if d.minutes.count == 3 {
+                                columns {
+                                    metric("\(d.minutes[0]) 分", "听读任务"); metric("\(d.minutes[1]) 分", "词汇复习");
+                                    metric("\(d.minutes[2]) 分", "可选回应")
+                                }
+                            }
                             Text("按剩余时间安排，30 分钟收课，最多 40 分钟。").font(.caption).foregroundStyle(.secondary)
-                            if !d.weak.isEmpty {Text("近期练词线索 · "+d.weak.joined(separator:" / ")).font(.caption)}
-                            if d.legacy {Button("接着完成上一版的课"){enter(1)}}
-                        } else {Button("载入今日安排"){Task{await reload()}}}
-                    } else if tab==1 {
+                            if !d.weak.isEmpty { Text("近期练词线索 · " + d.weak.joined(separator: " / ")).font(.caption) }
+                            if d.legacy { Button("接着完成上一版的课") { enter(1) } }
+                        } else {
+                            Button("载入今日安排") { Task { await reload() } }
+                        }
+                    } else if tab == 1 {
                         Text("近 7 天 · 学习档案").font(.title2.bold())
-                        if let d=report {
-                            columns {metric("\(d.signals["listen"] ?? 0)","首听答对");metric("\(d.signals["replay"] ?? 0)","重听答对");metric("\(d.signals["read"] ?? 0)","独立读懂")}
+                        if let d = report {
+                            columns {
+                                metric("\(d.signals["listen"] ?? 0)", "首听答对"); metric("\(d.signals["replay"] ?? 0)", "重听答对");
+                                metric("\(d.signals["read"] ?? 0)", "独立读懂")
+                            }
                             Text("借助提示答对 \(d.signals["assisted"] ?? 0) 次 · 需要再练 \(d.signals["miss"] ?? 0) 次").font(.caption)
-                            ForEach(d.skills,id:\.label){s in HStack{Text(s.label);Spacer();Text(s.attempts>0 ? "\(s.independent)/\(s.attempts) 次独立":"待观察").foregroundStyle(.secondary)}.font(.subheadline)}
-                            Divider();Text("课堂手记").bold()
-                            if d.diary.isEmpty {Text("完成第一道题后，这里会显示真实作答依据。").font(.caption)}
-                            ForEach(Array(d.diary.enumerated()),id:\.offset){_,x in Text("\(x.day) · \(x.outcome)\n\(x.focus) · \(x.fact)").font(.subheadline)}
-                            if d.study.on {Text(d.study.pairs>0 ? "同条件复测 \(d.study.pairs) 对 · 分支成功 \(d.study.adaptive) 次、固定成功 \(d.study.fixed) 次":"尚无同条件的成对复测，暂不判断效果。").font(.caption)}
+                            ForEach(d.skills, id: \.label) { s in
+                                HStack {
+                                    Text(s.label); Spacer();
+                                    Text(s.attempts > 0 ? "\(s.independent)/\(s.attempts) 次独立" : "待观察").foregroundStyle(.secondary)
+                                }.font(.subheadline)
+                            }
+                            Divider(); Text("课堂手记").bold()
+                            if d.diary.isEmpty { Text("完成第一道题后，这里会显示真实作答依据。").font(.caption) }
+                            ForEach(Array(d.diary.enumerated()), id: \.offset) { _, x in
+                                Text("\(x.day) · \(x.outcome)\n\(x.focus) · \(x.fact)").font(.subheadline)
+                            }
+                            if d.study.on {
+                                Text(
+                                    d.study.pairs > 0
+                                        ? "同条件复测 \(d.study.pairs) 对 · 分支成功 \(d.study.adaptive) 次、固定成功 \(d.study.fixed) 次"
+                                        : "尚无同条件的成对复测，暂不判断效果。"
+                                ).font(.caption)
+                            }
                             Text("延迟验证").bold()
-                            if d.reviews.isEmpty {Text("尚无结果。教练会在第 7 天和第 30 天前后的可用课次安排复查。").font(.caption)}
-                            ForEach(Array(d.reviews.enumerated()),id:\.offset){_,v in Text("\(v.day) · \(v.interval) 天复查 · "+(v.ok ? "独立完成":"继续观察")).font(.caption)}
+                            if d.reviews.isEmpty { Text("尚无结果。教练会在第 7 天和第 30 天前后的可用课次安排复查。").font(.caption) }
+                            ForEach(Array(d.reviews.enumerated()), id: \.offset) { _, v in
+                                Text("\(v.day) · \(v.interval) 天复查 · " + (v.ok ? "独立完成" : "继续观察")).font(.caption)
+                            }
                         }
                     } else {
                         Text("你希望英语帮你做什么？").font(.title2.bold())
-                        ForEach(["life","work","read"],id:\.self){g in
-                            Button((report?.goal==g ? "✓  ":"")+(StudioTheme.names[g] ?? g)){
-                                waiting=UUID();preparing=false;message="";Task{await reload(g)}
+                        ForEach(["life", "work", "read"], id: \.self) { g in
+                            Button((report?.goal == g ? "✓  " : "") + (StudioTheme.names[g] ?? g)) {
+                                waiting = UUID(); preparing = false; message = ""; Task { await reload(g) }
                             }.buttonStyle(.bordered).controlSize(.large)
                         }
                         Text("可选的学习方式对照").bold()
                         Text("开启后，两类练习使用相同教研材料，只比较相近训练时间、相同延迟和模态的陌生题。可以随时退出。").font(.caption)
-                        Button(report?.study.on==true ? "退出学习方式对照":"参加学习方式对照"){Task{await reload(study:report?.study.on != true)}}
+                        Button(report?.study.on == true ? "退出学习方式对照" : "参加学习方式对照") {
+                            Task { await reload(study: report?.study.on != true) }
+                        }
                         Text("目标随账号保存，已开始的一课保留原教材。").font(.caption).foregroundStyle(.secondary)
                     }
-                    if !message.isEmpty {Text(message).font(.caption)}
-                    Button("切回经典界面"){waiting=UUID();preparing=false;classic=true}.frame(minHeight:44).font(.footnote)
-                }.padding(18).frame(maxWidth:.infinity,alignment:.leading)
-                 .background(StudioTheme.gradient,in:RoundedRectangle(cornerRadius:20))
-                 .overlay(RoundedRectangle(cornerRadius:20).stroke(StudioTheme.mint.opacity(0.28)))
+                    if !message.isEmpty { Text(message).font(.caption) }
+                    if tab == 2 {
+                        Button("切回经典界面") {
+                            waiting = UUID(); preparing = false; classic = true
+                        }.frame(minHeight: 44).font(.footnote)
+                    }
+                }.id(tab).padding(16).frame(maxWidth: .infinity, alignment: .leading)
+                    .background(StudioTheme.gradient, in: RoundedRectangle(cornerRadius: 20))
+                    .overlay(RoundedRectangle(cornerRadius: 20).stroke(StudioTheme.mint.opacity(0.28)))
             }
-        }.task(id:app.auth?.token){
-            report=nil;message="";waiting=UUID();preparing=false
-            if let value=try? await APIClient.shared.coachAvailable(){available=value}
-            if available && !classic {await reload()}
-        }.onDisappear {waiting=UUID();preparing=false}
+        }.task(id: app.auth?.token) {
+            report = nil; message = ""; waiting = UUID(); preparing = false
+            if let value = try? await APIClient.shared.coachAvailable() { available = value }
+            if available && !classic { await reload() }
+        }.onChange(of: tab) { _, newTab in
+            waiting = UUID(); preparing = false; message = ""
+            if newTab == 0 { Task { await reload() } }
+        }.onDisappear {
+            waiting = UUID(); preparing = false
+        }
     }
 }
 
 /// English carries the action. Chinese stays readable at the user's chosen text size.
-struct LessonPair:View {
-    var en:String?
-    let zh:String
-    var font:Font = .body.weight(.semibold)
-    var primary:Color = Theme.text
-    var secondary:Color = Theme.muted
-    var body:some View {
-        VStack(alignment:.leading,spacing:3) {
-            if let en,!en.isEmpty {
-                Text(verbatim:en).font(font).foregroundStyle(primary)
-                Text(verbatim:zh).font(.footnote).foregroundStyle(secondary)
-            } else {Text(verbatim:zh).font(font).foregroundStyle(primary)}
-        }.fixedSize(horizontal:false,vertical:true)
+struct LessonPair: View {
+    var en: String?
+    let zh: String
+    var font: Font = .body.weight(.semibold)
+    var primary: Color = Theme.text
+    var secondary: Color = Theme.muted
+    var canOpenReader = true
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            if let en, !en.isEmpty {
+                if canOpenReader {
+                    ReadingText(text: en, font: font, title: "完整英文").foregroundStyle(primary)
+                    ReadingText(text: zh, font: .footnote, title: "完整中文").foregroundStyle(secondary)
+                } else {
+                    Text(verbatim: en).font(font).foregroundStyle(primary)
+                    Text(verbatim: zh).font(.footnote).foregroundStyle(secondary)
+                }
+            } else if canOpenReader {
+                ReadingText(text: zh, font: font).foregroundStyle(primary)
+            } else {
+                Text(verbatim: zh).font(font).foregroundStyle(primary)
+            }
+        }.fixedSize(horizontal: false, vertical: true)
     }
 }
 
-struct LessonAction:View {
-    let en:String
-    let zh:String
-    var icon:String?=nil
-    var primary=false
-    let action:()->Void
-    var body:some View {
-        Button(action:action) {
-            HStack(spacing:12) {
-                if let icon {Image(systemName:icon).foregroundStyle(primary ? Theme.onAccent:Theme.accent).accessibilityHidden(true)}
-                LessonPair(en:en,zh:zh,font:.body.weight(.semibold),primary:primary ? Theme.onAccent:Theme.text,
-                           secondary:primary ? Theme.onAccentCaption:Theme.muted)
-                Spacer(minLength:0)
-            }.padding(.horizontal,14).padding(.vertical,9).frame(minHeight:48)
-             .background(primary ? Theme.accent:Theme.cardDeep,in:RoundedRectangle(cornerRadius:12))
-             .overlay(RoundedRectangle(cornerRadius:12).stroke(primary ? Color.clear:Theme.edge))
-             .contentShape(Rectangle())
+struct LessonAction: View {
+    let en: String
+    let zh: String
+    var icon: String? = nil
+    var primary = false
+    let action: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var reading = false
+    private var needsReader: Bool { en.count + zh.count > (typeSize.isAccessibilitySize ? 65 : 215) }
+    var body: some View {
+        Button {
+            if needsReader { reading = true } else { action() }
+        } label: {
+            HStack(spacing: 12) {
+                if let icon { Image(systemName: icon).foregroundStyle(primary ? Theme.onAccent : Theme.accent).accessibilityHidden(true) }
+                if needsReader {
+                    VStack(alignment: .leading) {
+                        Text(en.isEmpty ? zh : en).lineLimit(2); Label("查看完整选项", systemImage: "book.pages").font(.footnote)
+                    }
+                } else {
+                    LessonPair(
+                        en: en, zh: zh, font: .body.weight(.semibold), primary: primary ? Theme.onAccent : Theme.text,
+                        secondary: primary ? Theme.onAccentCaption : Theme.muted, canOpenReader: false)
+                }
+                Spacer(minLength: 0)
+            }.padding(.horizontal, 14).padding(.vertical, 9).frame(minHeight: 48)
+                .background(primary ? Theme.accent : Theme.cardDeep, in: RoundedRectangle(cornerRadius: 12))
+                .overlay(RoundedRectangle(cornerRadius: 12).stroke(primary ? Color.clear : Theme.edge))
+                .contentShape(Rectangle())
         }.buttonStyle(.plain)
+            .sheet(isPresented: $reading) {
+                FullTextReader(
+                    text: [en, zh].filter { !$0.isEmpty }.joined(separator: "\n\n"), title: "完整选项",
+                    confirm: (
+                        "确认选择",
+                        {
+                            reading = false; action()
+                        }
+                    ))
+            }
     }
 }

@@ -35,6 +35,9 @@ struct SettingsView: View {
     @AppStorage(AppAppearance.storageKey) private var appearance = AppAppearance.system
     @Environment(\.dynamicTypeSize) private var appearanceTextSize
     @Environment(AppState.self) private var app
+    @State private var section: Int
+
+    init(initial: SettingsSection) { _section = State(initialValue: initial.rawValue) }
     @State private var showReplaceConfirm = false
     @State private var showCheckpointConfirm = false
     @State private var showCancelCheckpointConfirm = false
@@ -163,312 +166,25 @@ struct SettingsView: View {
                 NavigationAction(title:"返回") { app.route = .home }
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
-            ScrollView {
-                Card {
-                    VStack(alignment:.leading,spacing:8) {
-                        Text("外观").font(.headline)
-                        if appearanceTextSize.isAccessibilitySize {
-                            appearancePicker.pickerStyle(.menu)
-                        }else{
-                            appearancePicker.pickerStyle(.segmented)
-                        }
-                        Text("此设备使用的外观。跟随系统时，系统切换外观会立即生效。").font(.footnote).foregroundStyle(Theme.muted)
-                    }.frame(maxWidth:.infinity,alignment:.leading)
-                    Divider()
-                    if !app.fsrsReplayError.isEmpty {
-                        Text(app.fsrsReplayError).font(.footnote).foregroundStyle(Theme.warn)
-                    }
-                    settingSection(id: "new", title: "每日新词数",
-                                   options: [5, 10, 15, 20],
-                                   current: app.S.settings.newPerDay) { n in
-                        if app.S.settings.newPerDay != n && app.markSettingChanged("newPerDay") { app.S.settings.newPerDay = n; app.save() }
-                    }
-                    settingSection(id: "cap", title: "每日总上限（复习、新词和探测的不同单词）",
-                                   options: [30, 60, 100, 130, 200, 300],
-                                   current: app.S.settings.dailyCap) { n in
-                        if app.S.settings.dailyCap != n && app.markSettingChanged("dailyCap") { app.S.settings.dailyCap = n; app.save() }
-                    }
-                    if app.auth != nil {
-                        Text("两端共用今日名单。已发出的词会继续占用名额，降低数量或调整新词比例可能从明天生效；提高总上限可增加今天的名额。")
-                            .font(.caption).foregroundStyle(Theme.muted)
-                    }
-                    Text("朗读嗓音").font(.footnote).foregroundStyle(Theme.muted)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
-                        ForEach(voices, id: \.0) { v, name in
-                            let selected = (app.S.settings.voice ?? "en-US-AriaNeural") == v
-                            Button {
-                                if app.S.settings.voice != v && app.markSettingChanged("voice") { app.S.settings.voice = v; app.maintenanceMessage = "嗓音已更换，请重新下载今日离线包。"; app.save() }
-                                app.audio.play("The quick brown fox jumps over the lazy dog.", voice: v)
-                            } label: {
-                                Text(name)
-                                    .font(.subheadline.weight(selected ? .semibold : .regular))
-                                    .frame(maxWidth: .infinity).padding(.vertical, 10)
-                                    .foregroundStyle(selected ? Theme.accentLight : Theme.text)
-                            .background(selected ? Theme.accent.opacity(0.12):Theme.cardDeep,in:RoundedRectangle(cornerRadius:8))
-                                    .overlay(RoundedRectangle(cornerRadius: 8)
-                                        .stroke(selected ? Theme.accent : Theme.muted.opacity(0.4)))
-                            }
-                        }
-                    }
+            SectionChoice(titles: ["每日计划", "外观与声音", "复习提醒", "定级与校验", "离线与数据维护", "导出与恢复", "同步维护"], selected: $section)
+            ScreenPages {
+                if section >= 5 {
+                    if !exportError.isEmpty { ReadingText(text: exportError, font: .footnote).foregroundStyle(Theme.warn) }
+                    if !restoreMessage.isEmpty { ReadingText(text: restoreMessage, font: .footnote) }
                 }
-                .padding(.top, 12)
-
-                Card {
-                    Text("定级").font(.footnote).foregroundStyle(Theme.muted)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    GhostButton(title: "重新定级（30 题重测词汇边界）") {
-                        showReplaceConfirm = true
-                    }
-                    Text("随时可测。已学单词、复习进度、连续天数全部保留，只更新词汇边界和后续新词起点。")
-                        .font(.caption).foregroundStyle(Theme.muted)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                switch section {
+                case 0: dailySettings
+                case 1: appearanceSettings
+                case 2: reminderSettings
+                case 3: levelSettings
+                case 4: offlineSettings
+                case 5: backupSettings
+                case 6: recoverySettings
+                default: EmptyView()
                 }
-
-                Card {
-                    Text("估值校验").font(.footnote).foregroundStyle(Theme.muted)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    GhostButton(title: validationLoading ? "正在准备校验…" : "独立水平校验（24 题，不影响学习计划）") {
-                        guard !validationLoading else { return }
-                        validationLoading = true
-                        validationError = ""
-                        let owner = app.auth, generation = app.routeGeneration
-                        Task {
-                            defer { validationLoading = false }
-                            do { try await app.startValidation() }
-                            catch {
-                                guard app.auth == owner, app.route == .settings, app.routeGeneration == generation else { return }
-                                validationError = "无法开始校验，请检查网络后重试。"
-                            }
-                        }
-                    }.disabled(validationLoading)
-                    if !validationError.isEmpty {
-                        Text(validationError).font(.footnote).foregroundStyle(Theme.warn)
-                    }
-                    if let r = app.S.evalReport {
-                        Text("上次 \(r.date)：独立 ≈\(r.mean)，当前 ≈\(r.appMean)，差值 \(r.delta > 0 ? "+" : "")\(r.delta)")
-                            .font(.caption).foregroundStyle(Theme.muted)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        Text("用独立题目检验当前估值偏差，不修改后验、卡片或发词位置。")
-                            .font(.caption).foregroundStyle(Theme.muted)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-
-                Card {
-                    Text("学习数据").font(.footnote).foregroundStyle(Theme.muted)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if (try? JSONEncoder().encode(app.S).count) ?? 0 > 6 * 1024 * 1024 {
-                        Text("学习状态接近同步大小上限，请先同步其他设备，再整理已同步的历史。")
-                            .font(.caption).foregroundStyle(Theme.warn)
-                    }
-                    GhostButton(title: exporting ? "正在准备备份…" : "导出本机学习进度") {
-                        prepareExport(app.S)
-                    }.disabled(exporting)
-                    GhostButton(title: "导出恢复前的本机备份") {
-                        do { prepareExport(try app.latestLocalBackup()) }
-                        catch { exportError = "读取备份失败：\(error.localizedDescription)" }
-                    }.disabled(exporting)
-                    Text("离线与数据维护").font(.headline).foregroundStyle(Theme.text)
-                    GhostButton(title:"下载／更新整库离线包") { Task { await app.downloadLibraryOffline() } }.disabled(app.maintenanceRunning)
-                    if app.maintenanceRunning { GhostButton(title:"暂停整库下载") { app.libraryDownloadCancelled=true } }
-                    GhostButton(title:"删除整库离线包") { Task { await app.clearOfflineLibrary() } }.disabled(app.maintenanceRunning)
-                    GhostButton(title:"下载今日任务离线包") { Task { await app.downloadTodayOffline() } }.disabled(app.maintenanceRunning)
-                    GhostButton(title:"检查并修复异常卡（\(app.S.cards.values.filter { $0.fsrsIssue != nil }.count)）") { Task { await app.repairQuarantinedCards() } }.disabled(app.maintenanceRunning)
-                    GhostButton(title:"本机生成薄弱词例句") { Task { await app.generateLocalPractice() } }.disabled(app.localPracticeRunning)
-                    if !app.localPracticeNotice.isEmpty { Text(app.localPracticeNotice).font(.caption).foregroundStyle(Theme.muted) }
-                    ForEach(Array(app.localPracticeRows.enumerated()),id:\.offset) { _,row in
-                        Text(row.target+"："+row.text+"\n"+(row.zh ?? "")).font(.callout).foregroundStyle(Theme.text)
-                    }
-                    Text(app.maintenanceMessage.isEmpty ? "整库包包含释义、双向题目与例句；今日包额外保存任务音频。本机模型可用时可生成新句，否则使用已保存例句。学习名额仍按原规则领取。" : app.maintenanceMessage).font(.caption).foregroundStyle(Theme.muted)
-                    ForEach(app.S.cards.keys.filter { app.S.cards[$0]?.fsrsIssue != nil }.sorted().prefix(25),id:\.self) { word in
-                        Text(word+"："+(app.S.cards[word]?.fsrsIssue ?? "")).font(.caption).foregroundStyle(Theme.warn)
-                    }
-                    LearningHealthView().id(app.auth?.accountId ?? "guest")
-                    if app.auth?.accountId != nil {
-                        GhostButton(title: "导出待同步快照") {
-                            let current = app.auth
-                            exporting = true; exportError = ""
-                            Task {
-                                defer { exporting = false }
-                                do {
-                                    let data = try await app.pendingSyncSnapshot()
-                                    guard app.auth == current, app.route == .settings else { return }
-                                    guard let data else { exportError = "当前没有待确认的同步快照。"; return }
-                                    rawBackup = RawRecoveryBackup(data: data)
-                                    exportError = "待同步快照可能不包含服务器上的调度参数，请同时导出本机进度。"
-                                    showingRawExporter = true
-                                } catch {
-                                    guard app.auth == current, app.route == .settings else { return }
-                                    exportError = "读取待同步快照失败：\(error.localizedDescription)"
-                                }
-                            }
-                        }.disabled(exporting)
-                        if app.syncFailed {
-                            GhostButton(title: "导出同步恢复文件") {
-                                let current = app.auth
-                                exporting = true; exportError = ""
-                                Task {
-                                    defer { exporting = false }
-                                    do {
-                                        let data = try await app.syncRecoveryRecord()
-                                        guard app.auth == current, app.route == .settings else { return }
-                                        guard let data else { exportError = "当前没有可导出的同步恢复文件。"; return }
-                                        rawBackup = RawRecoveryBackup(data: data)
-                                        exportError = "此文件用于排查同步问题，请同时导出本机进度。"
-                                        showingRawExporter = true
-                                    } catch {
-                                        guard app.auth == current, app.route == .settings else { return }
-                                        exportError = "读取同步恢复文件失败：\(error.localizedDescription)"
-                                    }
-                                }
-                            }.disabled(exporting)
-                        }
-                        GhostButton(title: restoring ? "正在继续…" : "继续未完成的恢复或整理") {
-                            let current=app.auth
-                            restoring=true;largeRestoreExportMessage=""
-                            Task {
-                                defer { restoring=false }
-                                do {
-                                    try await app.resumeLargeRestore()
-                                    guard app.auth == current, app.route == .settings else { return }
-                                    largeRestoreExportMessage="恢复完成；恢复或整理前本机进度已保留。"
-                                } catch {
-                                    guard app.auth == current, app.route == .settings else { return }
-                                    largeRestoreExportMessage="无法继续恢复：\(error.localizedDescription)"
-                                }
-                            }
-                        }.disabled(restoring || exporting)
-                        GhostButton(title: "取消未提交的历史整理") { showCancelCheckpointConfirm = true }
-                            .disabled(restoring || exporting)
-                        GhostButton(title: "取消未提交的备份恢复") { showCancelRestoreConfirm = true }
-                            .disabled(restoring || exporting)
-                        GhostButton(title: "导出大状态恢复记录") {
-                            let current = app.auth
-                            exporting = true; largeRestoreExportMessage = ""
-                            Task {
-                                defer { exporting = false }
-                                do {
-                                    let data = try await app.largeRestoreRecoveryRecord()
-                                    guard app.auth == current, app.route == .settings else { return }
-                                    guard let data else { largeRestoreExportMessage = "当前没有可导出的大状态恢复记录。"; return }
-                                    rawBackup = RawRecoveryBackup(data: data)
-                                    largeRestoreExportMessage = "此文件包含恢复前进度和待恢复备份，请妥善保管并同时导出本机进度。"
-                                    showingRawExporter = true
-                                } catch {
-                                    guard app.auth == current, app.route == .settings else { return }
-                                    largeRestoreExportMessage = "读取大状态恢复记录失败：\(error.localizedDescription)；原文件保留在设备上。"
-                                }
-                            }
-                        }.disabled(exporting)
-                        if !largeRestoreExportMessage.isEmpty {
-                            Text(largeRestoreExportMessage).font(.caption).foregroundStyle(Theme.warn)
-                                .accessibilityIdentifier("large-restore-export-message")
-                        }
-                        GhostButton(title: restoring ? "正在处理…" : "整理已同步的历史") { showCheckpointConfirm = true }
-                            .disabled(restoring)
-                    }
-                    if !app.unverifiedStateURLs.isEmpty {
-                        Text("发现归属未确认的旧存档。请先导出核对，再决定是否恢复。")
-                            .font(.caption).foregroundStyle(Theme.warn)
-                        ForEach(Array(app.unverifiedStateURLs.enumerated()), id: \.element) { index, url in
-                            GhostButton(title: "导出未确认的旧存档 \(index + 1)") {
-                                do {
-                                    rawBackup = RawRecoveryBackup(data: try app.unverifiedState(url))
-                                    showingRawExporter = true
-                                } catch { exportError = "读取旧存档失败：\(error.localizedDescription)" }
-                            }
-                            GhostButton(title: "检查并恢复旧存档 \(index + 1)") {
-                                restoring = true
-                                restoreMessage = ""
-                                Task {
-                                    defer { restoring = false }
-                                    do {
-                                        let data = try app.unverifiedState(url)
-                                        restorePlan = try await app.prepareRestore(data)
-                                        restoreIsUnverified = true
-                                        showRestoreConfirm = true
-                                    } catch { restoreMessage = "读取失败：\(error.localizedDescription)" }
-                                }
-                            }.disabled(restoring)
-                        }
-                    }
-                    GhostButton(title: restoring ? "正在处理备份…" : "选择备份文件恢复") {
-                        restoreMessage = ""
-                        showingImporter = true
-                    }.disabled(restoring)
-                    Text("导出文件包含学习记录，不包含密码或登录凭证，请妥善保管。游客更换设备或清除应用数据后，旧的云端例句任务无法继续取回，可重新生成。")
-                        .font(.caption).foregroundStyle(Theme.muted)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    if !exportError.isEmpty {
-                        Text(exportError).font(.caption).foregroundStyle(Theme.warn)
-                    }
-                    if !restoreMessage.isEmpty {
-                        Text(restoreMessage).font(.caption).foregroundStyle(Theme.muted)
-                    }
-                }
-
-                Card {
-                    Text("复习提醒").font(.footnote).foregroundStyle(Theme.muted)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    HStack {
-                        Text("每日提醒").font(.subheadline).foregroundStyle(Theme.text)
-                        Spacer()
-                        Toggle("", isOn: Binding(
-                            get: { app.S.settings.notifyEnabled },
-                            set: { v in
-                                guard app.S.settings.notifyEnabled != v, app.markSettingChanged("notifyEnabled") else { return }
-                                app.S.settings.notifyEnabled = v
-                                app.save()
-                            }
-                        ))
-                        .labelsHidden()
-                        .accessibilityLabel("每日提醒")
-                        .accessibilityIdentifier("setting-reminder-enabled")
-                    }
-                    if app.S.settings.notifyEnabled {
-                        Text("提醒时间").font(.footnote).foregroundStyle(Theme.muted)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        HStack(spacing: 8) {
-                            ForEach([20, 21, 22], id: \.self) { h in
-                                Button {
-                                    if app.S.settings.notifyHour != h && app.markSettingChanged("notifyHour") { app.S.settings.notifyHour = h; app.save() }
-                                } label: {
-                                    Text("\(h):00")
-                                        .font(.system(size: 15, weight: app.S.settings.notifyHour == h ? .semibold : .regular))
-                                        .padding(.vertical, 9).frame(maxWidth:.infinity,minHeight:44)
-                                        .foregroundStyle(app.S.settings.notifyHour == h ? Theme.accentLight : Theme.text)
-                            .background(app.S.settings.notifyHour == h ? Theme.accent.opacity(0.12):Theme.cardDeep,in:RoundedRectangle(cornerRadius:8))
-                                        .overlay(RoundedRectangle(cornerRadius: 8)
-                                            .stroke(app.S.settings.notifyHour == h ? Theme.accent : Theme.muted.opacity(0.4)))
-                                }
-                            }
-                        }
-                        Text("纯本地通知，不联网。如果当天已完成学习，忽略提醒即可。")
-                            .font(.caption).foregroundStyle(Theme.muted)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                        switch NotificationService.status {
-                        case .denied:
-                            Text("系统通知权限未开启，请在系统设置中允许词航发送通知。")
-                                .font(.caption).foregroundStyle(Theme.warn)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        case .failed:
-                            Text("提醒设置失败，请重试。")
-                                .font(.caption).foregroundStyle(Theme.warn)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                            Button("重试设置提醒") { NotificationService.apply(settings: app.S.settings) }
-                        case .invalidTime:
-                            Text("提醒时间无效，请重新选择。")
-                                .font(.caption).foregroundStyle(Theme.warn)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                        case .disabled, .checking, .scheduled:
-                            EmptyView()
-                        }
-                    }
-                }
-            }
+            }.id(section).padding(.top, 10)
         }
+        .padding(.horizontal, 14)
         .fileExporter(isPresented: $showingExporter, document: backup,
                       contentType: .json, defaultFilename: "vocab-progress-\(DayUtil.today())") { result in
             if case .failure(let error) = result { exportError = "导出失败：\(error.localizedDescription)" }
@@ -583,6 +299,305 @@ struct SettingsView: View {
         }
     }
 
+    @ViewBuilder private var dailySettings: some View {
+        settingSection(id: "new", title: "每日新词数",
+                       options: [5, 10, 15, 20],
+                       current: app.S.settings.newPerDay) { n in
+            if app.S.settings.newPerDay != n && app.markSettingChanged("newPerDay") { app.S.settings.newPerDay = n; app.save() }
+        }
+        settingSection(id: "cap", title: "每日总上限（复习、新词和探测的不同单词）",
+                       options: [30, 60, 100, 130, 200, 300],
+                       current: app.S.settings.dailyCap) { n in
+            if app.S.settings.dailyCap != n && app.markSettingChanged("dailyCap") { app.S.settings.dailyCap = n; app.save() }
+        }
+        if app.auth != nil {
+            Text("两端共用今日名单。已发出的词会继续占用名额，降低数量或调整新词比例可能从明天生效；提高总上限可增加今天的名额。")
+                .font(.caption).foregroundStyle(Theme.muted)
+        }
+    }
+
+    @ViewBuilder private var appearanceSettings: some View {
+        VStack(alignment:.leading,spacing:8) {
+            Text("外观").font(.headline)
+            if appearanceTextSize.isAccessibilitySize {
+                appearancePicker.pickerStyle(.menu)
+            }else{
+                appearancePicker.pickerStyle(.segmented)
+            }
+            Text("此设备使用的外观。跟随系统时，系统切换外观会立即生效。").font(.footnote).foregroundStyle(Theme.muted)
+        }.frame(maxWidth:.infinity,alignment:.leading)
+        Text("朗读嗓音").font(.footnote).foregroundStyle(Theme.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+            ForEach(voices, id: \.0) { v, name in
+                let selected = (app.S.settings.voice ?? "en-US-AriaNeural") == v
+                Button {
+                    if app.S.settings.voice != v && app.markSettingChanged("voice") { app.S.settings.voice = v; app.maintenanceMessage = "嗓音已更换，请重新下载今日离线包。"; app.save() }
+                    app.audio.play("The quick brown fox jumps over the lazy dog.", voice: v)
+                } label: {
+                    Text(name)
+                        .font(.subheadline.weight(selected ? .semibold : .regular))
+                        .frame(maxWidth: .infinity).padding(.vertical, 10)
+                        .foregroundStyle(selected ? Theme.accentLight : Theme.text)
+                .background(selected ? Theme.accent.opacity(0.12):Theme.cardDeep,in:RoundedRectangle(cornerRadius:8))
+                        .overlay(RoundedRectangle(cornerRadius: 8)
+                            .stroke(selected ? Theme.accent : Theme.muted.opacity(0.4)))
+                }
+            }
+        }
+    }
+
+    @ViewBuilder private var reminderSettings: some View {
+        HStack {
+            Text("每日提醒").font(.subheadline).foregroundStyle(Theme.text)
+            Spacer()
+            Toggle("", isOn: Binding(
+                get: { app.S.settings.notifyEnabled },
+                set: { v in
+                    guard app.S.settings.notifyEnabled != v, app.markSettingChanged("notifyEnabled") else { return }
+                    app.S.settings.notifyEnabled = v
+                    app.save()
+                }
+            ))
+            .labelsHidden()
+            .accessibilityLabel("每日提醒")
+            .accessibilityIdentifier("setting-reminder-enabled")
+        }
+        if app.S.settings.notifyEnabled {
+            Text("提醒时间").font(.footnote).foregroundStyle(Theme.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            HStack(spacing: 8) {
+                ForEach([20, 21, 22], id: \.self) { h in
+                    Button {
+                        if app.S.settings.notifyHour != h && app.markSettingChanged("notifyHour") { app.S.settings.notifyHour = h; app.save() }
+                    } label: {
+                        Text("\(h):00")
+                            .font(.system(size: 15, weight: app.S.settings.notifyHour == h ? .semibold : .regular))
+                            .padding(.vertical, 9).frame(maxWidth:.infinity,minHeight:44)
+                            .foregroundStyle(app.S.settings.notifyHour == h ? Theme.accentLight : Theme.text)
+                .background(app.S.settings.notifyHour == h ? Theme.accent.opacity(0.12):Theme.cardDeep,in:RoundedRectangle(cornerRadius:8))
+                            .overlay(RoundedRectangle(cornerRadius: 8)
+                                .stroke(app.S.settings.notifyHour == h ? Theme.accent : Theme.muted.opacity(0.4)))
+                    }
+                }
+            }
+            Text("纯本地通知，不联网。如果当天已完成学习，忽略提醒即可。")
+                .font(.caption).foregroundStyle(Theme.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            switch NotificationService.status {
+            case .denied:
+                Text("系统通知权限未开启，请在系统设置中允许词航发送通知。")
+                    .font(.caption).foregroundStyle(Theme.warn)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            case .failed:
+                Text("提醒设置失败，请重试。")
+                    .font(.caption).foregroundStyle(Theme.warn)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                Button("重试设置提醒") { NotificationService.apply(settings: app.S.settings) }
+            case .invalidTime:
+                Text("提醒时间无效，请重新选择。")
+                    .font(.caption).foregroundStyle(Theme.warn)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            case .disabled, .checking, .scheduled:
+                EmptyView()
+            }
+        }
+    }
+
+    @ViewBuilder private var levelSettings: some View {
+        Text("定级").font(.footnote).foregroundStyle(Theme.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        GhostButton(title: "重新定级（30 题重测词汇边界）") {
+            showReplaceConfirm = true
+        }
+        Text("随时可测。已学单词、复习进度、连续天数全部保留，只更新词汇边界和后续新词起点。")
+            .font(.caption).foregroundStyle(Theme.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        Text("估值校验").font(.footnote).foregroundStyle(Theme.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        GhostButton(title: validationLoading ? "正在准备校验…" : "独立水平校验（24 题，不影响学习计划）") {
+            guard !validationLoading else { return }
+            validationLoading = true
+            validationError = ""
+            let owner = app.auth, generation = app.routeGeneration
+            Task {
+                defer { validationLoading = false }
+                do { try await app.startValidation() }
+                catch {
+                    guard app.auth == owner, app.route == .settings, app.routeGeneration == generation else { return }
+                    validationError = "无法开始校验，请检查网络后重试。"
+                }
+            }
+        }.disabled(validationLoading)
+        if !validationError.isEmpty {
+            Text(validationError).font(.footnote).foregroundStyle(Theme.warn)
+        }
+        if let r = app.S.evalReport {
+            Text("上次 \(r.date)：独立 ≈\(r.mean)，当前 ≈\(r.appMean)，差值 \(r.delta > 0 ? "+" : "")\(r.delta)")
+                .font(.caption).foregroundStyle(Theme.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } else {
+            Text("用独立题目检验当前估值偏差，不修改后验、卡片或发词位置。")
+                .font(.caption).foregroundStyle(Theme.muted)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder private var offlineSettings: some View {
+        if !app.fsrsReplayError.isEmpty {
+            Text(app.fsrsReplayError).font(.footnote).foregroundStyle(Theme.warn)
+        }
+        GhostButton(title:"下载／更新整库离线包") { Task { await app.downloadLibraryOffline() } }.disabled(app.maintenanceRunning)
+        if app.maintenanceRunning { GhostButton(title:"暂停整库下载") { app.libraryDownloadCancelled=true } }
+        GhostButton(title:"删除整库离线包") { Task { await app.clearOfflineLibrary() } }.disabled(app.maintenanceRunning)
+        GhostButton(title:"下载今日任务离线包") { Task { await app.downloadTodayOffline() } }.disabled(app.maintenanceRunning)
+        GhostButton(title:"检查并修复异常卡（\(app.S.cards.values.filter { $0.fsrsIssue != nil }.count)）") { Task { await app.repairQuarantinedCards() } }.disabled(app.maintenanceRunning)
+        GhostButton(title:"本机生成薄弱词例句") { Task { await app.generateLocalPractice() } }.disabled(app.localPracticeRunning)
+        if !app.localPracticeNotice.isEmpty { Text(app.localPracticeNotice).font(.caption).foregroundStyle(Theme.muted) }
+        ForEach(Array(app.localPracticeRows.enumerated()),id:\.offset) { _,row in
+            Text(row.target+"："+row.text+"\n"+(row.zh ?? "")).font(.callout).foregroundStyle(Theme.text)
+        }
+        Text(app.maintenanceMessage.isEmpty ? "整库包包含释义、双向题目与例句；今日包额外保存任务音频。本机模型可用时可生成新句，否则使用已保存例句。学习名额仍按原规则领取。" : app.maintenanceMessage).font(.caption).foregroundStyle(Theme.muted)
+        ForEach(app.S.cards.keys.filter { app.S.cards[$0]?.fsrsIssue != nil }.sorted().prefix(25),id:\.self) { word in
+            Text(word+"："+(app.S.cards[word]?.fsrsIssue ?? "")).font(.caption).foregroundStyle(Theme.warn)
+        }
+        LearningHealthView().id(app.auth?.accountId ?? "guest")
+    }
+
+    @ViewBuilder private var backupSettings: some View {
+        Text("学习数据").font(.footnote).foregroundStyle(Theme.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        if (try? JSONEncoder().encode(app.S).count) ?? 0 > 6 * 1024 * 1024 {
+            Text("学习状态接近同步大小上限，请先同步其他设备，再整理已同步的历史。")
+                .font(.caption).foregroundStyle(Theme.warn)
+        }
+        GhostButton(title: exporting ? "正在准备备份…" : "导出本机学习进度") {
+            prepareExport(app.S)
+        }.disabled(exporting)
+        GhostButton(title: "导出恢复前的本机备份") {
+            do { prepareExport(try app.latestLocalBackup()) }
+            catch { exportError = "读取备份失败：\(error.localizedDescription)" }
+        }.disabled(exporting)
+        GhostButton(title: restoring ? "正在处理备份…" : "选择备份文件恢复") {
+            restoreMessage = ""
+            showingImporter = true
+        }.disabled(restoring)
+        Text("导出文件包含学习记录，不包含密码或登录凭证，请妥善保管。游客更换设备或清除应用数据后，旧的云端例句任务无法继续取回，可重新生成。")
+            .font(.caption).foregroundStyle(Theme.muted)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        if !app.unverifiedStateURLs.isEmpty {
+            Text("发现归属未确认的旧存档。请先导出核对，再决定是否恢复。")
+                .font(.caption).foregroundStyle(Theme.warn)
+            ForEach(Array(app.unverifiedStateURLs.enumerated()), id: \.element) { index, url in
+                GhostButton(title: "导出未确认的旧存档 \(index + 1)") {
+                    do {
+                        rawBackup = RawRecoveryBackup(data: try app.unverifiedState(url))
+                        showingRawExporter = true
+                    } catch { exportError = "读取旧存档失败：\(error.localizedDescription)" }
+                }
+                GhostButton(title: "检查并恢复旧存档 \(index + 1)") {
+                    restoring = true
+                    restoreMessage = ""
+                    Task {
+                        defer { restoring = false }
+                        do {
+                            let data = try app.unverifiedState(url)
+                            restorePlan = try await app.prepareRestore(data)
+                            restoreIsUnverified = true
+                            showRestoreConfirm = true
+                        } catch { restoreMessage = "读取失败：\(error.localizedDescription)" }
+                    }
+                }.disabled(restoring)
+            }
+        }
+    }
+
+    @ViewBuilder private var recoverySettings: some View {
+        if app.auth?.accountId == nil { Text("登录后可管理账号的同步记录。") } else {
+            GhostButton(title: "导出待同步快照") {
+                let current = app.auth
+                exporting = true; exportError = ""
+                Task {
+                    defer { exporting = false }
+                    do {
+                        let data = try await app.pendingSyncSnapshot()
+                        guard app.auth == current, app.route == .settings else { return }
+                        guard let data else { exportError = "当前没有待确认的同步快照。"; return }
+                        rawBackup = RawRecoveryBackup(data: data)
+                        exportError = "待同步快照可能不包含服务器上的调度参数，请同时导出本机进度。"
+                        showingRawExporter = true
+                    } catch {
+                        guard app.auth == current, app.route == .settings else { return }
+                        exportError = "读取待同步快照失败：\(error.localizedDescription)"
+                    }
+                }
+            }.disabled(exporting)
+            if app.syncFailed {
+                GhostButton(title: "导出同步恢复文件") {
+                    let current = app.auth
+                    exporting = true; exportError = ""
+                    Task {
+                        defer { exporting = false }
+                        do {
+                            let data = try await app.syncRecoveryRecord()
+                            guard app.auth == current, app.route == .settings else { return }
+                            guard let data else { exportError = "当前没有可导出的同步恢复文件。"; return }
+                            rawBackup = RawRecoveryBackup(data: data)
+                            exportError = "此文件用于排查同步问题，请同时导出本机进度。"
+                            showingRawExporter = true
+                        } catch {
+                            guard app.auth == current, app.route == .settings else { return }
+                            exportError = "读取同步恢复文件失败：\(error.localizedDescription)"
+                        }
+                    }
+                }.disabled(exporting)
+            }
+            GhostButton(title: restoring ? "正在继续…" : "继续未完成的恢复或整理") {
+                let current=app.auth
+                restoring=true;largeRestoreExportMessage=""
+                Task {
+                    defer { restoring=false }
+                    do {
+                        try await app.resumeLargeRestore()
+                        guard app.auth == current, app.route == .settings else { return }
+                        largeRestoreExportMessage="恢复完成；恢复或整理前本机进度已保留。"
+                    } catch {
+                        guard app.auth == current, app.route == .settings else { return }
+                        largeRestoreExportMessage="无法继续恢复：\(error.localizedDescription)"
+                    }
+                }
+            }.disabled(restoring || exporting)
+            GhostButton(title: "取消未提交的历史整理") { showCancelCheckpointConfirm = true }
+                .disabled(restoring || exporting)
+            GhostButton(title: "取消未提交的备份恢复") { showCancelRestoreConfirm = true }
+                .disabled(restoring || exporting)
+            GhostButton(title: "导出大状态恢复记录") {
+                let current = app.auth
+                exporting = true; largeRestoreExportMessage = ""
+                Task {
+                    defer { exporting = false }
+                    do {
+                        let data = try await app.largeRestoreRecoveryRecord()
+                        guard app.auth == current, app.route == .settings else { return }
+                        guard let data else { largeRestoreExportMessage = "当前没有可导出的大状态恢复记录。"; return }
+                        rawBackup = RawRecoveryBackup(data: data)
+                        largeRestoreExportMessage = "此文件包含恢复前进度和待恢复备份，请妥善保管并同时导出本机进度。"
+                        showingRawExporter = true
+                    } catch {
+                        guard app.auth == current, app.route == .settings else { return }
+                        largeRestoreExportMessage = "读取大状态恢复记录失败：\(error.localizedDescription)；原文件保留在设备上。"
+                    }
+                }
+            }.disabled(exporting)
+            if !largeRestoreExportMessage.isEmpty {
+                Text(largeRestoreExportMessage).font(.caption).foregroundStyle(Theme.warn)
+                    .accessibilityIdentifier("large-restore-export-message")
+            }
+            GhostButton(title: restoring ? "正在处理…" : "整理已同步的历史") { showCheckpointConfirm = true }
+                .disabled(restoring)
+        }
+    }
+
     private var appearancePicker:some View {
         Picker("外观",selection:$appearance){
             ForEach(AppAppearance.allCases){option in Text(option.label).tag(option)}
@@ -662,11 +677,10 @@ struct ValidationView: View {
                         Spacer()
                     } else {
                         VStack(spacing: 0) {
-                            Spacer()
                             VStack(spacing: 12) {
                                 let reverse = v.idx % 2 == 1
                                 if reverse, let prompt = quiz?.prompt {
-                                    Text(prompt).font(.system(size: 30, weight: .bold))
+                                    ReadingText(text: prompt, font: .title2.bold(), title: "完整题干")
                                         .foregroundStyle(Theme.text).multilineTextAlignment(.center)
                                     Text("选出对应的英文单词").font(.subheadline).foregroundStyle(Theme.muted)
                                 } else {
@@ -679,7 +693,6 @@ struct ValidationView: View {
                                 Text("只用于检验估值偏差，不影响学习计划")
                                     .font(.caption).foregroundStyle(Theme.muted)
                             }
-                            Spacer()
                         }
                         .frame(maxWidth: .infinity)
                         .onAppear {
@@ -688,9 +701,6 @@ struct ValidationView: View {
                     }
                 }
             }
-        }
-        .safeAreaInset(edge: .bottom) {
-            Group {
                 if let q = quiz, let v = app.validation, v.idx < v.words.count {
                     QuizOptionsView(options: q.options) { ok in
                         app.answerValidation(ok: ok, verifiedPos: q.pos)
@@ -698,9 +708,7 @@ struct ValidationView: View {
                         loading = true
                     }
                 }
-            }
-            .padding(.horizontal, 14).padding(.vertical, 10).background(.regularMaterial)
-        }
+        }.padding(.horizontal, 14)
         .task(id: app.validation?.idx) { await loadQuiz() }
     }
 
@@ -722,8 +730,7 @@ struct ValidationView: View {
     }
 
     private func resultView(_ r: EvalReport) -> some View {
-        VStack(spacing: 14) {
-            Spacer()
+        ScreenPages(spacing: 14) {
             Text("独立校验结果").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
             Text("≈\(r.mean)").font(.largeTitle.weight(.bold)).foregroundStyle(Theme.accentLight)
             Text("独立估值（±\(r.std)） · 答对 \(r.correct)/\(r.count)")
@@ -734,7 +741,6 @@ struct ValidationView: View {
                 .font(.subheadline).foregroundStyle(Theme.warn)
             Text("本次校验没有修改你的后验、卡片或后续发词位置。")
                 .font(.caption).foregroundStyle(Theme.muted)
-            Spacer()
             PrimaryButton(title: "返回设置") { app.closeValidation() }
             GhostButton(title: retrying ? "正在准备…" : "重新校验") { restartValidation() }.disabled(retrying)
         }

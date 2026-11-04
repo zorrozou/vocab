@@ -14,22 +14,39 @@ enum PlaybackSession {
     }
 }
 
+/// Language lookup can block while iOS enumerates its installed voices.
+private actor SpeechVoices {
+    private var installed: [String: AVSpeechSynthesisVoice] = [:]
+
+    func voice(for language: String) -> AVSpeechSynthesisVoice? {
+        if let cached = installed[language] { return cached }
+        let voice = AVSpeechSynthesisVoice(language: language)
+        installed[language] = voice
+        return voice
+    }
+}
+
 /// On-device speech is a fallback, never presented as a downloaded neural voice.
 @MainActor
 private final class LocalSpeechPlayer: NSObject, AVSpeechSynthesizerDelegate {
+    private let voices = SpeechVoices()
     private let synthesizer=AVSpeechSynthesizer()
     private var active:AVSpeechUtterance?
     private var completion:CheckedContinuation<Void,Never>?
     override init() { super.init();synthesizer.delegate=self }
     func stop() {
-        synthesizer.stopSpeaking(at:.immediate);active=nil
+        if active != nil { synthesizer.stopSpeaking(at:.immediate) }
+        active=nil
         let done=completion;completion=nil;done?.resume()
     }
     func speak(_ text:String,voice:String?) async {
         guard !Task.isCancelled else { return }
         stop()
+        let language = voice?.hasPrefix("en-GB") == true ? "en-GB" : "en-US"
+        let resolved = await voices.voice(for: language)
+        guard !Task.isCancelled else { return }
         let utterance=AVSpeechUtterance(string:text)
-        utterance.voice=AVSpeechSynthesisVoice(language:voice?.hasPrefix("en-GB")==true ? "en-GB":"en-US")
+        utterance.voice=resolved
         utterance.rate=AVSpeechUtteranceDefaultSpeechRate
         await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in

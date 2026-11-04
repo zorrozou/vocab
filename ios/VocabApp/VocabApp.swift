@@ -73,7 +73,7 @@ struct RootView: View {
             case .stats:
                 StatsView()
             case .settings:
-                SettingsView()
+                SettingsView(initial: app.initialSettingsSection)
             case .userMenu:
                 UserMenuView()
             }

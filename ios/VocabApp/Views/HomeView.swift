@@ -5,6 +5,7 @@ struct HomeView: View {
     @Environment(AppState.self) private var app
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @AppStorage("coach.classic.interface.v1") private var classic=false
+    @SceneStorage("vocab.home.section") private var section = 0
     @State private var starting = false
     @State private var startError = ""
 
@@ -29,56 +30,73 @@ struct HomeView: View {
     private var content: some View {
         VStack(spacing: 0) {
             TopBar()
-            ScrollView {
-                VStack(spacing: 14) {
-                    if classic {chips}
-                    CoachHomeCard()
-                    if !classic {
-                        HStack {Text("词汇训练").font(.headline);Spacer()}.padding(.horizontal,16)
-                        chips
-                    }
+            if classic || section == 1 {
+                ScreenPages {
+                    chips
                     if !app.studyNotice.isEmpty {
-                        Text(app.studyNotice).font(.subheadline).foregroundStyle(Theme.warn)
+                        ReadingText(text: app.studyNotice, font: .subheadline).foregroundStyle(Theme.warn)
                             .accessibilityIdentifier("study-plan-notice")
                     }
-                    if !app.S.calibrated {
-                        placementIntro
-                    } else {
-                        todayCard
+                    if !app.S.calibrated { placementIntro } else { todayCard }
+                    if classic {
+                        Button("开启听读教练") {
+                            section = 0; classic = false
+                        }
+                        .frame(minHeight: 44).accessibilityIdentifier("coach-enable")
                     }
-                }
-                .padding(.top, 12)
+                }.padding(.horizontal, 14)
+            } else {
+                CoachHomeCard(tab: section == 0 ? 0 : section - 1)
             }
         }
         .task { await app.refreshPersonalJobs() }
         // 主行动按钮钉死底部拇指区
         .safeAreaInset(edge: .bottom) {
-            Group {
-                if !app.S.calibrated {
-                    PrimaryButton(title: app.S.probeCount > 0 ? "继续定级" : "开始定级") {
-                        app.route = .placement
-                    }
-                } else {
-                    VStack(spacing: 6) {
-                        PrimaryButton(title: vocabularyAction) {
-                            guard !starting else { return }
-                            starting = true
-                            startError = ""
-                            let generation = app.routeGeneration, owner = app.auth
-                            Task {
-                                let ready = await app.buildQueue()
-                                guard app.routeGeneration == generation, app.auth == owner else { return }
-                                starting = false
-                                if ready {
-                                    if app.session.queue.isEmpty { app.markDayDone() }
-                                    app.route = .session
-                                } else {
-                                    startError = app.studyNotice.isEmpty ? "任务加载失败，请检查网络后重试" : app.studyNotice
+            VStack(spacing: 4) {
+                if classic || section == 1 {
+                    if !app.S.calibrated {
+                        PrimaryButton(title: app.S.probeCount > 0 ? "继续定级" : "开始定级") {
+                            app.route = .placement
+                        }
+                    } else {
+                        VStack(spacing: 6) {
+                            PrimaryButton(title: vocabularyAction) {
+                                guard !starting else { return }
+                                starting = true
+                                startError = ""
+                                let generation = app.routeGeneration, owner = app.auth
+                                Task {
+                                    let ready = await app.buildQueue()
+                                    guard app.routeGeneration == generation, app.auth == owner else { return }
+                                    starting = false
+                                    if ready {
+                                        if app.session.queue.isEmpty { app.markDayDone() }
+                                        app.route = .session
+                                    } else {
+                                        startError = app.studyNotice.isEmpty ? "任务加载失败，请检查网络后重试" : app.studyNotice
+                                    }
                                 }
+                            }.accessibilityIdentifier("start-today")
+                            if !startError.isEmpty {
+                                Text(startError).font(.caption).foregroundStyle(Theme.bad)
                             }
-                        }.accessibilityIdentifier("start-today")
-                        if !startError.isEmpty {
-                            Text(startError).font(.caption).foregroundStyle(Theme.bad)
+                        }
+                    }
+                }
+                if !classic {
+                    HStack(spacing: 4) {
+                        ForEach(Array(["课堂", "词汇", "档案", "目标"].enumerated()), id: \.offset) { index, label in
+                            Button {
+                                section = index
+                            } label: {
+                                VStack(spacing: 2) {
+                                    Image(systemName: ["headphones", "character.book.closed", "chart.bar", "scope"][index])
+                                    Text(label).font(.caption)
+                                }.foregroundStyle(section == index ? Theme.accent : Theme.muted)
+                                    .frame(maxWidth: .infinity, minHeight: 44)
+                                    .background(section == index ? Theme.cardDeep : .clear, in: RoundedRectangle(cornerRadius: 10))
+                            }.accessibilityIdentifier("home-section-\(index)")
+                                .accessibilityAddTraits(section == index ? .isSelected : [])
                         }
                     }
                 }
@@ -102,7 +120,7 @@ struct HomeView: View {
     }
 
     private var placementIntro: some View {
-        Card {
+        Group {
             Text(app.S.placementVersion == nil ? "首次使用 · 智能定级" : "重新定级").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
             Text("共 30 道词义选择题，约需几分钟。难度会随作答调整，结果用于估计适合你的新词起点。可以中途退出，之后继续。")
                 .font(.subheadline).foregroundStyle(Theme.text)
@@ -111,13 +129,13 @@ struct HomeView: View {
                 Text("已完成 \(app.S.probeCount)/30\(app.S.probeCount >= 4 ? " · 当前估计 ≈\(Int(StudyEngine.postMean(app.S)))" : "")")
                     .font(.footnote).foregroundStyle(Theme.muted)
             }
-            Text("开始按钮在屏幕底部 👇").font(.caption).foregroundStyle(Theme.muted)
+
         }
     }
 
     private var todayCard: some View {
         let plan = dailyPlan
-        return Card {
+        return Group {
             Text("今日任务").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
             // 今日进度：已完成 / 目标（复习+新词），一眼看到还差多少
             VStack(spacing: 4) {
@@ -159,6 +177,33 @@ struct HomeView: View {
 struct TopBar: View {
     @Environment(AppState.self) private var app
 
+    @State private var showNotices = false
+    private struct Notice {
+        let id: String
+        let title: String
+        let action: () -> Void
+    }
+    private var notices: [Notice] {
+        var items: [Notice] = []
+        let account = { app.route = app.isGuest ? .welcome : .userMenu }
+        if app.localSaveFailed {
+            items.append(Notice(id: "disk-status", title: "本机保存失败，打开设置导出进度") { app.openSettings(.backup) })
+        }
+        if app.syncFailed {
+            items.append(Notice(id: "sync-status", title: "同步未完成，请查看详情", action: account))
+        }
+        if app.credentialSaveFailed {
+            items.append(Notice(id: "credential-status", title: "⚠️ 登录凭证未保存，重启后需重新登录", action: account))
+        }
+        if !app.fsrsReplayError.isEmpty {
+            items.append(Notice(id: "fsrs-status", title: "评分参数冲突，打开设置查看") { app.openSettings(.offline) })
+        }
+        if app.S.cards.values.contains(where: { $0.pendingFsrs != nil }) {
+            items.append(Notice(id: "pending-sync-status", title: "评分待同步，打开账号查看", action: account))
+        }
+        return items
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -170,40 +215,40 @@ struct TopBar: View {
                 Button { app.route = .stats } label: {
                     Image(systemName: "chart.bar").foregroundStyle(Theme.accentLight).frame(width: 44, height: 44).background(Theme.card,in:RoundedRectangle(cornerRadius:12))
                 }.accessibilityLabel("统计").accessibilityIdentifier("stats-menu")
-                Button { app.route = .settings } label: {
+                Button { app.openSettings(.daily) } label: {
                     Image(systemName: "gearshape").foregroundStyle(Theme.accentLight).frame(width: 44, height: 44).background(Theme.card,in:RoundedRectangle(cornerRadius:12))
                 }.accessibilityLabel("设置").accessibilityIdentifier("settings-menu")
                 Button { app.route = app.isGuest ? .welcome : .userMenu } label: {
                     Image(systemName: "person.circle").foregroundStyle(Theme.accentLight).frame(width: 44, height: 44).background(Theme.card,in:RoundedRectangle(cornerRadius:12))
                 }.accessibilityLabel("账号").accessibilityIdentifier("account-menu")
             }
-            if app.syncFailed {
-                Button { app.route = app.isGuest ? .welcome : .userMenu } label: {
-                    HStack {
-                        Text("同步未完成，请查看详情")
-                        Image(systemName: "chevron.right")
+            if let item = notices.first {
+                HStack {
+                    Button(item.title, action: item.action)
+                        .font(.footnote.weight(.medium)).foregroundStyle(Theme.warn)
+                        .frame(minHeight: 44).accessibilityIdentifier(item.id)
+                    if notices.count > 1 {
+                        Button {
+                            showNotices = true
+                        } label: {
+                            Text("更多（\(notices.count)）")
+                                .font(.footnote).foregroundStyle(Theme.warn).frame(minHeight: 44)
+                        }.sheet(isPresented: $showNotices) {
+                            VStack {
+                                HStack {
+                                    Text("进度提醒").font(.headline); Spacer(); NavigationAction(title: "关闭") { showNotices = false }
+                                }
+                                ScreenPages {
+                                    ForEach(notices, id: \.id) { item in
+                                        GhostButton(title: item.title) {
+                                            showNotices = false; item.action()
+                                        }.accessibilityIdentifier(item.id)
+                                    }
+                                }
+                            }.padding().background(Theme.bg)
+                        }
                     }
-                    .font(.footnote.weight(.medium))
-                    .foregroundStyle(Theme.warn)
-                    .frame(minHeight: 44, alignment: .leading)
                 }
-                .accessibilityIdentifier("sync-status")
-            }
-            if app.credentialSaveFailed {
-                Text("⚠️ 登录凭证未保存，重启后需重新登录").font(.caption).foregroundStyle(Theme.warn)
-            }
-            if app.localSaveFailed {
-                Button("本机保存失败，打开设置导出进度") { app.route = .settings }
-                    .font(.footnote).foregroundStyle(Theme.warn).frame(minHeight: 44)
-            }
-            if !app.fsrsReplayError.isEmpty {
-                Button("评分参数冲突，打开设置查看") { app.route = .settings }
-                    .font(.footnote).foregroundStyle(Theme.warn).frame(minHeight: 44)
-            }
-            if app.S.cards.values.contains(where: { $0.pendingFsrs != nil }) {
-                Button("评分待同步，打开账号查看") { app.route = app.isGuest ? .welcome : .userMenu }
-                    .font(.footnote).foregroundStyle(Theme.warn).frame(minHeight: 44)
-                    .accessibilityIdentifier("pending-sync-status")
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)

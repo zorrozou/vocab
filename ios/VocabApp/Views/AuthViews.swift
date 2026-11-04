@@ -6,14 +6,12 @@ struct WelcomeView: View {
     @Environment(AppState.self) private var app
 
     var body: some View {
-        VStack(spacing: 0) {
-            Spacer()
-            Image(systemName:"book.pages").font(.largeTitle).foregroundStyle(Theme.accent).accessibilityHidden(true).padding(.bottom,8)
+        ScreenPages {
+            Image(systemName: "book.pages").font(.largeTitle).foregroundStyle(Theme.accent).accessibilityHidden(true).padding(.bottom, 8)
             Text("词航").font(.largeTitle.weight(.bold)).foregroundStyle(Theme.text)
             Text("听懂一则消息，读懂一段英语，记牢今天的词。")
                 .font(.subheadline).foregroundStyle(Theme.muted).padding(.top, 6)
-            Spacer()
-            Card {
+            Group {
                 Text("登录后进度可跨设备同步；\n游客模式进度仅保存在本机。")
                     .font(.subheadline).foregroundStyle(Theme.text)
                     .multilineTextAlignment(.center)
@@ -21,8 +19,7 @@ struct WelcomeView: View {
                 GhostButton(title: "注册新账号") { app.route = .auth(login: false) }
                 GhostButton(title: "先逛逛（游客模式）", color: Theme.muted) { app.enterGuest() }
             }
-            Spacer().frame(height: 60)
-        }
+        }.padding(18)
     }
 }
 
@@ -31,6 +28,8 @@ struct AuthView: View {
     @Environment(AppState.self) private var app
     let isLogin: Bool
 
+    private enum Field { case username, nickname, password }
+    @FocusState private var field: Field?
     @State private var username = ""
     @State private var nickname = ""
     @State private var password = ""
@@ -38,52 +37,52 @@ struct AuthView: View {
     @State private var busy = false
 
     var body: some View {
-        ScrollView {
-          VStack {
-            Spacer()
-            Card {
-                Text(isLogin ? "登录" : "注册")
-                    .font(.title2.weight(.bold)).foregroundStyle(Theme.text)
-                TextField("用户名（字母/数字/下划线，3~20 位）", text: $username)
-                    .accessibilityIdentifier("auth-username")
-                    .textContentType(.username)
-                    .autocapitalization(.none)
-                    .disableAutocorrection(true)
+        ScreenPages {
+            Text(isLogin ? "登录" : "注册")
+                .font(.title2.weight(.bold)).foregroundStyle(Theme.text)
+            TextField("用户名（字母/数字/下划线，3~20 位）", text: $username)
+                .accessibilityIdentifier("auth-username")
+                .focused($field, equals: .username)
+                .textContentType(.username)
+                .autocapitalization(.none)
+                .disableAutocorrection(true)
+                .padding(12).background(Theme.cardDeep).clipShape(RoundedRectangle(cornerRadius: 8))
+            if !isLogin {
+                TextField("昵称（可中文，仅展示用）", text: $nickname)
+                    .focused($field, equals: .nickname)
                     .padding(12).background(Theme.cardDeep).clipShape(RoundedRectangle(cornerRadius: 8))
-                if !isLogin {
-                    TextField("昵称（可中文，仅展示用）", text: $nickname)
-                        .padding(12).background(Theme.cardDeep).clipShape(RoundedRectangle(cornerRadius: 8))
-                }
-                SecureField("密码（至少 8 位）", text: $password)
-                    .accessibilityIdentifier("auth-password")
-                    .textContentType(isLogin ? .password : .newPassword)
-                    .padding(12).background(Theme.cardDeep).clipShape(RoundedRectangle(cornerRadius: 8))
-                PrimaryButton(title: busy ? "请稍候…" : (isLogin ? "登录" : "注册并登录")) {
-                    guard !busy else { return }
-                    busy = true
-                    msg = ""
-                    Task {
-                        do {
-                            let r = isLogin
-                                ? try await APIClient.shared.login(username: username.trimmingCharacters(in: .whitespaces), password: password)
-                                : try await APIClient.shared.register(username: username.trimmingCharacters(in: .whitespaces),
-                                                                      password: password,
-                                                                      nickname: nickname.trimmingCharacters(in: .whitespaces))
-                            await app.authed(r, isRegistration: !isLogin)
-                        } catch {
-                            msg = "✗ \(error.localizedDescription)"
-                            busy = false
-                        }
+            }
+            SecureField("密码（至少 8 位）", text: $password)
+                .accessibilityIdentifier("auth-password")
+                .focused($field, equals: .password)
+                .textContentType(isLogin ? .password : .newPassword)
+                .padding(12).background(Theme.cardDeep).clipShape(RoundedRectangle(cornerRadius: 8))
+            PrimaryButton(title: busy ? "请稍候…" : (isLogin ? "登录" : "注册并登录")) {
+                guard !busy else { return }
+                field = nil
+                busy = true
+                msg = ""
+                Task {
+                    do {
+                        let r =
+                            isLogin
+                            ? try await APIClient.shared.login(username: username.trimmingCharacters(in: .whitespaces), password: password)
+                            : try await APIClient.shared.register(
+                                username: username.trimmingCharacters(in: .whitespaces),
+                                password: password,
+                                nickname: nickname.trimmingCharacters(in: .whitespaces))
+                        await app.authed(r, isRegistration: !isLogin)
+                    } catch {
+                        msg = "✗ \(error.localizedDescription)"
+                        busy = false
                     }
                 }
-                GhostButton(title: "返回", color: Theme.muted) { app.route = .welcome }
-                if !msg.isEmpty {
-                    Text(msg).font(.footnote).foregroundStyle(Theme.bad)
-                }
             }
-            Spacer()
-          }.padding(.vertical, 20)
-        }
+            GhostButton(title: "返回", color: Theme.muted) { app.route = .welcome }
+            if !msg.isEmpty {
+                Text(msg).font(.footnote).foregroundStyle(Theme.bad)
+            }
+        }.padding(16).submitLabel(.done).onSubmit { field = nil }
     }
 }
 
@@ -91,6 +90,7 @@ struct AuthView: View {
 struct UserMenuView: View {
     @Environment(AppState.self) private var app
     @State private var msg = ""
+    @State private var section = 0
     @State private var reloadPlan: ServerReloadPlan?
     @State private var showReloadConfirm = false
     @State private var reloading = false
@@ -99,98 +99,111 @@ struct UserMenuView: View {
     @State private var showBackupExporter = false
 
     var body: some View {
-        ScrollView {
-          VStack {
-            Spacer()
-            Card {
+        VStack(spacing: 10) {
+            HStack {
+                Text("账号").font(.headline); Spacer(); NavigationAction(title: "返回学习") { app.route = .home }
+            }
+            SectionChoice(titles: ["同步", "云端备份", "登录管理"], selected: $section)
+            ScreenPages {
+                if !msg.isEmpty && msg != app.syncMsg { ReadingText(text: msg, font: .footnote) }
+
                 if let a = app.auth {
                     Text(a.nickname).font(.title2.weight(.bold)).foregroundStyle(Theme.text)
                     Text("@\(a.username)\(app.syncFailed ? " · 同步失败" : "")").font(.footnote).foregroundStyle(Theme.muted)
-                    if app.syncFailed || app.syncWaiting || !app.syncMsg.isEmpty {
-                        Text(app.syncFailed && (app.syncMsg.isEmpty || app.syncMsg=="✓ 已同步") ? "请查看账号状态或导出本机进度。" : app.syncMsg)
-                            .font(.footnote).foregroundStyle(app.syncFailed ? Theme.warn:Theme.muted)
-                            .accessibilityIdentifier("account-sync-message")
-                    }
-                    if !app.fsrsReplayError.isEmpty {
-                        Text(app.fsrsReplayError).font(.footnote).foregroundStyle(Theme.warn)
-                    }
-                    GhostButton(title: "立即同步") {
-                        Task { msg=""; await app.pushNow() }
-                    }
-                    GhostButton(title: reloading ? "正在读取服务器进度…" : "重新加载服务器进度") {
-                        guard !reloading else { return }
-                        reloading = true
-                        Task {
-                            defer { reloading = false }
-                            do { reloadPlan = try await app.prepareServerReload(); showReloadConfirm = true }
-                            catch { msg = "读取失败：\(error.localizedDescription)" }
+                    if section == 0 {
+                        if app.syncFailed || app.syncWaiting || !app.syncMsg.isEmpty {
+                            Text(app.syncFailed && (app.syncMsg.isEmpty || app.syncMsg == "✓ 已同步") ? "请查看账号状态或导出本机进度。" : app.syncMsg)
+                                .font(.footnote).foregroundStyle(app.syncFailed ? Theme.warn : Theme.muted)
+                                .accessibilityIdentifier("account-sync-message")
                         }
-                    }
-                    GhostButton(title: "查看服务器恢复前备份") {
-                        let owner = app.auth
-                        Task {
-                            do {
-                                let result = try await APIClient.shared.stateBackups()
-                                guard app.auth == owner else { return }
-                                serverBackups = result.backups
-                                if serverBackups.isEmpty { msg = "没有服务器备份" }
-                            } catch { msg = "读取备份失败：\(error.localizedDescription)" }
+                        if !app.fsrsReplayError.isEmpty {
+                            Text(app.fsrsReplayError).font(.footnote).foregroundStyle(Theme.warn)
                         }
-                    }
-                    ForEach(serverBackups) { backup in
-                        GhostButton(title: "导出备份 \(Date(timeIntervalSince1970: backup.created_at).formatted(date: .abbreviated, time: .shortened))") {
+                        GhostButton(title: "立即同步") {
+                            Task {
+                                msg = ""; await app.pushNow()
+                            }
+                        }
+                    } else if section == 1 {
+                        GhostButton(title: reloading ? "正在读取服务器进度…" : "重新加载服务器进度") {
+                            guard !reloading else { return }
+                            reloading = true
+                            Task {
+                                defer { reloading = false }
+                                do { reloadPlan = try await app.prepareServerReload(); showReloadConfirm = true } catch {
+                                    msg = "读取失败：\(error.localizedDescription)"
+                                }
+                            }
+                        }
+                        GhostButton(title: "查看服务器恢复前备份") {
                             let owner = app.auth
                             Task {
                                 do {
-                                    let response = try await APIClient.shared.stateBackup(id: backup.id)
+                                    let result = try await APIClient.shared.stateBackups()
                                     guard app.auth == owner else { return }
-                                    guard let state = response.state else { throw APIError(message: "备份内容为空") }
-                                    backupDocument = LearningBackup(state: state)
-                                    showBackupExporter = true
+                                    serverBackups = result.backups
+                                    if serverBackups.isEmpty { msg = "没有服务器备份" }
                                 } catch { msg = "读取备份失败：\(error.localizedDescription)" }
                             }
                         }
-                    }
-                    GhostButton(title: "切换账号 / 游客模式", color: Theme.muted) {
-                        if !app.switchAccount() { msg = app.syncMsg }
-                    }
-                    Text("切换账号会先保留本机进度；退出登录会先尝试同步。")
-                        .font(.caption).foregroundStyle(Theme.muted)
-                    PrimaryButton(title: "退出登录", color: Theme.bad) {
-                        let owner = app.auth
-                        Task {
-                            await app.logout()
-                            if app.auth == owner { msg = app.syncMsg }
+                        ForEach(serverBackups) { backup in
+                            GhostButton(
+                                title:
+                                    "导出备份 \(Date(timeIntervalSince1970: backup.created_at).formatted(date: .abbreviated, time: .shortened))"
+                            ) {
+                                let owner = app.auth
+                                Task {
+                                    do {
+                                        let response = try await APIClient.shared.stateBackup(id: backup.id)
+                                        guard app.auth == owner else { return }
+                                        guard let state = response.state else { throw APIError(message: "备份内容为空") }
+                                        backupDocument = LearningBackup(state: state)
+                                        showBackupExporter = true
+                                    } catch { msg = "读取备份失败：\(error.localizedDescription)" }
+                                }
+                            }
+                        }
+                    } else {
+                        GhostButton(title: "切换账号 / 游客模式", color: Theme.muted) {
+                            if !app.switchAccount() { msg = app.syncMsg }
+                        }
+                        Text("切换账号会先保留本机进度；退出登录会先尝试同步。")
+                            .font(.caption).foregroundStyle(Theme.muted)
+                        PrimaryButton(title: "退出登录", color: Theme.bad) {
+                            let owner = app.auth
+                            Task {
+                                await app.logout()
+                                if app.auth == owner { msg = app.syncMsg }
+                            }
                         }
                     }
                 }
-                GhostButton(title: "返回学习", color: Theme.muted) { app.route = .home }
-                if !msg.isEmpty && msg != app.syncMsg {
-                    Text(msg).font(.footnote).foregroundStyle(Theme.muted)
+            }.id(section)
+        }.padding(.horizontal, 16)
+            .fileExporter(
+                isPresented: $showBackupExporter, document: backupDocument,
+                contentType: .json, defaultFilename: "vocab-server-backup"
+            ) { result in
+                if case .failure(let error) = result { msg = "导出失败：\(error.localizedDescription)" }
+            }
+            .alert("重新加载服务器进度？", isPresented: $showReloadConfirm) {
+                Button("重新加载", role: .destructive) {
+                    guard let plan = reloadPlan else { return }
+                    reloading = true
+                    Task {
+                        defer { reloading = false; reloadPlan = nil }
+                        do { try await app.applyServerReload(plan); msg = "服务器进度已加载，原本机进度已备份" } catch {
+                            msg = "重新加载失败：\(error.localizedDescription)"
+                        }
+                    }
+                }
+                Button("取消", role: .cancel) { reloadPlan = nil }
+            } message: {
+                if let plan = reloadPlan {
+                    Text(
+                        "服务器有 \(plan.state.cards.count) 张卡，本机有 \(plan.before.cards.count) 张。将替换本机进度，当前本机进度会先备份。"
+                            + (plan.missingSyncRecord ? "同步记录已丢失，无法找回其中可能包含的待同步修改。" : ""))
                 }
             }
-            Spacer()
-          }.padding(.vertical, 20)
-        }
-        .fileExporter(isPresented: $showBackupExporter, document: backupDocument,
-                      contentType: .json, defaultFilename: "vocab-server-backup") { result in
-            if case .failure(let error) = result { msg = "导出失败：\(error.localizedDescription)" }
-        }
-        .alert("重新加载服务器进度？", isPresented: $showReloadConfirm) {
-            Button("重新加载", role: .destructive) {
-                guard let plan = reloadPlan else { return }
-                reloading = true
-                Task {
-                    defer { reloading = false; reloadPlan = nil }
-                    do { try await app.applyServerReload(plan); msg = "服务器进度已加载，原本机进度已备份" }
-                    catch { msg = "重新加载失败：\(error.localizedDescription)" }
-                }
-            }
-            Button("取消", role: .cancel) { reloadPlan = nil }
-        } message: {
-            if let plan = reloadPlan {
-                Text("服务器有 \(plan.state.cards.count) 张卡，本机有 \(plan.before.cards.count) 张。将替换本机进度，当前本机进度会先备份。" + (plan.missingSyncRecord ? "同步记录已丢失，无法找回其中可能包含的待同步修改。" : ""))
-            }
-        }
     }
 }

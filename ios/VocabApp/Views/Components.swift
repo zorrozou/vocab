@@ -162,18 +162,6 @@ struct ShadowResultDisplay: View {
     }
 }
 
-struct Card<Content: View>: View {
-    @ViewBuilder var content: Content
-    var body: some View {
-        VStack(spacing: 14) { content }
-            .padding(18)
-            .frame(maxWidth: 560)
-            .background(Theme.card,in:RoundedRectangle(cornerRadius:18))
-            .overlay(RoundedRectangle(cornerRadius:18).stroke(Theme.edge))
-            .padding(.horizontal, 14)
-    }
-}
-
 struct PrimaryButton: View {
     let title: String
     var color: Color = Theme.accent
@@ -281,10 +269,7 @@ struct SentenceRow: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .top, spacing: 8) {
                 TagLabel(text: tag, color: tagColor)
-                Text(sentence.text)
-                    .font(.body)
-                    .foregroundStyle(Theme.text)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer()
                 PlayButton(text: sentence.text)
                 Button {
                     guard !swapping else { return }
@@ -315,6 +300,10 @@ struct SentenceRow: View {
                 .accessibilityIdentifier("swap-\(kind)-\(word)")
                 .disabled(swapping)
             }
+            ReadingText(text: sentence.text, font: .body, title: "完整例句")
+            if let zh = sentence.zh, !zh.isEmpty {
+                ReadingText(text: zh, font: .footnote, title: "完整译文").foregroundStyle(Theme.muted)
+            }
             Menu {
                 ForEach([("meaning","词义不匹配"),("translation","翻译有误"),("grammar","语法问题"),("unnatural","表达不自然")],id:\.0) { reason,title in
                     Button(title) {
@@ -331,9 +320,7 @@ struct SentenceRow: View {
             if let recallNote {
                 Text(recallNote).font(.caption).foregroundStyle(Theme.muted)
             }
-            if let zh = sentence.zh, !zh.isEmpty {
-                Text(zh).font(.footnote).foregroundStyle(Theme.muted)
-            }
+
             if swapError {
                 Text("暂时无法换句，请稍后重试。")
                     .font(.footnote).foregroundStyle(Theme.muted)
@@ -347,18 +334,22 @@ struct SentenceRow: View {
 struct QuizOptionsView: View {
     let options: [QuizOption]
     let onPick: (Bool) -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @State private var reading: Int?
     @State private var feedback = QuizAnswerFeedback()
 
     var body: some View {
-        VStack(spacing: 8) {
+        ScreenPages(spacing: 8) {
             ForEach(Array(options.enumerated()), id: \.offset) { i, o in
+                let long = o.text.count > (typeSize.isAccessibilitySize ? 30 : 100)
                 Button {
-                    feedback.choose(i, correct: o.ok, commit: onPick)
+                    if long { reading = i } else { feedback.choose(i, correct: o.ok, commit: onPick) }
                 } label: {
                     HStack(spacing:12) {
                         Text(String(UnicodeScalar(65+i)!)).font(.caption.monospaced().bold())
                             .frame(minWidth:26,minHeight:26).background(Theme.card,in:RoundedRectangle(cornerRadius:7)).accessibilityHidden(true)
-                        Text(o.text).font(.body)
+                        Text(o.text).font(.body).lineLimit(long ? 2 : nil)
+                        if long { Image(systemName: "book.pages").accessibilityLabel("查看完整选项") }
                         if feedback.picked != nil && (o.ok || feedback.picked==i) {
                             Image(systemName:o.ok ? "checkmark.circle.fill":"xmark.circle").accessibilityLabel(o.ok ? "正确":"错误")
                         }
@@ -371,6 +362,12 @@ struct QuizOptionsView: View {
                 }
                 .accessibilityIdentifier("quiz-option-\(i)")
                 .disabled(feedback.picked != nil)
+            }
+        }
+        .sheet(isPresented: Binding(get: { reading != nil }, set: { if !$0 { reading = nil } })) {
+            if let i = reading, options.indices.contains(i) {
+                FullTextReader(text: options[i].text, title: "选项 " + String(UnicodeScalar(65+i)!),
+                               confirm: ("选择此项", { reading = nil; feedback.choose(i, correct: options[i].ok, commit: onPick) }))
             }
         }
         .onChange(of: options) { _, _ in feedback.cancel() }

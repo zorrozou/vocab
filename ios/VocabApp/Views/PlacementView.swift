@@ -37,12 +37,11 @@ struct PlacementView: View {
                             .accessibilityIdentifier("placement-progress")
                             .font(.subheadline.weight(.semibold)).foregroundStyle(Theme.text)
                         Spacer()
-                        NavigationAction(title:"退出") { app.route = .home }
+                        NavigationAction(title: "退出") { app.route = .home }
                     }
                     .padding(.horizontal, 16).padding(.vertical, 10)
                     ProgressBar(value: min(1, Double(probeCount) / 30.0))
                         .padding(.horizontal, 16)
-                    Spacer()
                     VStack(spacing: 12) {
                         if loading {
                             ProgressView()
@@ -57,22 +56,13 @@ struct PlacementView: View {
                             Text("选出正确词义").font(.subheadline).foregroundStyle(Theme.muted)
                         }
                     }
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity)
-                .safeAreaInset(edge: .bottom) {
-                    VStack(spacing: 8) {
-                        if let quiz, !loading {
-                            QuizOptionsView(options: quiz.options) { ok in answer(quiz, ok: ok) }
-                            GhostButton(title: "不认识") { answer(quiz, ok: false, guessed: false) }
-                        }
-                        Text("不确定请点「不认识」，不要猜")
-                            .font(.caption).foregroundStyle(Theme.muted)
+                    if let quiz, !loading {
+                        QuizOptionsView(options: quiz.options) { ok in answer(quiz, ok: ok) }
+                        GhostButton(title: "不认识") { answer(quiz, ok: false, guessed: false) }
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(.regularMaterial)
-                }
+                    Text("不确定请点「不认识」，不要猜")
+                        .font(.caption).foregroundStyle(Theme.muted)
+                }.padding(.horizontal, 14)
             }
         }
         .task { await loadNext() }
@@ -159,36 +149,36 @@ struct PlacementView: View {
     }
 
     private func doneView(boundary: Int) -> some View {
-        VStack {
-            Spacer()
-            Card {
-                Text("定级完成").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
-                Text("预计认识 \(StudyEngine.expectedKnown(app.S)) 词")
-                    .font(.largeTitle.weight(.bold)).foregroundStyle(Theme.accentLight)
-                Text("当前级别：\(levelDisplayName(levelForPos(boundary))) · 发词位置 \(boundary)\n\(scoreText)\n新词将从这个位置开始，\(app.S.pendingNew.count) 个答错词会优先补学")
-                    .font(.subheadline).foregroundStyle(Theme.muted)
-                    .multilineTextAlignment(.center)
-                Text("这是近似估计，可随学习逐步调整。")
-                    .font(.footnote).foregroundStyle(Theme.muted)
-                PrimaryButton(title: startingStudy ? "正在准备…" : "开始学习") {
-                    guard !startingStudy else { return }
-                    startingStudy = true
-                    startError = ""
-                    let generation = app.routeGeneration, owner = app.auth
-                    Task {
-                        let ready = await app.buildQueue()
-                        guard app.routeGeneration == generation, app.auth == owner else { return }
-                        startingStudy = false
-                        if ready {
-                            if app.session.queue.isEmpty { app.markDayDone() }
-                            app.route = .session
-                        } else { startError = "任务加载失败，请检查网络后重试。" }
+        ScreenPages {
+            Text("定级完成").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
+            Text("预计认识 \(StudyEngine.expectedKnown(app.S)) 词")
+                .font(.largeTitle.weight(.bold)).foregroundStyle(Theme.accentLight)
+            Text(
+                "当前级别：\(levelDisplayName(levelForPos(boundary))) · 发词位置 \(boundary)\n\(scoreText)\n新词将从这个位置开始，\(app.S.pendingNew.count) 个答错词会优先补学"
+            )
+            .font(.subheadline).foregroundStyle(Theme.muted)
+            .multilineTextAlignment(.center)
+            Text("这是近似估计，可随学习逐步调整。")
+                .font(.footnote).foregroundStyle(Theme.muted)
+            PrimaryButton(title: startingStudy ? "正在准备…" : "开始学习") {
+                guard !startingStudy else { return }
+                startingStudy = true
+                startError = ""
+                let generation = app.routeGeneration, owner = app.auth
+                Task {
+                    let ready = await app.buildQueue()
+                    guard app.routeGeneration == generation, app.auth == owner else { return }
+                    startingStudy = false
+                    if ready {
+                        if app.session.queue.isEmpty { app.markDayDone() }
+                        app.route = .session
+                    } else {
+                        startError = "任务加载失败，请检查网络后重试。"
                     }
-                }.disabled(startingStudy)
-                if !startError.isEmpty { Text(startError).foregroundStyle(Theme.warn) }
-                GhostButton(title: "返回首页") { app.route = .home }
-            }
-            Spacer()
-        }
+                }
+            }.disabled(startingStudy)
+            if !startError.isEmpty { Text(startError).foregroundStyle(Theme.warn) }
+            GhostButton(title: "返回首页") { app.route = .home }
+        }.padding(16)
     }
 }

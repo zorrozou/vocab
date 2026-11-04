@@ -22,6 +22,150 @@ final class VocabUITests: XCTestCase {
         XCTAssertEqual(XCTWaiter.wait(for:[ready],timeout:timeout),.completed)
     }
 
+    private func vocabularyApp() -> XCUIApplication {
+        let app = XCUIApplication()
+        app.launchArguments += ["-coach.classic.interface.v1", "YES"]
+        return app
+    }
+
+    private func onScreen(_ element: XCUIElement, app: XCUIApplication) -> Bool {
+        guard element.exists, element.isHittable else { return false }
+        let frame = element.frame
+        return !frame.isEmpty && app.frame.insetBy(dx: -1, dy: -1).contains(frame)
+    }
+
+    private func reveal(_ element: XCUIElement, in app: XCUIApplication,
+                        file: StaticString = #filePath, line: UInt = #line) {
+        for _ in 0..<32 {
+            if onScreen(element, app: app) { return }
+            let next = app.buttons["page-next"]
+            guard next.exists && next.isEnabled && next.isHittable else { break }
+            next.tap()
+        }
+        if !onScreen(element, app: app) {
+            capture("unreachable-control", app: app)
+            XCTFail("Control unavailable without scrolling: \(element.identifier) at \(element.frame), viewport \(app.frame)", file: file, line: line)
+        }
+    }
+
+    private func selectSection(_ name: String, in app: XCUIApplication) {
+        if app.buttons["section-menu"].waitForExistence(timeout: 0.5) {
+            app.buttons["section-menu"].tap()
+            let target = app.buttons[name].firstMatch
+            reveal(target, in: app)
+            target.tap()
+        } else {
+            let target = app.segmentedControls.buttons[name].firstMatch
+            XCTAssertTrue(target.waitForExistence(timeout: 5))
+            target.tap()
+        }
+    }
+
+    @MainActor func testSingleScreenNavigation() async throws {
+        continueAfterFailure = false
+        let app = XCUIApplication()
+        app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
+        app.launchArguments += ["-vocab_guest", "NO"]
+        app.launch()
+        let guest = app.buttons["先逛逛（游客模式）"]
+        XCTAssertTrue(guest.waitForExistence(timeout: 15)); reveal(guest, in: app); guest.tap()
+        let classroom = app.buttons["home-section-0"]
+        XCTAssertTrue(classroom.waitForExistence(timeout: 15))
+        for i in [2,3,1,0] { let choice=app.buttons["home-section-\(i)"]; reveal(choice, in: app); choice.tap() }
+        let bank = app.buttons["coach-bank"]
+        XCTAssertTrue(bank.waitForExistence(timeout: 20)); reveal(bank, in: app); capture("compact-classroom",app:app); bank.tap()
+        let transcript = app.buttons["coach-transcript"]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 20));reveal(transcript,in:app);transcript.tap()
+        let answer = app.buttons.matching(NSPredicate(format:"label CONTAINS %@", "去答题")).firstMatch
+        reveal(answer,in:app); answer.tap()
+        let choice = app.buttons["coach-option-0"]
+        reveal(choice,in:app);choice.tap()
+        let next = app.buttons["coach-next"];XCTAssertTrue(next.waitForExistence(timeout:15))
+        selectSection("例解",in:app)
+        let clue=app.buttons.matching(NSPredicate(format:"label CONTAINS %@", "请 AI 再讲一句")).firstMatch
+        reveal(clue,in:app);selectSection("反馈",in:app);reveal(next,in:app)
+        app.buttons["coach-pause"].tap()
+        app.buttons["settings-menu"].tap()
+        for name in ["外观与声音","复习提醒","定级与校验","离线与数据维护","导出与恢复","每日计划"] {
+            selectSection(name,in:app)
+            if name=="离线与数据维护" {reveal(app.buttons["下载／更新整库离线包"],in:app)}
+        }
+        reveal(app.buttons["setting-cap-100"],in:app);app.buttons["返回"].tap()
+        app.buttons["stats-menu"].tap();selectSection("复习预测",in:app);selectSection("保持率",in:app)
+        reveal(app.buttons["返回"],in:app);app.buttons["返回"].tap()
+        app.buttons["home-section-1"].tap();let start=app.buttons["开始定级"];reveal(start,in:app);start.tap()
+        let first=app.buttons["quiz-option-0"];XCTAssertTrue(first.waitForExistence(timeout:30))
+        reveal(first,in:app);reveal(app.buttons["quiz-option-3"],in:app);capture("compact-placement",app:app)
+        app.buttons["不认识"].tap();XCTAssertTrue(app.staticTexts["placement-progress"].label.contains("2/30"))
+    }
+
+    @MainActor func testSingleScreenKeyboardAndLargeText() async throws {
+        continueAfterFailure = false
+        let app=XCUIApplication()
+        app.launchArguments=["-UIPreferredContentSizeCategoryName","UICTContentSizeCategoryAccessibilityL"]
+        app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765"
+        app.launchArguments += ["-vocab_guest", "NO"]
+        app.launch()
+        let register=app.buttons["注册新账号"];reveal(register,in:app);register.tap()
+        let name=app.textFields["auth-username"]; reveal(name,in:app);name.tap();name.typeText("screen_")
+        let pass=app.secureTextFields["auth-password"];reveal(pass,in:app);pass.tap();pass.typeText("test_password_123")
+        let submit=app.buttons["注册并登录"];reveal(submit,in:app)
+        if app.keyboards.firstMatch.exists {XCTAssertLessThanOrEqual(submit.frame.maxY,app.keyboards.firstMatch.frame.minY+1)}
+        capture("compact-keyboard",app:app)
+        let back=app.buttons["返回"];reveal(back,in:app);back.tap()
+        let guest=app.buttons["先逛逛（游客模式）"];reveal(guest,in:app);guest.tap()
+        app.buttons["settings-menu"].tap();selectSection("离线与数据维护",in:app)
+        let health=app.buttons["实际学习效果与存档健康"]; reveal(health,in:app);health.tap()
+        reveal(app.buttons["关闭"],in:app);app.buttons["关闭"].tap()
+    }
+
+    @MainActor func testSingleScreenLongExample() async throws {
+        continueAfterFailure = false
+        let seed = try await fixtureRequest("/api/v1/__ui_fixture/personal-case", method: "POST")
+        let token = try XCTUnwrap(seed["token"] as? String)
+        let sentence = (1...25).map { "Line \($0). We can share an apple and read the next part together." }.joined(separator: "\n")
+        let response = try await fixtureRequest("/api/v1/me/state", token: token)
+        var state = try XCTUnwrap(response["state"] as? [String: Any])
+        state["personalized"] = ["apple": ["text": sentence, "zh": "长例句验收"]]
+        _ = try await fixtureRequest("/api/v1/me/state", method: "PUT", token: token, body: state)
+        let app = vocabularyApp()
+        app.launchArguments += ["-vocab_guest","NO"]
+        app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
+        app.launch()
+        app.buttons["登录"].tap()
+        let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
+        user.tap(); user.typeText(try XCTUnwrap(seed["username"] as? String))
+        pass.tap(); pass.typeText(try XCTUnwrap(seed["password"] as? String)); app.buttons["登录"].tap()
+        let start = app.buttons["start-today"]; XCTAssertTrue(start.waitForExistence(timeout: 20)); start.tap()
+        let choice = app.buttons["quiz-option-0"]; XCTAssertTrue(choice.waitForExistence(timeout: 20)); choice.tap()
+        let remember = app.buttons["记得"]; XCTAssertTrue(remember.waitForExistence(timeout: 20))
+        selectSection("例句", in: app)
+        let read = app.buttons["完整例句"].firstMatch; reveal(read, in: app); read.tap()
+        let text = app.textViews["reader-page"]
+        XCTAssertTrue(text.waitForExistence(timeout: 10))
+        let next = app.buttons["reader-next"]
+        XCTAssertTrue(next.isEnabled)
+        var recovered = ""
+        for _ in 0..<50 {
+            recovered += try XCTUnwrap(text.value as? String)
+            if !next.isEnabled { break }
+            reveal(next, in: app); next.tap()
+        }
+        XCTAssertEqual(recovered, sentence)
+        capture("compact-reader-last-page",app:app)
+        app.buttons["关闭"].tap()
+        selectSection("跟读", in: app); selectSection("答案", in: app)
+        reveal(remember,in:app); remember.tap()
+        let home = app.buttons["返回主页"]
+        XCTAssertTrue(home.waitForExistence(timeout:20)); home.tap()
+        app.buttons["account-menu"].tap()
+        reveal(app.buttons["立即同步"], in: app)
+        selectSection("云端备份", in: app); reveal(app.buttons["查看服务器恢复前备份"], in: app)
+        selectSection("登录管理", in: app)
+        let logout = app.buttons["退出登录"]; reveal(logout, in: app); logout.tap()
+        XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 20))
+    }
+
     func testListeningCoachAndClassicSwitch() throws {
         continueAfterFailure = false
         let app=XCUIApplication()
@@ -34,7 +178,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(bank.waitForExistence(timeout:15));capture("studio-home",app:app);bank.tap()
         XCTAssertTrue(app.staticTexts["You want to pick up the raincoat tomorrow. What should you do?"].waitForExistence(timeout:20))
         let transcript=app.buttons["coach-transcript"]
-        XCTAssertTrue(transcript.waitForExistence(timeout:18));XCTAssertGreaterThanOrEqual(transcript.frame.height,44);capture("studio-listen",app:app);transcript.tap()
+        XCTAssertTrue(transcript.waitForExistence(timeout:18));XCTAssertGreaterThanOrEqual(transcript.frame.height,44);capture("studio-listen",app:app);transcript.tap(); selectSection("作答", in:app)
         if ProcessInfo.processInfo.environment["VOCAB_VERIFY_OS_APPEARANCE"]=="1" {
             let question=app.staticTexts["You want to pick up the raincoat tomorrow. What should you do?"]
             for mode in ["dark","light"] {
@@ -49,20 +193,24 @@ final class VocabUITests: XCTestCase {
         let wrong=app.buttons.matching(NSPredicate(format:"label CONTAINS %@", "今天必须取走")).firstMatch
         XCTAssertTrue(wrong.waitForExistence(timeout:5));wrong.tap()
         XCTAssertTrue(app.staticTexts["一起看这条线索"].waitForExistence(timeout:10));capture("studio-feedback",app:app)
+        selectSection("例解",in:app)
         app.buttons.matching(NSPredicate(format:"label CONTAINS %@", "请 AI 再讲一句")).firstMatch.tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label BEGINSWITH %@", "课程题解 ·")).firstMatch.waitForExistence(timeout:12))
+        selectSection("反馈",in:app)
         app.buttons["coach-next"].tap()
+        selectSection("作答",in:app)
         XCTAssertTrue(app.staticTexts["今天是唯一可取的日子吗？"].waitForExistence(timeout:8))
         app.buttons["coach-pause"].tap()
-        app.buttons["切回经典界面"].tap()
+        app.buttons["home-section-3"].tap(); app.buttons["切回经典界面"].tap()
         XCTAssertTrue(app.buttons["coach-enable"].waitForExistence(timeout:5));app.buttons["coach-enable"].tap()
-        app.buttons["coach-start"].tap()
+        app.buttons["coach-start"].tap(); selectSection("作答",in:app)
         XCTAssertTrue(app.staticTexts["今天是唯一可取的日子吗？"].waitForExistence(timeout:15))
         app.buttons["coach-option-0"].tap()
         XCTAssertTrue(app.buttons["coach-next"].waitForExistence(timeout:10));app.buttons["coach-next"].tap()
+        selectSection("作答", in: app)
         app.buttons["coach-option-0"].tap()
         XCTAssertTrue(app.buttons["coach-next"].waitForExistence(timeout:10));app.buttons["coach-next"].tap()
-        XCTAssertTrue(transcript.waitForExistence(timeout:8));transcript.tap()
+        XCTAssertTrue(transcript.waitForExistence(timeout:8));transcript.tap(); selectSection("作答",in:app)
         app.buttons["coach-option-0"].tap()
         XCTAssertTrue(app.buttons["coach-next"].waitForExistence(timeout:10));app.buttons["coach-next"].tap()
         XCTAssertTrue(app.staticTexts["今日教练课完成"].waitForExistence(timeout:8))
@@ -78,7 +226,7 @@ final class VocabUITests: XCTestCase {
         func settings() {
             let button=app.buttons["settings-menu"]
             XCTAssertTrue(button.waitForExistence(timeout:10))
-            button.tap()
+            button.tap(); selectSection("外观与声音", in: app)
         }
         settings()
         let picker=app.segmentedControls["appearance-picker"]
@@ -125,6 +273,7 @@ final class VocabUITests: XCTestCase {
             }.resume()
             wait(for:[ready],timeout:8)
         }
+        if app.buttons["home-section-3"].exists { app.buttons["home-section-3"].tap() }
         if app.buttons["切回经典界面"].exists {app.buttons["切回经典界面"].tap()}
         let start=app.buttons["开始定级"]
         XCTAssertTrue(start.waitForExistence(timeout:8))
@@ -145,7 +294,7 @@ final class VocabUITests: XCTestCase {
 
     func testGuestPlacementAndFirstStudy() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         let guest = app.buttons["先逛逛（游客模式）"]
@@ -193,7 +342,7 @@ final class VocabUITests: XCTestCase {
 
     func testAccountRegistrationAndLogin() throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         let username = "ui_" + UUID().uuidString.replacingOccurrences(of: "-", with: "").prefix(10).lowercased()
@@ -211,6 +360,7 @@ final class VocabUITests: XCTestCase {
         let sync = app.buttons["立即同步"]
         XCTAssertTrue(sync.waitForExistence(timeout: 20)); sync.tap()
         XCTAssertTrue(app.staticTexts["✓ 已同步"].waitForExistence(timeout: 30), "initial sync failed")
+        selectSection("登录管理", in: app)
         app.buttons["退出登录"].tap()
         let welcome = app.buttons["登录"]
         XCTAssertTrue(welcome.waitForExistence(timeout: 30), "logout did not return to welcome")
@@ -254,7 +404,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -325,7 +475,7 @@ final class VocabUITests: XCTestCase {
         let control="/api/v1/__ui_fixture/auto-sync"
         let seed=try await fixtureRequest("/api/v1/__ui_fixture/recovery-case",method:"POST")
         let token=try XCTUnwrap(seed["token"] as? String)
-        let app=XCUIApplication()
+        let app=vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765"
         let username=try XCTUnwrap(seed["username"] as? String),password=try XCTUnwrap(seed["password"] as? String)
         _ = try await fixtureRequest(control,method:"POST",body:[:])
@@ -387,7 +537,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         func logIn() {
             XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -423,7 +573,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         func logIn() {
             XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -452,7 +602,7 @@ final class VocabUITests: XCTestCase {
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/recovery-case", method: "POST")
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -471,6 +621,7 @@ final class VocabUITests: XCTestCase {
         app.buttons["account-menu"].tap()
         app.buttons["立即同步"].tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "增量同步记录缺失")).firstMatch.waitForExistence(timeout: 20))
+        selectSection("云端备份", in: app)
         app.buttons["重新加载服务器进度"].tap()
         let alert = app.alerts["重新加载服务器进度？"]
         XCTAssertTrue(alert.waitForExistence(timeout: 20))
@@ -485,7 +636,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -525,7 +676,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -537,8 +688,9 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(learned.waitForExistence(timeout: 30)); XCTAssertTrue(learned.label.contains("1"))
         let settings = app.buttons["settings-menu"]
         XCTAssertTrue(settings.waitForExistence(timeout: 30)); settings.tap()
+        selectSection("导出与恢复", in: app)
         let export = app.buttons["导出本机学习进度"]
-        for _ in 0..<5 where !export.isHittable { app.swipeUp() }
+        reveal(export, in: app)
         XCTAssertTrue(export.waitForExistence(timeout: 10)); export.tap()
         let save = app.buttons["DOCPicker.actionButton"]
         XCTAssertTrue(save.waitForExistence(timeout: 45), "Export picker did not appear: \(app.debugDescription)")
@@ -563,14 +715,16 @@ final class VocabUITests: XCTestCase {
         app.buttons["返回"].tap()
         try await addRemoteCard("banana", token: token)
         app.buttons["account-menu"].tap()
+        selectSection("云端备份", in: app)
         app.buttons["重新加载服务器进度"].tap()
         let dialog = app.alerts["重新加载服务器进度？"]
         XCTAssertTrue(dialog.waitForExistence(timeout: 20)); dialog.buttons["重新加载"].tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "服务器进度已加载")).firstMatch.waitForExistence(timeout: 20))
         app.buttons["返回学习"].tap()
         settings.tap()
+        selectSection("导出与恢复", in: app)
         let open = app.buttons["选择备份文件恢复"]
-        for _ in 0..<5 where !open.isHittable { app.swipeUp() }
+        reveal(open, in: app)
         XCTAssertTrue(open.waitForExistence(timeout: 10)); open.tap()
         let file = app.cells.matching(NSPredicate(format: "identifier BEGINSWITH %@", filename)).firstMatch
         if !file.waitForExistence(timeout: 5) {
@@ -604,7 +758,7 @@ final class VocabUITests: XCTestCase {
 
     @MainActor func testReviewUndoAndExitDuringRequest() async throws {
         continueAfterFailure = false
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
         func login(_ seed: [String: Any]) throws {
@@ -646,6 +800,7 @@ final class VocabUITests: XCTestCase {
         let firstState = try XCTUnwrap(firstResponse["state"] as? [String: Any])
         let firstLog = try XCTUnwrap(firstState["log"] as? [[String: Any]])
         XCTAssertEqual(firstLog.filter { $0["kind"] as? String == "review" && $0["word"] as? String == "apple" }.compactMap { $0["rating"] as? Int }, [3])
+        selectSection("登录管理", in: app)
         app.buttons["退出登录"].tap()
         let second = try await fixtureRequest("/api/v1/__ui_fixture/undo-case", method: "POST")
         let secondToken = try XCTUnwrap(second["token"] as? String)
@@ -668,7 +823,7 @@ final class VocabUITests: XCTestCase {
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/queue-case", method: "POST")
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -687,6 +842,7 @@ final class VocabUITests: XCTestCase {
         }
         XCTAssertGreaterThan(attempts, 0, "queue request did not start")
         app.buttons["settings-menu"].tap()
+        selectSection("定级与校验", in: app)
         let reset = app.buttons["重新定级（30 题重测词汇边界）"]
         XCTAssertTrue(reset.waitForExistence(timeout: 20))
         try await Task.sleep(for: .seconds(7))
@@ -700,7 +856,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         let login = app.buttons["登录"]
@@ -728,6 +884,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertGreaterThan(attempts, 0, "old session rating did not start")
         app.buttons["退出"].tap(); XCTAssertTrue(start.waitForExistence(timeout: 20))
         app.buttons["account-menu"].tap()
+        selectSection("登录管理", in: app)
         let switchAccount = app.buttons["切换账号 / 游客模式"]
         XCTAssertTrue(switchAccount.waitForExistence(timeout: 20)); switchAccount.tap()
         loginAccount()
@@ -766,7 +923,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         let login = app.buttons["登录"]
@@ -818,6 +975,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(app.buttons["同步未完成，请查看详情"].waitForExistence(timeout: 20), "held 401 was not handled")
         XCTAssertTrue(learned.exists, "expired response lost the active account")
         app.buttons["account-menu"].tap()
+        selectSection("登录管理", in: app)
         let switchAccount = app.buttons["切换账号 / 游客模式"]
         XCTAssertTrue(switchAccount.waitForExistence(timeout: 20)); switchAccount.tap()
         XCTAssertTrue(app.staticTexts["本机保存失败，请先导出进度并释放空间"].waitForExistence(timeout: 20))
@@ -842,7 +1000,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -874,6 +1032,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(warning.waitForExistence(timeout: 30), "413 did not explain how to preserve progress")
         let beforeLogoutStatus = try await fixtureRequest("/api/v1/__ui_fixture/state-upload-status")
         let previousAttempts = try XCTUnwrap(beforeLogoutStatus["attempts"] as? Int)
+        selectSection("登录管理", in: app)
         app.buttons["退出登录"].tap()
         var attemptsAfterLogout = previousAttempts
         for _ in 0..<50 {
@@ -949,7 +1108,7 @@ final class VocabUITests: XCTestCase {
         continueAfterFailure = false
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/backup-missing-scheduler", method: "POST")
         let username = try XCTUnwrap(seed["username"] as? String), password = try XCTUnwrap(seed["password"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -959,8 +1118,9 @@ final class VocabUITests: XCTestCase {
         app.buttons["登录"].tap()
         let settings = app.buttons["settings-menu"]
         XCTAssertTrue(settings.waitForExistence(timeout: 30)); settings.tap()
+        selectSection("导出与恢复", in: app)
         let export = app.buttons["导出本机学习进度"]
-        for _ in 0..<5 where !export.isHittable { app.swipeUp() }
+        reveal(export, in: app)
         XCTAssertTrue(export.waitForExistence(timeout: 20)); export.tap()
         // On recent simulator runtimes the cancel control is exposed as an
         // accessibility Other rather than a Button.
@@ -972,7 +1132,7 @@ final class VocabUITests: XCTestCase {
         }
         cancel.tap()
         let warning = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "备份缺少部分评分所用的参数版本")).firstMatch
-        for _ in 0..<5 where !warning.isHittable { app.swipeUp() }
+        reveal(warning, in: app)
         XCTAssertTrue(warning.waitForExistence(timeout: 20), "successful server response hid the missing scheduler warning")
         let resolution = try await fixtureRequest("/api/v1/__ui_fixture/scheduler-resolve-status")
         XCTAssertGreaterThan(resolution["attempts"] as? Int ?? 0, 0, "oversized scheduler history did not use per-version resolution")
@@ -984,7 +1144,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         let login = app.buttons["登录"], user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
         func logIn() {
@@ -1028,7 +1188,7 @@ final class VocabUITests: XCTestCase {
         let username=try XCTUnwrap(seed["username"] as? String),password=try XCTUnwrap(seed["password"] as? String),token=try XCTUnwrap(seed["token"] as? String)
         let before=try await fixtureRequest("/api/v1/me/state/snapshots?representation=stored",method:"POST",token:token,body:[:])
         XCTAssertGreaterThan(before["byte_length"] as? Int ?? 0,8*1024*1024)
-        let app=XCUIApplication();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
+        let app=vocabularyApp();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
         let login=app.buttons["登录"],user=app.textFields["auth-username"],pass=app.secureTextFields["auth-password"]
         XCTAssertTrue(login.waitForExistence(timeout:30));login.tap()
         XCTAssertTrue(user.waitForExistence(timeout:20));user.tap();user.typeText(username)
@@ -1041,13 +1201,15 @@ final class VocabUITests: XCTestCase {
         XCTAssertEqual(after["state_revision"] as? String,before["state_revision"] as? String)
         XCTAssertEqual(after["sha256"] as? String,before["sha256"] as? String)
         app.buttons["返回学习"].tap(); app.buttons["settings-menu"].tap()
+        selectSection("同步维护", in: app)
         let recoveryExport=app.buttons["导出大状态恢复记录"]
-        for _ in 0..<6 where !recoveryExport.isHittable { app.swipeUp() }
+        reveal(recoveryExport, in: app)
         XCTAssertTrue(recoveryExport.waitForExistence(timeout:20)); recoveryExport.tap()
         let message=app.staticTexts["large-restore-export-message"]
         XCTAssertTrue(message.waitForExistence(timeout:20)); XCTAssertEqual(message.label,"当前没有可导出的大状态恢复记录。")
+        selectSection("同步维护", in: app)
         let resume=app.buttons["继续未完成的恢复或整理"]
-        for _ in 0..<3 where !resume.isHittable { app.swipeDown() }
+        reveal(resume, in: app)
         XCTAssertTrue(resume.waitForExistence(timeout:20));resume.tap()
         let noPending=app.staticTexts["large-restore-export-message"]
         let noPendingPredicate=NSPredicate(format:"label CONTAINS %@", "当前没有未完成的大状态恢复")
@@ -1068,14 +1230,15 @@ final class VocabUITests: XCTestCase {
         let seed=try await fixtureRequest("/api/v1/__ui_fixture/staged-ui-case")
         let username=try XCTUnwrap(seed["username"] as? String),password=try XCTUnwrap(seed["password"] as? String)
         let token=try XCTUnwrap(seed["token"] as? String)
-        let app=XCUIApplication();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
+        let app=vocabularyApp();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
         let settings=app.buttons["settings-menu"],user=app.textFields["auth-username"],pass=app.secureTextFields["auth-password"]
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30));app.buttons["登录"].tap()
         XCTAssertTrue(user.waitForExistence(timeout:20));user.tap();user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout:20));pass.tap();pass.typeText(password);app.buttons["登录"].tap()
         XCTAssertTrue(settings.waitForExistence(timeout:90));settings.tap()
+        selectSection("同步维护", in: app)
         let checkpoint=app.buttons["整理已同步的历史"]
-        for _ in 0..<7 where !checkpoint.isHittable { app.swipeUp() }
+        reveal(checkpoint, in: app)
         XCTAssertTrue(checkpoint.waitForExistence(timeout:30));checkpoint.tap()
         let confirm=app.alerts["整理已同步的历史？"]
         XCTAssertTrue(confirm.waitForExistence(timeout:30))
@@ -1096,8 +1259,9 @@ final class VocabUITests: XCTestCase {
             XCTAssertTrue(pass.waitForExistence(timeout:20));pass.tap();pass.typeText(password);app.buttons["登录"].tap()
         }
         XCTAssertTrue(settings.waitForExistence(timeout:90));settings.tap()
+        selectSection("同步维护", in: app)
         let resume=app.buttons["继续未完成的恢复或整理"]
-        for _ in 0..<7 where !resume.isHittable { app.swipeUp() }
+        reveal(resume, in: app)
         XCTAssertTrue(resume.waitForExistence(timeout:20));resume.tap()
         let message=app.staticTexts["large-restore-export-message"]
         await fulfillment(of:[XCTNSPredicateExpectation(predicate:NSPredicate(format:"label CONTAINS %@", "恢复完成"),object:message)],timeout:180)
@@ -1109,14 +1273,15 @@ final class VocabUITests: XCTestCase {
         let seed=try await fixtureRequest("/api/v1/__ui_fixture/staged-ui-case")
         let username=try XCTUnwrap(seed["username"] as? String),password=try XCTUnwrap(seed["password"] as? String)
         let token=try XCTUnwrap(seed["token"] as? String)
-        let app=XCUIApplication();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
+        let app=vocabularyApp();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
         let settings=app.buttons["settings-menu"],user=app.textFields["auth-username"],pass=app.secureTextFields["auth-password"]
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30));app.buttons["登录"].tap()
         XCTAssertTrue(user.waitForExistence(timeout:20));user.tap();user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout:20));pass.tap();pass.typeText(password);app.buttons["登录"].tap()
         XCTAssertTrue(settings.waitForExistence(timeout:90));settings.tap()
+        selectSection("同步维护", in: app)
         let checkpoint=app.buttons["整理已同步的历史"]
-        for _ in 0..<7 where !checkpoint.isHittable { app.swipeUp() }
+        reveal(checkpoint, in: app)
         XCTAssertTrue(checkpoint.waitForExistence(timeout:30));checkpoint.tap()
         let confirm=app.alerts["整理已同步的历史？"];XCTAssertTrue(confirm.waitForExistence(timeout:30))
         _ = try await fixtureRequest("/api/v1/__ui_fixture/checkpoint-write-failure",method:"POST",body:["enabled":true])
@@ -1125,8 +1290,9 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(failed.waitForExistence(timeout:120),"checkpoint failure was not visible")
         _ = try await fixtureRequest("/api/v1/__ui_fixture/checkpoint-write-failure",method:"POST",body:["enabled":false])
         _ = try await fixtureRequest("/api/v1/__ui_fixture/delta-hold-response",method:"POST")
+        selectSection("同步维护", in: app)
         let cancel=app.buttons["取消未提交的历史整理"]
-        for _ in 0..<7 where !cancel.isHittable { app.swipeUp() }
+        reveal(cancel, in: app)
         XCTAssertTrue(cancel.waitForExistence(timeout:20));cancel.tap()
         let cancelAlert=app.alerts["取消未提交的历史整理？"];XCTAssertTrue(cancelAlert.waitForExistence(timeout:20));cancelAlert.buttons["确认取消"].tap()
         var committed=false
@@ -1144,7 +1310,7 @@ final class VocabUITests: XCTestCase {
             XCTAssertTrue(pass.waitForExistence(timeout:20));pass.tap();pass.typeText(password);app.buttons["登录"].tap()
         }
         XCTAssertTrue(settings.waitForExistence(timeout:90));settings.tap()
-        for _ in 0..<7 where !cancel.isHittable { app.swipeUp() }
+        reveal(cancel, in: app)
         XCTAssertTrue(cancel.waitForExistence(timeout:20));cancel.tap()
         XCTAssertTrue(cancelAlert.waitForExistence(timeout:20));cancelAlert.buttons["确认取消"].tap()
         let message=app.staticTexts["large-restore-export-message"]
@@ -1160,14 +1326,15 @@ final class VocabUITests: XCTestCase {
         let seed=try await fixtureRequest("/api/v1/__ui_fixture/staged-ui-case")
         let username=try XCTUnwrap(seed["username"] as? String),password=try XCTUnwrap(seed["password"] as? String)
         let token=try XCTUnwrap(seed["token"] as? String)
-        let app=XCUIApplication();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
+        let app=vocabularyApp();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30));app.buttons["登录"].tap()
         let user=app.textFields["auth-username"],pass=app.secureTextFields["auth-password"]
         XCTAssertTrue(user.waitForExistence(timeout:20));user.tap();user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout:20));pass.tap();pass.typeText(password);app.buttons["登录"].tap()
         let settings=app.buttons["settings-menu"];XCTAssertTrue(settings.waitForExistence(timeout:90));settings.tap()
+        selectSection("导出与恢复", in: app)
         let export=app.buttons["导出本机学习进度"]
-        for _ in 0..<6 where !export.isHittable { app.swipeUp() }
+        reveal(export, in: app)
         XCTAssertTrue(export.waitForExistence(timeout:20));export.tap()
         let save=app.buttons["DOCPicker.actionButton"];XCTAssertTrue(save.waitForExistence(timeout:60))
         var filename="vocab-large-\(UUID().uuidString)"
@@ -1181,16 +1348,18 @@ final class VocabUITests: XCTestCase {
         if nameField.waitForExistence(timeout:15) { nameField.tap();nameField.typeText(String(repeating:XCUIKeyboardKey.delete.rawValue,count:80)+filename) }
         else { filename="vocab-progress-" }
         save.tap()
+        selectSection("每日计划", in: app)
         let fifteen=app.buttons["setting-new-15"],twenty=app.buttons["setting-new-20"]
-        for _ in 0..<7 where !fifteen.isHittable { app.swipeDown() }
+        reveal(fifteen, in: app)
         XCTAssertTrue(fifteen.waitForExistence(timeout:20));XCTAssertTrue(twenty.exists)
         if fifteen.value as? String == "已选择" { twenty.tap() } else { fifteen.tap() }
         app.buttons["返回"].tap();app.buttons["account-menu"].tap()
         let sync=app.buttons["立即同步"];XCTAssertTrue(sync.waitForExistence(timeout:20));sync.tap()
         XCTAssertTrue(app.staticTexts["✓ 已同步"].waitForExistence(timeout:120))
         app.buttons["返回学习"].tap();settings.tap()
+        selectSection("导出与恢复", in: app)
         let open=app.buttons["选择备份文件恢复"]
-        for _ in 0..<7 where !open.isHittable { app.swipeUp() }
+        reveal(open, in: app)
         XCTAssertTrue(open.waitForExistence(timeout:20));open.tap()
         let file=app.cells.matching(NSPredicate(format:"identifier BEGINSWITH %@",filename)).firstMatch
         if !file.waitForExistence(timeout:5) {
@@ -1211,8 +1380,9 @@ final class VocabUITests: XCTestCase {
             XCTAssertTrue(failed.waitForExistence(timeout:180),"restore failure was not visible")
             _ = try await fixtureRequest("/api/v1/__ui_fixture/large-restore-write-failure",method:"POST",body:["enabled":false])
             _ = try await fixtureRequest("/api/v1/__ui_fixture/delta-hold-response",method:"POST")
+            selectSection("同步维护", in: app)
             let cancelButton=app.buttons["取消未提交的备份恢复"]
-            for _ in 0..<7 where !cancelButton.isHittable { app.swipeUp() }
+            reveal(cancelButton, in: app)
             XCTAssertTrue(cancelButton.waitForExistence(timeout:20));cancelButton.tap()
             let alert=app.alerts["取消未提交的备份恢复？"];XCTAssertTrue(alert.waitForExistence(timeout:20));alert.buttons["确认取消"].tap()
             var confirmed=false
@@ -1230,7 +1400,7 @@ final class VocabUITests: XCTestCase {
                 XCTAssertTrue(pass.waitForExistence(timeout:20));pass.tap();pass.typeText(password);app.buttons["登录"].tap()
             }
             XCTAssertTrue(settings.waitForExistence(timeout:90));settings.tap()
-            for _ in 0..<7 where !cancelButton.isHittable { app.swipeUp() }
+            reveal(cancelButton, in: app)
             XCTAssertTrue(cancelButton.waitForExistence(timeout:20));cancelButton.tap()
             XCTAssertTrue(alert.waitForExistence(timeout:20));alert.buttons["确认取消"].tap()
             let message=app.staticTexts["large-restore-export-message"]
@@ -1258,8 +1428,9 @@ final class VocabUITests: XCTestCase {
                 XCTAssertTrue(pass.waitForExistence(timeout:20));pass.tap();pass.typeText(password);app.buttons["登录"].tap()
             }
             XCTAssertTrue(settings.waitForExistence(timeout:90));settings.tap()
+            selectSection("同步维护", in: app)
             let resume=app.buttons["继续未完成的恢复或整理"]
-            for _ in 0..<7 where !resume.isHittable { app.swipeUp() }
+            reveal(resume, in: app)
             XCTAssertTrue(resume.waitForExistence(timeout:20));resume.tap()
             let message=app.staticTexts["large-restore-export-message"]
             let completed=NSPredicate(format:"label CONTAINS %@", "恢复完成")
@@ -1275,15 +1446,16 @@ final class VocabUITests: XCTestCase {
         continueAfterFailure=false
         let seed=try await fixtureRequest("/api/v1/__ui_fixture/staged-ui-case")
         let username=try XCTUnwrap(seed["username"] as? String),password=try XCTUnwrap(seed["password"] as? String)
-        let app=XCUIApplication();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
+        let app=vocabularyApp();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30));app.buttons["登录"].tap()
         let user=app.textFields["auth-username"],pass=app.secureTextFields["auth-password"]
         XCTAssertTrue(user.waitForExistence(timeout:20));user.tap();user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout:20));pass.tap();pass.typeText(password);app.buttons["登录"].tap()
         let settings=app.buttons["settings-menu"]
         XCTAssertTrue(settings.waitForExistence(timeout:90));settings.tap()
+        selectSection("同步维护", in: app)
         let resume=app.buttons["继续未完成的恢复或整理"]
-        for _ in 0..<7 where !resume.isHittable { app.swipeUp() }
+        reveal(resume, in: app)
         XCTAssertTrue(resume.waitForExistence(timeout:20));resume.tap()
         let message=app.staticTexts["large-restore-export-message"]
         let completed=NSPredicate(format:"label CONTAINS %@", "恢复完成")
@@ -1294,17 +1466,19 @@ final class VocabUITests: XCTestCase {
         continueAfterFailure=false
         let seed=try await fixtureRequest("/api/v1/__ui_fixture/staged-ui-case")
         let username=try XCTUnwrap(seed["username"] as? String),password=try XCTUnwrap(seed["password"] as? String)
-        let app=XCUIApplication();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
+        let app=vocabularyApp();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30));app.buttons["登录"].tap()
         let user=app.textFields["auth-username"],pass=app.secureTextFields["auth-password"]
         XCTAssertTrue(user.waitForExistence(timeout:20));user.tap();user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout:20));pass.tap();pass.typeText(password);app.buttons["登录"].tap()
         let settings=app.buttons["settings-menu"];XCTAssertTrue(settings.waitForExistence(timeout:90));settings.tap()
+        selectSection("每日计划", in: app)
         let fifteen=app.buttons["setting-new-15"],twenty=app.buttons["setting-new-20"]
         XCTAssertTrue(fifteen.waitForExistence(timeout:20));XCTAssertTrue(twenty.exists)
         if fifteen.value as? String == "已选择" { twenty.tap() } else { fifteen.tap() }
+        selectSection("同步维护", in: app)
         let resume=app.buttons["继续未完成的恢复或整理"]
-        for _ in 0..<7 where !resume.isHittable { app.swipeUp() }
+        reveal(resume, in: app)
         XCTAssertTrue(resume.waitForExistence(timeout:20));resume.tap()
         let message=app.staticTexts["large-restore-export-message"]
         let blocked=NSPredicate(format:"label CONTAINS %@", "本机进度已变化")
@@ -1315,7 +1489,7 @@ final class VocabUITests: XCTestCase {
         continueAfterFailure = false
         let seed=try await fixtureRequest("/api/v1/__ui_fixture/staged-ui-case")
         let username=try XCTUnwrap(seed["username"] as? String), password=try XCTUnwrap(seed["password"] as? String), token=try XCTUnwrap(seed["token"] as? String)
-        let app=XCUIApplication();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765"
+        let app=vocabularyApp();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765"
         func logIn() {
             let login=app.buttons["登录"], user=app.textFields["auth-username"], pass=app.secureTextFields["auth-password"]
             XCTAssertTrue(login.waitForExistence(timeout:30));login.tap()
@@ -1350,7 +1524,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         let login = app.buttons["登录"], user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
         func logIn() {
@@ -1398,7 +1572,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -1455,7 +1629,7 @@ final class VocabUITests: XCTestCase {
         let newName = try XCTUnwrap(new["username"] as? String)
         let password = try XCTUnwrap(old["password"] as? String)
         let newToken = try XCTUnwrap(new["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         let login = app.buttons["登录"]
@@ -1481,6 +1655,7 @@ final class VocabUITests: XCTestCase {
         let back = app.buttons["返回主页"]
         XCTAssertTrue(back.waitForExistence(timeout: 20)); back.tap()
         XCTAssertTrue(app.buttons["account-menu"].waitForExistence(timeout: 20)); app.buttons["account-menu"].tap()
+        selectSection("登录管理", in: app)
         XCTAssertTrue(app.buttons["退出登录"].waitForExistence(timeout: 20)); app.buttons["退出登录"].tap()
         XCTAssertTrue(login.waitForExistence(timeout: 30)); loginAccount(newName)
         let learned = app.descendants(matching: .any)["learned-count"]
@@ -1517,7 +1692,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let expected = try XCTUnwrap(seed["expected"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -1538,7 +1713,7 @@ final class VocabUITests: XCTestCase {
         let password = try XCTUnwrap(seed["password"] as? String)
         let expected = try XCTUnwrap(seed["expected"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -1570,7 +1745,7 @@ final class VocabUITests: XCTestCase {
         let newName = try XCTUnwrap(new["username"] as? String)
         let password = try XCTUnwrap(old["password"] as? String)
         let newToken = try XCTUnwrap(new["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         let login = app.buttons["登录"]
@@ -1593,6 +1768,7 @@ final class VocabUITests: XCTestCase {
         }
         XCTAssertGreaterThan(attempts, 0, "old account request did not start")
         app.buttons["account-menu"].tap()
+        selectSection("登录管理", in: app)
         XCTAssertTrue(app.buttons["退出登录"].waitForExistence(timeout: 20)); app.buttons["退出登录"].tap()
         XCTAssertTrue(login.waitForExistence(timeout: 30)); loginAccount(newName)
         let learned = app.descendants(matching: .any)["learned-count"]
@@ -1625,7 +1801,7 @@ final class VocabUITests: XCTestCase {
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/queue-budget-case", method:"POST", body:["day":day])
         let username = try XCTUnwrap(seed["username"] as? String), password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
+        let app = vocabularyApp(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30)); app.buttons["登录"].tap()
         let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
         XCTAssertTrue(user.waitForExistence(timeout:20)); user.tap(); user.typeText(username)
@@ -1660,26 +1836,27 @@ final class VocabUITests: XCTestCase {
         continueAfterFailure=false
         let format=DateFormatter();format.dateFormat="yyyy-MM-dd"
         let seed=try await fixtureRequest("/api/v1/__ui_fixture/same-day-relearning-case",method:"POST",body:["day":format.string(from:Date())])
-        let app=XCUIApplication();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
+        let app=vocabularyApp();app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765";app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30));app.buttons["登录"].tap()
         let user=app.textFields["auth-username"],pass=app.secureTextFields["auth-password"]
         XCTAssertTrue(user.waitForExistence(timeout:20));user.tap();user.typeText(seed["username"] as! String)
         pass.tap();pass.typeText(seed["password"] as! String);app.buttons["登录"].tap()
         XCTAssertTrue(app.buttons["settings-menu"].waitForExistence(timeout:30));app.buttons["settings-menu"].tap()
+        selectSection("离线与数据维护", in: app)
         let library=app.buttons["下载／更新整库离线包"]
-        for _ in 0..<8 { if library.isHittable { break };app.swipeUp() }
+        reveal(library, in: app)
         XCTAssertTrue(library.isHittable);library.tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","词已校验保存")).firstMatch.waitForExistence(timeout:120))
         let repair=app.buttons.matching(NSPredicate(format:"label BEGINSWITH %@","检查并修复异常卡")).firstMatch
-        for _ in 0..<8 { if repair.isHittable { break };app.swipeUp() }
+        reveal(repair, in: app)
         XCTAssertTrue(repair.isHittable);repair.tap()
         XCTAssertTrue(app.staticTexts["没有需要修复的异常卡。"].waitForExistence(timeout:10))
         let localPractice=app.buttons["本机生成薄弱词例句"]
-        for _ in 0..<4 { if localPractice.isHittable { break };app.swipeUp() }
+        reveal(localPractice, in: app)
         XCTAssertTrue(localPractice.isHittable);localPractice.tap()
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@ OR label CONTAINS %@","本机中英双语模型尚不可用","没有需要生成例句")).firstMatch.waitForExistence(timeout:20))
         let health=app.buttons["实际学习效果与存档健康"]
-        for _ in 0..<3 { if health.isHittable { break };app.swipeUp() }
+        reveal(health, in: app)
         XCTAssertTrue(health.exists);health.tap()
         XCTAssertTrue(app.staticTexts["以下为服务器已同步数据。"].waitForExistence(timeout:20))
     }
@@ -1689,7 +1866,7 @@ final class VocabUITests: XCTestCase {
         let format = DateFormatter(); format.locale = Locale(identifier: "en_US_POSIX"); format.dateFormat = "yyyy-MM-dd"
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/same-day-relearning-case", method:"POST", body:["day":format.string(from:Date()),"short_steps":true])
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
+        let app = vocabularyApp(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         func login() {
             XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30));app.buttons["登录"].tap()
@@ -1742,7 +1919,7 @@ final class VocabUITests: XCTestCase {
         formatter.calendar = Calendar(identifier:.gregorian); formatter.timeZone = .current; formatter.dateFormat = "yyyy-MM-dd"
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/same-day-relearning-case", method:"POST", body:["day":formatter.string(from:Date()), "offline":offline])
         let username = try XCTUnwrap(seed["username"] as? String), password = try XCTUnwrap(seed["password"] as? String)
-        let app = XCUIApplication(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
+        let app = vocabularyApp(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30)); app.buttons["登录"].tap()
         let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
         XCTAssertTrue(user.waitForExistence(timeout:20)); user.tap(); user.typeText(username)
@@ -1766,7 +1943,7 @@ final class VocabUITests: XCTestCase {
             body:["day":format.string(from:Date()),"offset_minutes":TimeZone.current.secondsFromGMT()/60])
         let username = try XCTUnwrap(seed["username"] as? String), password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
+        let app = vocabularyApp(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30)); app.buttons["登录"].tap()
         let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
         XCTAssertTrue(user.waitForExistence(timeout:20)); user.tap(); user.typeText(username)
@@ -1798,7 +1975,7 @@ final class VocabUITests: XCTestCase {
             body: ["day":day,"offset_minutes":TimeZone.current.secondsFromGMT()/60])
         let username = try XCTUnwrap(seed["username"] as? String), password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
+        let app = vocabularyApp(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:30)); app.buttons["登录"].tap()
         let user=app.textFields["auth-username"], pass=app.secureTextFields["auth-password"]
@@ -1846,7 +2023,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -1910,7 +2087,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -1961,7 +2138,7 @@ final class VocabUITests: XCTestCase {
         apple["due"] = "2020-01-01"; cards["apple"] = apple; state["cards"] = cards
         state["settings"] = ["newPerDay":0, "dailyCap":1]
         _ = try await fixtureRequest("/api/v1/me/state", method: "PUT", token: token, body: state)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -1985,13 +2162,14 @@ final class VocabUITests: XCTestCase {
         var apple = try XCTUnwrap(cards["apple"] as? [String: Any])
         apple["due"] = "2020-01-01"; cards["apple"] = apple; state["cards"] = cards
         _ = try await fixtureRequest("/api/v1/me/state", method: "PUT", token: token, body: state)
-        let app = XCUIApplication(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
+        let app = vocabularyApp(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
         let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
         XCTAssertTrue(user.waitForExistence(timeout: 20)); user.tap(); user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
         app.buttons["登录"].tap()
         let stats = app.buttons["stats-menu"]; XCTAssertTrue(stats.waitForExistence(timeout: 30)); stats.tap()
+        selectSection("复习预测", in: app)
         let first = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "forecast-")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 20)); XCTAssertTrue(first.label.contains("1词"), "forecast: \(first.label)")
     }
@@ -2013,13 +2191,14 @@ final class VocabUITests: XCTestCase {
         let day = DateFormatter(); day.locale = Locale(identifier:"en_US_POSIX"); day.dateFormat = "yyyy-MM-dd"
         state["log"] = [["d":day.string(from: Date()), "word":"apple", "rating":3, "kind":"exposure"]]
         _ = try await fixtureRequest("/api/v1/me/state", method:"PUT", token:token, body:state)
-        let app = XCUIApplication(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
+        let app = vocabularyApp(); app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"; app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
         let user = app.textFields["auth-username"], pass = app.secureTextFields["auth-password"]
         XCTAssertTrue(user.waitForExistence(timeout: 20)); user.tap(); user.typeText(username)
         XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
         app.buttons["登录"].tap()
         let stats = app.buttons["stats-menu"]; XCTAssertTrue(stats.waitForExistence(timeout: 30)); stats.tap()
+        selectSection("保持率", in: app)
         let bucket = app.descendants(matching:.any)["retention-bin-2"]
         XCTAssertTrue(bucket.waitForExistence(timeout: 20)); XCTAssertTrue(bucket.label.contains("1词"), "bucket: \(bucket.label)")
         let note = app.descendants(matching:.any)["retention-summary"]
@@ -2032,7 +2211,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -2043,8 +2222,9 @@ final class VocabUITests: XCTestCase {
         let learned = app.descendants(matching: .any)["learned-count"]
         XCTAssertTrue(learned.waitForExistence(timeout: 30)); XCTAssertTrue(learned.label.contains("1"))
         app.buttons["settings-menu"].tap()
+        selectSection("导出与恢复", in: app)
         let check = app.buttons["检查并恢复旧存档 1"]
-        for _ in 0..<6 where !check.isHittable { app.swipeUp() }
+        reveal(check, in: app)
         XCTAssertTrue(check.waitForExistence(timeout: 20)); check.tap()
         let confirm = app.alerts["恢复学习进度？"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 20))
@@ -2073,7 +2253,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         let login = app.buttons["登录"]
@@ -2088,6 +2268,7 @@ final class VocabUITests: XCTestCase {
         let learned = app.descendants(matching: .any)["learned-count"]
         XCTAssertTrue(learned.waitForExistence(timeout: 30)); XCTAssertTrue(learned.label.contains("1"))
         app.buttons["account-menu"].tap()
+        selectSection("登录管理", in: app)
         XCTAssertTrue(app.buttons["退出登录"].waitForExistence(timeout: 20)); app.buttons["退出登录"].tap()
         XCTAssertTrue(login.waitForExistence(timeout: 30))
         let replacement = try await fixtureRequest("/api/v1/__ui_fixture/replace-account", method: "POST", body: ["token":token])
@@ -2106,7 +2287,7 @@ final class VocabUITests: XCTestCase {
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/static-swap-case", method: "POST")
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -2116,6 +2297,7 @@ final class VocabUITests: XCTestCase {
         app.buttons["登录"].tap()
         XCTAssertTrue(app.buttons["start-today"].waitForExistence(timeout: 30)); app.buttons["start-today"].tap()
         XCTAssertTrue(app.buttons["quiz-option-0"].waitForExistence(timeout: 30)); app.buttons["quiz-option-0"].tap()
+        selectSection("例句", in: app)
         let sentence = app.staticTexts["An apple is here."]
         XCTAssertTrue(sentence.waitForExistence(timeout: 30))
         let swap = app.buttons.matching(identifier: "swap-static-apple").firstMatch
@@ -2136,7 +2318,7 @@ final class VocabUITests: XCTestCase {
         let token = try XCTUnwrap(seed["token"] as? String)
         let initial = try await fixtureRequest("/api/v1/me/state", token: token)
         let stale = try XCTUnwrap(initial["state"] as? [String: Any])
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -2148,6 +2330,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(start.waitForExistence(timeout: 30)); start.tap()
         let option = app.buttons["quiz-option-0"]
         XCTAssertTrue(option.waitForExistence(timeout: 30)); option.tap()
+        selectSection("例句", in: app)
         let sentence = app.staticTexts["An old sentence."]
         XCTAssertTrue(sentence.waitForExistence(timeout: 30))
         let replace = app.buttons["swap-personal-apple"]
@@ -2189,7 +2372,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         func loginIfNeeded() {
             let login = app.buttons["登录"]
@@ -2205,6 +2388,7 @@ final class VocabUITests: XCTestCase {
         let learned = app.descendants(matching: .any)["learned-count"]
         XCTAssertTrue(learned.waitForExistence(timeout: 30)); XCTAssertTrue(learned.label.contains("1"))
         app.buttons["settings-menu"].tap()
+        selectSection("定级与校验", in: app)
         let reset = app.buttons["重新定级（30 题重测词汇边界）"]
         XCTAssertTrue(reset.waitForExistence(timeout: 20)); reset.tap()
         let confirm = app.alerts["重新定级？"]
@@ -2263,7 +2447,7 @@ final class VocabUITests: XCTestCase {
         let before = try await fixtureRequest("/api/v1/me/state/snapshots?representation=stored", method:"POST", token:token, body:[:])
         XCTAssertGreaterThan(before["byte_length"] as? Int ?? 0, 8 * 1024 * 1024)
         XCTAssertEqual(before["restore_epoch"] as? Int, 3)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -2290,7 +2474,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -2327,7 +2511,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -2347,8 +2531,9 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(cap.waitForExistence(timeout: 20)); XCTAssertEqual(cap.value as? String, "已选择")
         let newWords = app.buttons["setting-new-20"]
         newWords.tap(); XCTAssertEqual(newWords.value as? String, "已选择")
+        selectSection("同步维护", in: app)
         let checkpoint = app.buttons["整理已同步的历史"]
-        for _ in 0..<5 where !checkpoint.isHittable { app.swipeUp() }
+        reveal(checkpoint, in: app)
         XCTAssertTrue(checkpoint.waitForExistence(timeout: 10)); checkpoint.tap()
         let confirm = app.alerts["整理已同步的历史？"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 20)); confirm.buttons["整理"].tap()
@@ -2369,7 +2554,7 @@ final class VocabUITests: XCTestCase {
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/recovery-case", method: "POST")
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         func loginAccount() {
@@ -2384,6 +2569,7 @@ final class VocabUITests: XCTestCase {
         let menu = app.buttons["account-menu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 30)); menu.tap()
         _ = try await fixtureRequest("/api/v1/__ui_fixture/state-get-hold-once", method: "POST")
+        selectSection("云端备份", in: app)
         let reload = app.buttons["重新加载服务器进度"]
         XCTAssertTrue(reload.waitForExistence(timeout: 20)); reload.tap()
         var attempts = 0
@@ -2393,6 +2579,7 @@ final class VocabUITests: XCTestCase {
             try await Task.sleep(for: .milliseconds(100))
         }
         XCTAssertGreaterThan(attempts, 0)
+        selectSection("登录管理", in: app)
         let switchAccount = app.buttons["切换账号 / 游客模式"]
         XCTAssertTrue(switchAccount.waitForExistence(timeout: 20)); switchAccount.tap()
         loginAccount()
@@ -2416,7 +2603,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -2429,6 +2616,7 @@ final class VocabUITests: XCTestCase {
         try await addRemoteCard("banana", token: token)
         let menu = app.buttons["account-menu"]
         XCTAssertTrue(menu.waitForExistence(timeout: 10)); menu.tap()
+        selectSection("云端备份", in: app)
         let reload = app.buttons["重新加载服务器进度"]
         XCTAssertTrue(reload.waitForExistence(timeout: 20)); reload.tap()
         let dialog = app.alerts["重新加载服务器进度？"]
@@ -2448,7 +2636,7 @@ final class VocabUITests: XCTestCase {
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/recovery-case", method: "POST")
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -2457,8 +2645,9 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(pass.waitForExistence(timeout: 20)); pass.tap(); pass.typeText(password)
         app.buttons["登录"].tap()
         XCTAssertTrue(app.buttons["settings-menu"].waitForExistence(timeout: 30)); app.buttons["settings-menu"].tap()
+        selectSection("复习提醒", in: app)
         let toggle = app.switches["setting-reminder-enabled"]
-        for _ in 0..<8 where !toggle.isHittable { app.swipeUp() }
+        reveal(toggle, in: app)
         XCTAssertTrue(toggle.waitForExistence(timeout: 20)); toggle.tap()
         let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
         let deny = springboard.buttons.matching(NSPredicate(format: "label IN %@", ["Don’t Allow", "Don't Allow", "不允许"])).firstMatch
@@ -2474,7 +2663,7 @@ final class VocabUITests: XCTestCase {
         let username = try XCTUnwrap(seed["username"] as? String)
         let password = try XCTUnwrap(seed["password"] as? String)
         let token = try XCTUnwrap(seed["token"] as? String)
-        let app = XCUIApplication()
+        let app = vocabularyApp()
         app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
         app.launch()
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 30)); app.buttons["登录"].tap()
@@ -2497,7 +2686,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(app.buttons["返回学习"].waitForExistence(timeout: 20)); app.buttons["返回学习"].tap()
         XCTAssertTrue(app.buttons["settings-menu"].waitForExistence(timeout: 20)); app.buttons["settings-menu"].tap()
         let warning = app.staticTexts["系统通知权限未开启，请在系统设置中允许词航发送通知。"]
-        for _ in 0..<8 where !warning.isHittable { app.swipeUp() }
+        reveal(warning, in: app)
         XCTAssertTrue(warning.waitForExistence(timeout: 20), "Synced setting or denied-permission warning is missing")
     }
 }

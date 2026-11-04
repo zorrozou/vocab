@@ -168,9 +168,9 @@ struct CoachLessonView: View {
     @Environment(CoachClock.self) var clock
     @State private var lesson:CoachLesson?
     @State private var feedback=false
+    @State private var section = 0
     @State private var shown=false
     @State private var busy=false
-    @State private var sample=false
     @State private var plays=0
     @State private var notice=""
     @State private var aiNote:CoachExplanation?
@@ -220,12 +220,10 @@ struct CoachLessonView: View {
                 if action=="undo" {b.task=lesson?.last?.id}
                 let r:CoachLesson=try await APIClient.shared.coach(action,b,token:token)
                 guard id==clock.client,token==app.auth?.token else{return}
-                lesson=r;feedback=choice != nil;sample=false;shown=r.task?.shown ?? false;plays=r.task?.plays ?? 0;aiNote=nil;draft="";reply=nil;revising=false
+                lesson=r;feedback=choice != nil;shown=r.task?.shown ?? false;plays=r.task?.plays ?? 0;aiNote=nil;draft="";reply=nil;revising=false
             }
         }catch{notice=error.localizedDescription}
     }
-    @State private var composer=false
-    @State private var rationale=false
     @Environment(\.dynamicTypeSize) private var textSize
     private var stageNames:[String:String] {
         ["接收消息":"Understand the message","核对线索":"Check the clue","做出行动":"Choose an action",
@@ -247,108 +245,148 @@ struct CoachLessonView: View {
             Text(feedback ? "FEEDBACK":l.task == nil ? "RECAP":l.task?.kind=="listen" ? "LISTENING":"READING")
                 .font(.caption.monospaced().bold()).tracking(1.2).foregroundStyle(Theme.accent)
             if feedback,let last=l.last {
-                LessonPair(en:last.ok ? "You got it":"Look at the clue",zh:last.ok ? "理解正确":"一起看这条线索",font:.system(.largeTitle,design:.serif))
+                LessonPair(en:last.ok ? "You got it":"Look at the clue",zh:last.ok ? "理解正确":"一起看这条线索",font:.system(.title2,design:.serif))
             }else if let t=l.task {
-                LessonPair(en:t.titleEn ?? stageNames[t.purpose],zh:t.title ?? t.purpose,font:.system(.largeTitle,design:.serif))
-            }else{LessonPair(en:"Lesson complete",zh:"今日教练课完成",font:.system(.largeTitle,design:.serif))}
+                LessonPair(en:t.titleEn ?? stageNames[t.purpose],zh:t.title ?? t.purpose,font:.system(.title2,design:.serif))
+            }else{LessonPair(en:"Lesson complete",zh:"今日教练课完成",font:.system(.title2,design:.serif))}
             ProgressView(value:Double(l.step),total:Double(l.count)).tint(Theme.accent).accessibilityLabel("课堂进度")
-            Text((l.source ?? "教研课程")+"  ·  "+l.focus+"  ·  \(l.step)/\(l.count)").font(.caption).foregroundStyle(Theme.muted)
-        }.padding(18).frame(maxWidth:.infinity,alignment:.leading).background(StudioTheme.gradient,in:RoundedRectangle(cornerRadius:18))
+            ReadingText(text: l.focus, font: .caption).foregroundStyle(Theme.muted)
+        }.padding(10).frame(maxWidth:.infinity,alignment:.leading).background(StudioTheme.gradient,in:RoundedRectangle(cornerRadius:18))
     }
-    @ViewBuilder private func prompt(_ t:CoachTask,_ l:CoachLesson)->some View {
-        if t.kind=="listen" && !shown && plays==0 {
-            LessonPair(en:"Listen first, then choose.",zh:"先听消息，再选择行动。",font:.headline,primary:Theme.accent)
-        }else if t.title != nil {LessonPair(en:stageNames[t.purpose],zh:t.purpose,font:.headline,primary:Theme.accent)}
-        if t.kind=="listen" {
-            let layout=textSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment:.leading)):AnyLayout(HStackLayout(alignment:.top))
-            layout {
-                LessonAction(en:plays==0 ? "Play audio":"Listen again",zh:plays==0 ? "播放消息":"再听一遍",icon:"play.fill",primary:true){app.audio.play(t.passage,voice:app.S.settings.voice)}
-                LessonAction(en:"Transcript",zh:"看原文",icon:"text.alignleft"){Task{await send("aid",aid:"transcript")}}.accessibilityIdentifier("coach-transcript")
-            }
-        }
-        if t.kind=="read" || shown {
-            Text(verbatim:t.passage).font(.system(.title3,design:.serif)).lineSpacing(4).padding(16)
-                .frame(maxWidth:.infinity,alignment:.leading).background(Theme.cardDeep,in:RoundedRectangle(cornerRadius:12))
-        }
-        if !t.hint.isEmpty {LessonPair(en:t.hint.contains("重选") ? "Try again with the feedback in mind.":"Check the message again.",zh:t.hint,font:.subheadline)}
-        LessonPair(en:t.questionEn,zh:t.question,font:.title3.weight(.semibold))
-        VStack(spacing:8){
-            ForEach(t.options.indices,id:\.self){i in
-                LessonAction(en:t.optionsEn.flatMap{$0.indices.contains(i) ? $0[i]:nil} ?? "",zh:t.options[i],icon:["a.circle","b.circle","c.circle"][i]){
-                    app.audio.stop();Task{await send("answer",i)}
-                }.disabled(busy || (t.kind=="listen" && !shown && plays==0)).accessibilityIdentifier("coach-option-\(i)")
-            }
-        }
-        DisclosureGroup(isExpanded:$rationale){
-            Text(l.reason).font(.subheadline).frame(maxWidth:.infinity,alignment:.leading)
-            if let words=l.words,!words.isEmpty {Text("课中复现 · "+words.joined(separator:" / ")).font(.footnote)}
-        }label:{LessonPair(en:"Why this task?",zh:"为什么练这一题").frame(minHeight:44)}
-    }
-    @ViewBuilder private func correction(_ a:CoachResult,_ l:CoachLesson)->some View {
-        VStack(alignment:.leading,spacing:10){
-            Text("THE ANSWER  /  正确行动").font(.caption.monospaced().bold()).foregroundStyle(a.ok ? Theme.accent:Theme.warn)
-            LessonPair(en:a.expectedEn,zh:a.expected,font:.title3.weight(.semibold))
-            LessonPair(en:a.explanationEn,zh:a.explanation,font:.body)
-        }.padding(14).frame(maxWidth:.infinity,alignment:.leading).background(Theme.cardDeep,in:RoundedRectangle(cornerRadius:12))
-        LessonAction(en:l.task==nil ? "See my recap":"Continue",zh:l.task==nil ? "看本课小结":"继续",icon:"arrow.right",primary:true){
-            recording=UUID();app.speech.stopCapture(finalize:false);feedback=false;composer=false;rationale=false
-        }.disabled(busy).accessibilityIdentifier("coach-next")
-        DisclosureGroup(isExpanded:$sample){Text(verbatim:a.reply).font(.system(.title3,design:.serif))}
-            label:{LessonPair(en:"See a sample reply",zh:"查看参考说法").frame(minHeight:44)}
-        LessonAction(en:"Explain the clue",zh:"请 AI 再讲一句",icon:"lightbulb"){Task{await send("explanation")}}
-        if let extra=aiNote {LessonPair(en:extra.textEn,zh:(extra.ai ? "AI 教练 · ":"课程题解 · ")+extra.text,font:.body)}
-        if app.coachEdition==2 {
-            DisclosureGroup(isExpanded:$composer){
-                VStack(alignment:.leading,spacing:10){
-                    if let result=reply ?? a.response,!revising {
-                        let labels=["表达清楚":"Your meaning is clear","可以更明确":"Try being more specific","暂无法判断":"Check the example"]
-                        LessonPair(en:labels[result.verdict],zh:result.verdict);LessonPair(en:result.tipEn,zh:result.tip,font:.body)
-                        LessonPair(en:result.example,zh:"参考说法")
-                        if (result.attempt ?? 0)<2 {LessonAction(en:"Try again",zh:result.attempt==nil ? "重新尝试反馈":"改一句再试"){draft="";revising=true}}
-                    }else{
-                        TextField("Write one sentence…",text:$draft,axis:.vertical).accessibilityLabel("我的英文回应")
-                            .textFieldStyle(.roundedBorder).lineLimit(2...4).onChange(of:draft){_,v in if v.count>180 {draft=String(v.prefix(180))}}
-                        if app.speech.onDeviceAvailable {
-                            LessonAction(en:app.speech.state == .listening ? "Stop dictation":"Dictate a reply",zh:app.speech.state == .listening ? "结束听写":"口述一句，先核对文字",icon:"mic"){Task{await dictate(a.id)}}
+    @ViewBuilder private func prompt(_ t: CoachTask, _ l: CoachLesson) -> some View {
+        if section == 0 {
+            if t.kind == "listen" {
+                let layout =
+                    textSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading)) : AnyLayout(HStackLayout(alignment: .top))
+                layout {
+                    LessonAction(
+                        en: plays == 0 ? "Play audio" : "Listen again", zh: plays == 0 ? "播放消息" : "再听一遍", icon: "play.fill", primary: true
+                    ) { app.audio.play(t.passage, voice: app.S.settings.voice) }
+                    LessonAction(en: "Transcript", zh: "看原文", icon: "text.alignleft") {
+                        Task {
+                            await send("aid", aid: "transcript"); if shown { section = 1 }
                         }
-                        Text("点击后才发送文字。只保存反馈，不计词汇掌握。").font(.footnote).foregroundStyle(Theme.muted)
-                        LessonAction(en:"Check my reply",zh:"看看我的回应"){Task{await send("reply")}}.disabled(draft.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || busy)
+                    }.accessibilityIdentifier("coach-transcript")
+                }
+            }
+            if !t.hint.isEmpty {
+                LessonPair(
+                    en: t.hint.contains("重选") ? "Try again with the feedback in mind." : "Check the message again.", zh: t.hint,
+                    font: .subheadline)
+            }
+            LessonPair(en: t.questionEn, zh: t.question, font: .title3.weight(.semibold))
+            ForEach(t.options.indices, id: \.self) { i in
+                let en = t.optionsEn.flatMap { $0.indices.contains(i) ? $0[i] : nil } ?? ""
+                let option = t.options[i]
+                LessonAction(
+                    en: en, zh: option,
+                    icon: ["a.circle", "b.circle", "c.circle"].indices.contains(i) ? ["a.circle", "b.circle", "c.circle"][i] : "circle"
+                ) {
+                    app.audio.stop(); Task { await send("answer", i) }
+                }.disabled(busy || (t.kind == "listen" && !shown && plays == 0)).accessibilityIdentifier("coach-option-\(i)")
+            }
+        } else if section == 1 {
+            if t.kind == "read" || shown {
+                ReadingText(text: t.passage, font: .system(.title3, design: .serif), title: "阅读完整原文")
+            } else {
+                Text("可先听一遍，再决定是否查看原文。").font(.subheadline)
+                LessonAction(en: "Transcript", zh: "看原文", icon: "text.alignleft") { Task { await send("aid", aid: "transcript") } }
+            }
+            LessonAction(en: "Answer the question", zh: "去答题", icon: "arrow.right", primary: true) { section = 0 }
+        } else {
+            ReadingText(text: l.reason, font: .body)
+            if let words = l.words, !words.isEmpty { ReadingText(text: "课中复现 · " + words.joined(separator: " / "), font: .footnote) }
+        }
+    }
+    @ViewBuilder private func correction(_ a: CoachResult, _ l: CoachLesson) -> some View {
+        if section == 0 {
+            Text("THE ANSWER  /  正确行动").font(.caption.monospaced().bold()).foregroundStyle(a.ok ? Theme.accent : Theme.warn)
+            LessonPair(en: a.expectedEn, zh: a.expected, font: .title3.weight(.semibold))
+            LessonPair(en: a.explanationEn, zh: a.explanation, font: .body)
+
+            LessonAction(
+                en: l.task == nil ? "See my recap" : "Continue", zh: l.task == nil ? "看本课小结" : "继续", icon: "arrow.right", primary: true
+            ) {
+                recording = UUID(); app.speech.stopCapture(finalize: false); feedback = false
+            }.disabled(busy).accessibilityIdentifier("coach-next")
+        } else if section == 1 {
+            ReadingText(text: a.reply, font: .system(.title3, design: .serif), title: "完整参考说法")
+            LessonAction(en: "Explain the clue", zh: "请 AI 再讲一句", icon: "lightbulb") { Task { await send("explanation") } }
+            if let extra = aiNote { LessonPair(en: extra.textEn, zh: (extra.ai ? "AI 教练 · " : "课程题解 · ") + extra.text, font: .body) }
+        } else if app.coachEdition == 2 {
+            if let result = reply ?? a.response, !revising {
+                let labels = ["表达清楚": "Your meaning is clear", "可以更明确": "Try being more specific", "暂无法判断": "Check the example"]
+                LessonPair(en: labels[result.verdict], zh: result.verdict); LessonPair(en: result.tipEn, zh: result.tip, font: .body)
+                LessonPair(en: result.example, zh: "参考说法")
+                if (result.attempt ?? 0) < 2 {
+                    LessonAction(en: "Try again", zh: result.attempt == nil ? "重新尝试反馈" : "改一句再试") {
+                        draft = ""; revising = true
                     }
-                }.padding(.vertical,8)
-            }label:{LessonPair(en:"Try a short reply",zh:"可选 · 写一句英语回应").frame(minHeight:44)}
-            LessonAction(en:"Undo my choice",zh:"撤销这次选择",icon:"arrow.uturn.backward"){Task{await send("undo")}}.disabled(busy)
+                }
+            } else {
+                TextField("Write one sentence…", text: $draft).accessibilityLabel("我的英文回应")
+                    .textFieldStyle(.roundedBorder).submitLabel(.done).onChange(of: draft) { _, v in
+                        if v.count > 180 { draft = String(v.prefix(180)) }
+                    }
+                if app.speech.onDeviceAvailable {
+                    LessonAction(
+                        en: app.speech.state == .listening ? "Stop dictation" : "Dictate a reply",
+                        zh: app.speech.state == .listening ? "结束听写" : "口述一句，先核对文字", icon: "mic"
+                    ) { Task { await dictate(a.id) } }
+                }
+                Text("点击后才发送文字。只保存反馈，不计词汇掌握。").font(.footnote).foregroundStyle(Theme.muted)
+                LessonAction(en: "Check my reply", zh: "看看我的回应") { Task { await send("reply") } }.disabled(
+                    draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || busy)
+            }
+            LessonAction(en: "Undo my choice", zh: "撤销这次选择", icon: "arrow.uturn.backward") { Task { await send("undo") } }.disabled(busy)
         }
     }
-    var body:some View{
-        ScrollViewReader { proxy in
-            ScrollView {
-                VStack(alignment:.leading,spacing:16) {
-                    HStack {
-                        Spacer()
-                        Button(action:goHome){Label("Pause · 暂停并返回首页",systemImage:"pause.circle").font(.subheadline).frame(minHeight:44)}
-                            .accessibilityIdentifier("coach-pause")
-                    }.id("top")
-                    if let l=lesson {
-                        header(l)
-                        if feedback,let a=l.last {correction(a,l)}
-                        else if let t=l.task {prompt(t,l)}
-                        else{
-                            LessonPair(en:"\(l.independent) of \(l.step) tasks completed independently",zh:"本课 \(l.step) 道任务，独立理解 \(l.independent) 道。")
-                            if let debrief=l.debrief {Text(debrief).font(.subheadline)}
-                            LessonAction(en:"Back to today",zh:"返回首页",icon:"house",primary:true,action:goHome)
-                            LessonAction(en:"Practice vocabulary",zh:"接着练今天的词汇",icon:"book",action:continueWords)
-                        }
-                    }else if notice.isEmpty {ProgressView("Getting your lesson ready · 正在准备课程…")}
-                    if !notice.isEmpty {Text(notice);LessonAction(en:"Reload lesson",zh:"取回今日课程"){Task{await send("lesson")}}}
-                    if busy {ProgressView()}
-                }.padding(.horizontal,18).padding(.bottom,20).frame(maxWidth:640)
-            }.onChange(of:feedback){_,_ in proxy.scrollTo("top",anchor:.top);rationale=false;composer=false}
-        }
-        .task {if lesson==nil{await send("lesson")}}
-        .onChange(of:app.audio.playingText){_,text in
-            if let t=lesson?.task,t.kind=="listen",text==t.passage {Task {await send("aid",aid:"play")}}
-        }
-        .onDisappear{recording=UUID();app.speech.stopCapture(finalize:false);app.audio.stop()}
-        .modifier(CoachTimeGate(active:lesson==nil || lesson?.task != nil || feedback))
+    var body: some View {
+        VStack(spacing: 8) {
+            HStack {
+                Text(lesson.map { "\($0.source ?? "听读课") · \($0.step) / \($0.count)" } ?? "听读课").font(.subheadline)
+                Spacer()
+                Button(action: goHome) { Label("暂停", systemImage: "pause.circle").frame(minHeight: 44) }
+                    .accessibilityIdentifier("coach-pause")
+            }
+            if let l = lesson, feedback || l.task != nil {
+                SectionChoice(
+                    titles: feedback ? (app.coachEdition == 2 ? ["反馈", "例解", "回应"] : ["反馈", "例解"]) : ["作答", "原文", "练习依据"],
+                    selected: $section)
+            }
+            ScreenPages {
+                if let l = lesson {
+                    if section == 0 { header(l) }
+                    if feedback, let answer = l.last {
+                        correction(answer, l)
+                    } else if let task = l.task {
+                        prompt(task, l)
+                    } else {
+                        LessonPair(
+                            en: "\(l.independent) of \(l.step) tasks completed independently",
+                            zh: "本课 \(l.step) 道任务，独立理解 \(l.independent) 道。")
+                        if let debrief = l.debrief { ReadingText(text: debrief, font: .subheadline) }
+                        LessonAction(en: "Back to today", zh: "返回首页", icon: "house", primary: true, action: goHome)
+                        LessonAction(en: "Practice vocabulary", zh: "接着练今天的词汇", icon: "book", action: continueWords)
+                    }
+                } else if notice.isEmpty {
+                    ProgressView("正在准备课程…")
+                }
+                if !notice.isEmpty {
+                    ReadingText(text: notice); LessonAction(en: "Reload lesson", zh: "取回今日课程") { Task { await send("lesson") } }
+                }
+                if busy { ProgressView() }
+            }.id("\(lesson?.task?.id ?? "")-\(feedback)-\(section)")
+        }.padding(.horizontal, 14)
+            .onChange(of: feedback) { _, _ in section = feedback || lesson?.task?.kind != "read" ? 0 : 1 }
+            .onChange(of: lesson?.task?.id) { _, _ in section = !feedback && lesson?.task?.kind == "read" ? 1 : 0 }
+            .task { if lesson == nil { await send("lesson") } }
+            .onChange(of: app.audio.playingText) { _, text in
+                if let t = lesson?.task, t.kind == "listen", text == t.passage { Task { await send("aid", aid: "play") } }
+            }
+            .onDisappear {
+                recording = UUID(); app.speech.stopCapture(finalize: false); app.audio.stop()
+            }
+            .modifier(CoachTimeGate(active: lesson == nil || lesson?.task != nil || feedback))
     }
 }

@@ -55,6 +55,7 @@ struct LearnCardView: View {
     @State private var personal: PersonalizedSentence?
     @State private var sentences: [SentenceItem] = []
     @State private var weave: (text: String, zh: String?, weak: String)?
+    @State private var section = 0
     @State private var shadowMsg = ""
     @State private var shadowResult: ShadowResult?
     @State private var acted = false
@@ -72,95 +73,99 @@ struct LearnCardView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SessionHeader(title: "新词 \(app.session.idx + 1)/\(app.session.queue.count) · \(levelDisplayName(currentItem.level ?? levelForPos(currentItem.pos)))",
-                          progress: Double(app.session.idx) / Double(max(1, app.session.queue.count)))
-            // 内容区：可滚动，占满上方剩余空间
-            ScrollView {
-                VStack(spacing: 14) {
-                    Card {
-                        HStack(alignment: .center, spacing: 10) {
-                            BigWord(word: item.word)
-                            PlayButton(text: item.word)
-                        }
-                        if let ph = currentItem.phonetic, !ph.isEmpty {
-                            Text("/\(ph)/").font(.subheadline).foregroundStyle(Theme.muted)
-                        }
-                        sensesView
+            SessionHeader(
+                title:
+                    "新词 \(app.session.idx + 1)/\(app.session.queue.count) · \(levelDisplayName(currentItem.level ?? levelForPos(currentItem.pos)))",
+                progress: Double(app.session.idx) / Double(max(1, app.session.queue.count)))
+            SectionChoice(titles: ["词义", "例句", "跟读"], selected: $section)
+            ScreenPages {
+                if section == 0 {
+                    HStack {
+                        BigWord(word: item.word); PlayButton(text: item.word)
                     }
-                    Card { sentenceArea }
+                    if let ph = currentItem.phonetic, !ph.isEmpty { Text("/\(ph)/").font(.subheadline) }
+                    sensesView
+                } else if section == 1 {
+                    sentenceArea
+                } else {
+                    ReadingText(text: shadowTarget(), font: .title3)
+                    ShadowHoldButton(target: shadowTarget(), onBusy: { shadowMsg = $0 }, onResult: handleShadow)
                     shadowArea
                 }
-                .padding(.vertical, 10)
-            }
-        }
-        // 交互区：钉死在底部拇指区，不随内容长度浮动
-        .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 6) {
-                HStack(spacing: 10) {
-                    ShadowHoldButton(target: shadowTarget(),
-                                     onBusy: { shadowMsg = $0 },
-                                     onResult: handleShadow)
-                    PrimaryButton(title: "不熟悉", color: Theme.warn) { act(rating: 1) }.disabled(!hasMeaning || acted)
-                    PrimaryButton(title: "学会了 →", color: Theme.ok) { act(rating: 3) }.disabled(!hasMeaning || acted)
+            }.id(section).padding(.top, 8)
+        }.padding(.horizontal, 14)
+            // 交互区：钉死在底部拇指区，不随内容长度浮动
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 6) {
+                    HStack(spacing: 10) {
+                        PrimaryButton(title: "不熟悉", color: Theme.warn) { act(rating: 1) }.disabled(!hasMeaning || acted)
+                        PrimaryButton(title: "学会了 →", color: Theme.ok) { act(rating: 3) }.disabled(!hasMeaning || acted)
+                    }
+                    if !hasMeaning { Button("稍后再学") { deferWord() }.disabled(acted) }
                 }
-                if !hasMeaning { Button("稍后再学") { deferWord() }.disabled(acted) }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.regularMaterial)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.regularMaterial)
-        }
-        .onAppear { setup() }
-        // 卡片级不做 onDisappear stop：旧卡的 stop 可能晚于新卡开播触发，误杀新卡音频；新卡开播时会自行 stop 旧链
-        // 但异步补句/织入任务要取消，防止翻页后旧卡内容晚到并开播
-        .onDisappear { sideTasks.forEach { $0.cancel() } }
+            .onAppear { setup() }
+            // 卡片级不做 onDisappear stop：旧卡的 stop 可能晚于新卡开播触发，误杀新卡音频；新卡开播时会自行 stop 旧链
+            // 但异步补句/织入任务要取消，防止翻页后旧卡内容晚到并开播
+            .onDisappear { sideTasks.forEach { $0.cancel() } }
     }
 
-    private var sensesView: some View {
-        VStack(alignment: .leading, spacing: 6) {
+    @ViewBuilder private var sensesView: some View {
+        Group {
             let senses = (currentItem.senses ?? []).filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
             ForEach(Array(senses.enumerated()), id: \.offset) { _, s in
                 HStack(alignment: .top, spacing: 6) {
                     Text(s.pos ?? "·").font(.footnote.weight(.medium)).foregroundStyle(Theme.accentLight)
-                    Text(s.text).font(.subheadline).foregroundStyle(Theme.text)
+                    ReadingText(text: s.text, font: .subheadline, title: "完整词义").foregroundStyle(Theme.text)
                 }
             }
             if senses.isEmpty, let sense = currentItem.sense, !sense.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                Text(sense).font(.subheadline).foregroundStyle(Theme.text)
+                ReadingText(text: sense, font: .subheadline, title: "完整词义").foregroundStyle(Theme.text)
             } else if senses.isEmpty && detailError.isEmpty {
-                HStack { Text("正在加载词义…"); ProgressView().scaleEffect(0.7) }
-                    .font(.subheadline).foregroundStyle(Theme.muted)
+                HStack {
+                    Text("正在加载词义…"); ProgressView().scaleEffect(0.7)
+                }
+                .font(.subheadline).foregroundStyle(Theme.muted)
             }
-            if !senses.isEmpty { MeaningFeedbackButton(word:item.word,text:senses.map(\.text).joined(separator:"；")) }
+            if !senses.isEmpty { MeaningFeedbackButton(word: item.word, text: senses.map(\.text).joined(separator: "；")) }
             if !detailError.isEmpty {
                 Text(detailError).font(.footnote).foregroundStyle(Theme.bad)
                 Button("重新加载词义") { loadDetail() }
                     .font(.subheadline.weight(.semibold))
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    private var sentenceArea: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    @ViewBuilder private var sentenceArea: some View {
+        Group {
             if let p = personal {
-                SentenceRow(word: item.word, tag: "个性化", tagColor: Theme.warn,
-                            sentence: SentenceItem(tier: nil, text: p.text, zh: p.zh),
-                            kind: "personal") { fresh in
-                    if let fresh { personal = PersonalizedSentence(text: fresh.text, recall: nil, zh: fresh.zh) }
-                    else { personal = nil }
+                SentenceRow(
+                    word: item.word, tag: "个性化", tagColor: Theme.warn,
+                    sentence: SentenceItem(tier: nil, text: p.text, zh: p.zh),
+                    kind: "personal"
+                ) { fresh in
+                    if let fresh { personal = PersonalizedSentence(text: fresh.text, recall: nil, zh: fresh.zh) } else { personal = nil }
                 }
             }
             ForEach(Array(sentences.enumerated()), id: \.offset) { i, s in
-                SentenceRow(word: item.word, tag: tierLabel(s.tier), tagColor: Theme.accentLight,
-                            sentence: s, kind: "static", displayedSentences: sentences.map(\.text) + [personal?.text, weave?.text].compactMap { $0 }) { fresh in
+                SentenceRow(
+                    word: item.word, tag: tierLabel(s.tier), tagColor: Theme.accentLight,
+                    sentence: s, kind: "static",
+                    displayedSentences: sentences.map(\.text) + [personal?.text, weave?.text].compactMap { $0 }
+                ) { fresh in
                     if let fresh, sentences.contains(where: { $0.text == fresh.text }) { return }
                     sentences.replaceSentence(s, with: fresh)
                 }
             }
             if let w = weave {
-                SentenceRow(word: item.word, tag: "巩固", tagColor: Theme.accentLight,
-                            sentence: SentenceItem(tier: nil, text: w.text, zh: w.zh),
-                            kind: "weave", recallNote: "（复习词：\(w.weak)）") { _ in weave = nil }
+                SentenceRow(
+                    word: item.word, tag: "巩固", tagColor: Theme.accentLight,
+                    sentence: SentenceItem(tier: nil, text: w.text, zh: w.zh),
+                    kind: "weave", recallNote: "（复习词：\(w.weak)）"
+                ) { _ in weave = nil }
             }
             if personal == nil && trioLoading {
                 HStack {
@@ -173,7 +178,6 @@ struct LearnCardView: View {
                 Button("重新加载例句") { loadTrio() }.font(.subheadline.weight(.semibold))
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private var shadowArea: some View {
@@ -187,9 +191,9 @@ struct LearnCardView: View {
                 if shadowMsg.contains("权限") {
                     Button(shadowMsg + "（点我去开启）") {
                         #if canImport(UIKit)
-                        if let u = URL(string: UIApplication.openSettingsURLString) {
-                            UIApplication.shared.open(u)
-                        }
+                            if let u = URL(string: UIApplication.openSettingsURLString) {
+                                UIApplication.shared.open(u)
+                            }
                         #endif
                     }
                     .font(.footnote).foregroundStyle(Theme.accentLight)
@@ -354,7 +358,7 @@ struct ReviewQuizView: View {
         VStack(spacing: 0) {
             SessionHeader(title: "复习 \(app.session.idx + 1)/\(app.session.queue.count) · \(stageLabel)",
                           progress: Double(app.session.idx) / Double(max(1, app.session.queue.count)))
-            // 各阶段自己管理滚动与底部交互区
+            // 切换阶段时保留同一个评分会话。
             switch phase {
             case .loading:
                 Spacer()
@@ -376,15 +380,13 @@ struct ReviewQuizView: View {
         // 卡片级不做 onDisappear stop：旧卡的 stop 可能晚于新卡开播触发，误杀新卡音频；新卡开播时会自行 stop 旧链
     }
 
-    /// 测验卡：单词居中于上方空间，选项钉死在底部拇指区
+    /// 保留题干，剩余屏幕高度用于可点击的选项。
     /// 反向回想（稳定度≥14 天的成熟卡）：题干是中文词义，选项是英文单词，不放音（音会泄题）
     private var quizCard: some View {
         VStack(spacing: 0) {
-            Spacer()
             VStack(spacing: 12) {
                 if quiz?.mode == "reverse", let prompt = quiz?.prompt {
-                    Text(prompt)
-                        .font(.system(size: 30, weight: .bold))
+                    ReadingText(text: prompt, font: .title2.bold(), title: "完整题干")
                         .foregroundStyle(Theme.text)
                         .multilineTextAlignment(.center)
                     Text("选出对应的英文单词").font(.subheadline).foregroundStyle(Theme.muted)
@@ -396,27 +398,14 @@ struct ReviewQuizView: View {
                     Text("选出正确词义").font(.subheadline).foregroundStyle(Theme.muted)
                 }
             }
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
-        .onAppear {
-            // 反向回想不播单词（会泄题）；正向照旧自动朗读
-            if quiz?.mode != "reverse" {
-                app.audio.play(word, voice: app.S.settings.voice)
-            }
-        }
-        .safeAreaInset(edge: .bottom) {
-            Group {
-                if let quiz {
-                    QuizOptionsView(options: quiz.options) { ok in
-                        phase = .answering(ok)
-                    }
+            if let quiz { QuizOptionsView(options: quiz.options) { ok in phase = .answering(ok) } }
+        }.padding(14)
+            .onAppear {
+                // 反向回想不播单词（会泄题）；正向照旧自动朗读
+                if quiz?.mode != "reverse" {
+                    app.audio.play(word, voice: app.S.settings.voice)
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.regularMaterial)
-        }
     }
 
     private func loadQuiz() async {
@@ -482,19 +471,18 @@ struct ProbeQuizView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SessionHeader(title: "复习 \(app.session.idx + 1)/\(app.session.queue.count)",
-                          progress: Double(app.session.idx) / Double(max(1, app.session.queue.count)))
+            SessionHeader(
+                title: "复习 \(app.session.idx + 1)/\(app.session.queue.count)",
+                progress: Double(app.session.idx) / Double(max(1, app.session.queue.count)))
             if loading {
                 Spacer()
                 ProgressView()
                 Spacer()
             } else {
                 VStack(spacing: 0) {
-                    Spacer()
                     VStack(spacing: 12) {
                         if reverse, let prompt = quiz?.prompt {
-                            Text(prompt)
-                                .font(.system(size: 30, weight: .bold))
+                            ReadingText(text: prompt, font: .title2.bold(), title: "完整题干")
                                 .foregroundStyle(Theme.text)
                                 .multilineTextAlignment(.center)
                             Text("选出对应的英文单词").font(.subheadline).foregroundStyle(Theme.muted)
@@ -506,31 +494,23 @@ struct ProbeQuizView: View {
                             Text("选出正确词义").font(.subheadline).foregroundStyle(Theme.muted)
                         }
                     }
-                    Spacer()
                 }
                 .frame(maxWidth: .infinity)
                 .onAppear {
                     if !reverse { app.audio.play(item.word, voice: app.S.settings.voice) }
                 }
             }
-        }
-        .safeAreaInset(edge: .bottom) {
-            Group {
-                if let quiz {
-                    QuizOptionsView(options: quiz.options) { ok in
-                        var observed = item
-                        observed.pos = quiz.pos
-                        guard app.answerProbe(observed, ok: ok, reverse: reverse) else { return }
-                        app.session.idx += 1
-                        app.save()
-                    }
+            if let quiz {
+                QuizOptionsView(options: quiz.options) { ok in
+                    var observed = item
+                    observed.pos = quiz.pos
+                    guard app.answerProbe(observed, ok: ok, reverse: reverse) else { return }
+                    app.session.idx += 1
+                    app.save()
                 }
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.regularMaterial)
-        }
-        .task { await loadQuiz() }
+        }.padding(.horizontal, 14)
+            .task { await loadQuiz() }
     }
 
     private func loadQuiz() async {
@@ -562,6 +542,7 @@ struct AnswerCardView: View {
     @State private var detail: NewWord?
     @State private var personal: PersonalizedSentence?
     @State private var sentences: [SentenceItem] = []
+    @State private var section = 0
     @State private var shadowMsg = ""
     @State private var shadowResult: ShadowResult?
     @State private var rated = false
@@ -569,42 +550,47 @@ struct AnswerCardView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            // 内容区：可滚动
-            ScrollView {
-                VStack(spacing: 14) {
-                    Card {
-                        Text(quizOk ? "✓ 答对了——这次掌握程度？" : "✗ 正确答案")
-                            .font(.headline.weight(.bold))
-                            .foregroundStyle(quizOk ? Theme.ok : Theme.bad)
-                        HStack(alignment: .center, spacing: 10) {
-                            BigWord(word: word)
-                            PlayButton(text: word)
-                        }
-                        if let ph = detail?.phonetic, !ph.isEmpty {
-                            Text("/\(ph)/").font(.subheadline).foregroundStyle(Theme.muted)
-                        }
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array((detail?.senses ?? []).enumerated()), id: \.offset) { _, s in
-                                HStack(alignment: .top, spacing: 6) {
-                                    Text(s.pos ?? "·").font(.footnote.weight(.medium)).foregroundStyle(Theme.accentLight)
-                                    Text(s.text).font(.subheadline).foregroundStyle(Theme.text)
-                                }
-                            }
-                            if let senses=detail?.senses,!senses.isEmpty { MeaningFeedbackButton(word:word,text:senses.map(\.text).joined(separator:"；")) }
-                            if detail == nil {
-                                if detailError.isEmpty {
-                                    HStack { Text("正在加载词义…"); ProgressView().scaleEffect(0.7) }
-                                        .font(.subheadline).foregroundStyle(Theme.muted)
-                                } else {
-                                    Text(detailError).font(.footnote).foregroundStyle(Theme.bad)
-                                    Button("重新加载词义") { Task { await loadDetail() } }
-                                        .font(.subheadline.weight(.semibold))
-                                }
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
+            SectionChoice(titles: ["答案", "例句", "跟读"], selected: $section)
+            ScreenPages {
+                if section == 0 {
+                    Text(quizOk ? "✓ 答对了——这次掌握程度？" : "✗ 正确答案")
+                        .font(.headline.weight(.bold))
+                        .foregroundStyle(quizOk ? Theme.ok : Theme.bad)
+                    HStack(alignment: .center, spacing: 10) {
+                        BigWord(word: word)
+                        PlayButton(text: word)
                     }
-                    Card { sentenceArea }
+                    if let ph = detail?.phonetic, !ph.isEmpty {
+                        Text("/\(ph)/").font(.subheadline).foregroundStyle(Theme.muted)
+                    }
+                    Group {
+                        ForEach(Array((detail?.senses ?? []).enumerated()), id: \.offset) { _, s in
+                            HStack(alignment: .top, spacing: 6) {
+                                Text(s.pos ?? "·").font(.footnote.weight(.medium)).foregroundStyle(Theme.accentLight)
+                                ReadingText(text: s.text, font: .subheadline, title: "完整词义").foregroundStyle(Theme.text)
+                            }
+                        }
+                        if let senses = detail?.senses, !senses.isEmpty {
+                            MeaningFeedbackButton(word: word, text: senses.map(\.text).joined(separator: "；"))
+                        }
+                        if detail == nil {
+                            if detailError.isEmpty {
+                                HStack {
+                                    Text("正在加载词义…"); ProgressView().scaleEffect(0.7)
+                                }
+                                .font(.subheadline).foregroundStyle(Theme.muted)
+                            } else {
+                                Text(detailError).font(.footnote).foregroundStyle(Theme.bad)
+                                Button("重新加载词义") { Task { await loadDetail() } }
+                                    .font(.subheadline.weight(.semibold))
+                            }
+                        }
+                    }
+                } else if section == 1 {
+                    sentenceArea
+                } else {
+                    ReadingText(text: shadowTarget(), font: .title3)
+                    ShadowHoldButton(target: shadowTarget(), onBusy: { shadowMsg = $0 }, onResult: handleShadow)
                     if app.speech.state == .listening {
                         Text(app.speech.liveText.isEmpty ? "请朗读例句，读完松开手…" : app.speech.liveText)
                             .font(.footnote).foregroundStyle(Theme.accentLight)
@@ -614,9 +600,9 @@ struct AnswerCardView: View {
                         if shadowMsg.contains("权限") {
                             Button(shadowMsg + "（点我去开启）") {
                                 #if canImport(UIKit)
-                                if let u = URL(string: UIApplication.openSettingsURLString) {
-                                    UIApplication.shared.open(u)
-                                }
+                                    if let u = URL(string: UIApplication.openSettingsURLString) {
+                                        UIApplication.shared.open(u)
+                                    }
                                 #endif
                             }
                             .font(.footnote).foregroundStyle(Theme.accentLight)
@@ -625,57 +611,65 @@ struct AnswerCardView: View {
                         }
                     }
                 }
-                .padding(.vertical, 10)
-            }
-        }
-        // 评分/继续：钉死底部拇指区
-        .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 8) {
-                // 复习时也能跟读（与 learning 卡共享组件，读不好同样记薄弱）
-                ShadowHoldButton(target: shadowTarget(),
-                                 onBusy: { shadowMsg = $0 },
-                                 onResult: handleShadow)
-                if quizOk {
-                    GhostButton(title: "猜对了／其实没记住") { rate(1) }
-                    HStack(spacing: 10) {
-                        GhostButton(title: "困难") { rate(2) }
-                        GhostButton(title: "记得") { rate(3) }
-                        PrimaryButton(title: "熟练", color: Theme.ok) { rate(4) }
+            }.id(section).padding(.top, 8)
+        }.padding(.horizontal, 14)
+            // 评分/继续：钉死底部拇指区
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 8) {
+                    if quizOk {
+                        GhostButton(title: "猜对了／其实没记住") { rate(1) }
+                        HStack(spacing: 10) {
+                            GhostButton(title: "困难") { rate(2) }
+                            GhostButton(title: "记得") { rate(3) }
+                            PrimaryButton(title: "熟练", color: Theme.ok) { rate(4) }
+                        }
+                        Text("困难：费力想起 · 记得：正常想起 · 熟练：轻松想起")
+                            .font(.caption).foregroundStyle(Theme.muted)
+                            .multilineTextAlignment(.center)
+                    } else {
+                        PrimaryButton(title: "继续 →") {
+                            app.commitUndoReview(); onNext()
+                        }
+                        Text("已记为「忘记」，将按记忆间隔再次出现")
+                            .font(.caption).foregroundStyle(Theme.muted)
+                        // 手滑误点救星：撤销这次「忘记」，回到本题重来
+                        Button("点错了？撤销这次「忘记」") { onUndo() }
+                            .font(.footnote)
+                            .foregroundStyle(Theme.accentLight)
                     }
-                    Text("困难：费力想起 · 记得：正常想起 · 熟练：轻松想起")
-                        .font(.caption).foregroundStyle(Theme.muted)
-                        .multilineTextAlignment(.center)
-                } else {
-                    PrimaryButton(title: "继续 →") { app.commitUndoReview(); onNext() }
-                    Text("已记为「忘记」，将按记忆间隔再次出现")
-                        .font(.caption).foregroundStyle(Theme.muted)
-                    // 手滑误点救星：撤销这次「忘记」，回到本题重来
-                    Button("点错了？撤销这次「忘记」") { onUndo() }
-                        .font(.footnote)
-                        .foregroundStyle(Theme.accentLight)
                 }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.regularMaterial)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.regularMaterial)
-        }
-        .task { await setup() }
+            .task { await setup() }
         // 卡片级不做 onDisappear stop：旧卡的 stop 可能晚于新卡开播触发，误杀新卡音频；新卡开播时会自行 stop 旧链
     }
 
-    private var sentenceArea: some View {
-        VStack(alignment: .leading, spacing: 10) {
+    @ViewBuilder private var sentenceArea: some View {
+        Group {
             if let p = personal {
-                SentenceRow(word: word, tag: "个性化", tagColor: Theme.warn,
-                            sentence: SentenceItem(tier: nil, text: p.text, zh: p.zh),
-                            kind: "personal") { fresh in
-                    if let fresh { personal = PersonalizedSentence(text: fresh.text, recall: nil, zh: fresh.zh) }
-                    else { personal = nil }
+                SentenceRow(
+                    word: word, tag: "个性化", tagColor: Theme.warn,
+                    sentence: SentenceItem(tier: nil, text: p.text, zh: p.zh),
+                    kind: "personal"
+                ) { fresh in
+                    if let fresh { personal = PersonalizedSentence(text: fresh.text, recall: nil, zh: fresh.zh) } else { personal = nil }
                 }
             }
             ForEach(Array(sentences.enumerated()), id: \.offset) { i, s in
-                SentenceRow(word: word, tag: { switch s.tier { case 2: return "进阶"; case 3: return "挑战"; default: return "基础" } }(),
-                            tagColor: Theme.accentLight, sentence: s, kind: "static", displayedSentences: sentences.map(\.text) + [personal?.text].compactMap { $0 }) { fresh in
+                SentenceRow(
+                    word: word,
+                    tag: {
+                        switch s.tier {
+                        case 2: return "进阶";
+                        case 3: return "挑战";
+                        default: return "基础"
+                        }
+                    }(),
+                    tagColor: Theme.accentLight, sentence: s, kind: "static",
+                    displayedSentences: sentences.map(\.text) + [personal?.text].compactMap { $0 }
+                ) { fresh in
                     if let fresh, sentences.contains(where: { $0.text == fresh.text }) { return }
                     sentences.replaceSentence(s, with: fresh)
                 }
@@ -687,7 +681,6 @@ struct AnswerCardView: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func setup() async {
@@ -770,48 +763,35 @@ struct AcceptanceQuizView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            SessionHeader(title: "验收测试 \(i + 1)/\(words.count) · 今天学的还记得吗？",
-                          progress: Double(i) / Double(max(1, words.count)))
-            // 单词居中于上方剩余空间
-            Spacer()
-            VStack(spacing: 12) {
-                HStack(alignment: .center, spacing: 10) {
-                    BigWord(word: words[min(i, words.count - 1)])
-                    PlayButton(text: words[min(i, words.count - 1)])
-                }
-                if loading {
-                    ProgressView()
+            SessionHeader(
+                title: "验收测试 \(i + 1)/\(words.count) · 今天学的还记得吗？",
+                progress: Double(i) / Double(max(1, words.count)))
+            HStack {
+                BigWord(word: words[min(i, words.count - 1)])
+                PlayButton(text: words[min(i, words.count - 1)])
+            }.padding(8)
+            if loading { ProgressView() }
+            if !loading, let quiz {
+                QuizOptionsView(options: quiz.options) { ok in answer(ok: ok) }
+            } else if !loading {
+                Text("题目加载失败，验收尚未完成。请重试或稍后再做。")
+                    .foregroundStyle(Theme.muted)
+                PrimaryButton(title: "重试本题") { Task { await load() } }
+                GhostButton(title: "稍后再做") {
+                    app.markDayDone(); app.route = .home
                 }
             }
-            Spacer()
-        }
-        .frame(maxWidth: .infinity)
-        // 选项钉死底部拇指区
-        .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 8) {
-                if !loading, let quiz {
-                    QuizOptionsView(options: quiz.options) { ok in answer(ok: ok) }
-                } else if !loading {
-                    Text("题目加载失败，验收尚未完成。请重试或稍后再做。")
-                        .foregroundStyle(Theme.muted)
-                    PrimaryButton(title: "重试本题") { Task { await load() } }
-                    GhostButton(title: "稍后再做") { app.markDayDone(); app.route = .home }
+            Text("答对 → 按记忆间隔复习 · 答错 → 进入薄弱词，定制例句")
+                .font(.caption).foregroundStyle(Theme.muted)
+        }.padding(.horizontal, 14)
+            .task {
+                if app.S.quizProgressDay == DayUtil.today() {
+                    let completed = Set(app.S.quizCompleted ?? [])
+                    i = words.firstIndex { !completed.contains($0) } ?? 0
                 }
-                Text("答对 → 按记忆间隔复习 · 答错 → 进入薄弱词，定制例句")
-                    .font(.caption).foregroundStyle(Theme.muted)
+                app.audio.play(words[i], voice: app.S.settings.voice)
+                await load()
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.regularMaterial)
-        }
-        .task {
-            if app.S.quizProgressDay == DayUtil.today() {
-                let completed = Set(app.S.quizCompleted ?? [])
-                i = words.firstIndex { !completed.contains($0) } ?? 0
-            }
-            app.audio.play(words[i], voice: app.S.settings.voice)
-            await load()
-        }
     }
 
     private func load() async {
@@ -861,6 +841,7 @@ struct AcceptanceQuizView: View {
 
 struct DoneView: View {
     @Environment(AppState.self) private var app
+    @State private var section = 0
     @State private var genStatus = "正在为你的薄弱词定制例句…"
     @State private var genRows: [PersonalizedOut.Row] = []
     @State private var marked = false
@@ -885,102 +866,105 @@ struct DoneView: View {
     private var content: some View {
         VStack(spacing: 0) {
             TopBar()
-            ScrollView {
-                VStack(spacing: 14) {
-                    Card {
-                        Text(remainingCapacity == 0 && dailyPlan.dueAvailable > 0 && dailyPlan.duePlanned == 0 ? "今日已达上限" : StudyEngine.availableNewCount(app.S) == 0 && dailyPlan.duePlanned == 0 ? "词库已学完 · 复习仍按间隔安排" : "本轮学习完成 🎉").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
-                        HStack(spacing: 0) {
-                            StatCell(number: "\(todayCount("review"))", label: "今日复习")
-                                .accessibilityElement(children: .combine)
-                                .accessibilityIdentifier("session-reviewed")
-                            StatCell(number: "\(todayCount("learn"))", label: "今日新词")
-                            StatCell(number: "\(app.S.streak)", label: "连续天数")
-                        }
-                        let counts = StudyEngine.dailyCounts(app.S, day: DayUtil.today())
-                        Text("今日 \(counts.total) / \(app.S.settings.dailyCap) 个不同词 · \(counts.attempts) 次练习")
-                            .font(.caption).foregroundStyle(Theme.muted)
-                        if todayCount("probe") > 0 {
-                            Text("每日上限还计入 \(todayCount("probe")) 个水平探测词；同一单词当天只计一次。")
-                                .font(.caption).foregroundStyle(Theme.muted)
-                        }
-                        if dailyPlan.repeatPlanned > 0 {
-                            Text("还有 \(dailyPlan.repeatPlanned) 个今天学过的词需要按间隔再复习，不增加今日单词数。")
-                                .font(.caption).foregroundStyle(Theme.muted)
-                        }
-                        // v2.0 词级知识预测：预计认识词数 + 滞回级别 + 今日证据
-                        if app.S.calibrated, app.S.posterior != nil {
-                            let shown = app.S.track?.shownLevel ?? levelForPos(max(1, app.S.frontier))
-                            Text("预计认识 \(StudyEngine.expectedKnown(app.S)) 词（\(levelDisplayName(shown))），明天从 \(app.S.pointer) 附近发词")
-                                .font(.caption).foregroundStyle(Theme.accentLight)
-                            Text("今日有效水平证据：" + StudyEngine.effectiveEvidenceSummary(app.S, day: DayUtil.today()))
-                                .font(.caption).foregroundStyle(Theme.muted)
-                            if let note = app.S.track?.lastNote, !note.isEmpty {
-                                Text(note).font(.caption).foregroundStyle(Theme.muted)
-                            }
-                        }
-                        if app.dueLaterTodayCount(onlyCompleted: remainingCapacity == 0) > 0 && dailyPlan.duePlanned == 0 {
-                            Text("⏰ 今天晚些时候还有 \(app.dueLaterTodayCount(onlyCompleted: remainingCapacity == 0)) 个词到期，记得回来")
-                                .font(.caption).foregroundStyle(Theme.muted)
-                        }
+            SectionChoice(titles: ["本轮小结", "学习水平", "薄弱词例句"], selected: $section)
+            ScreenPages {
+                if section == 0 {
+                    Text(
+                        remainingCapacity == 0 && dailyPlan.dueAvailable > 0 && dailyPlan.duePlanned == 0
+                            ? "今日已达上限"
+                            : StudyEngine.availableNewCount(app.S) == 0 && dailyPlan.duePlanned == 0 ? "词库已学完 · 复习仍按间隔安排" : "本轮学习完成 🎉"
+                    ).font(.title2.weight(.bold)).foregroundStyle(Theme.text)
+                    HStack(spacing: 0) {
+                        StatCell(number: "\(todayCount("review"))", label: "今日复习")
+                            .accessibilityElement(children: .combine)
+                            .accessibilityIdentifier("session-reviewed")
+                        StatCell(number: "\(todayCount("learn"))", label: "今日新词")
+                        StatCell(number: "\(app.S.streak)", label: "连续天数")
                     }
-                    Card {
-                        Text("今日薄弱词 · 个性化例句")
-                            .font(.headline.weight(.bold)).foregroundStyle(Theme.text)
-                        Text(genStatus).font(.footnote).foregroundStyle(Theme.muted)
-                        ForEach(Array(genRows.enumerated()), id: \.offset) { _, r in
-                            VStack(alignment: .leading, spacing: 4) {
-                                HStack(alignment: .top, spacing: 8) {
-                                    TagLabel(text: "个性化", color: Theme.warn)
-                                    Text(r.text).font(.subheadline).foregroundStyle(Theme.text)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                    PlayButton(text: r.text)
-                                }
-                                Text("（复习词：\(([r.target] + (r.recall?.split(separator: ",").map(String.init) ?? [])).joined(separator: "、"))）")
-                                    .font(.caption).foregroundStyle(Theme.muted)
-                                if let zh = r.zh, !zh.isEmpty {
-                                    Text(zh).font(.footnote).foregroundStyle(Theme.muted)
-                                }
-                            }
-                        }
-                    }
-                }
-                .padding(.top, 12)
-            }
-        }
-        // 底部行动区钉死拇指区
-        .safeAreaInset(edge: .bottom) {
-            VStack(spacing: 8) {
-                if dailyPlan.duePlanned > 0 || dailyPlan.newPlanned > 0 {
-                    PrimaryButton(title: "继续今日任务（复习 \(dailyPlan.duePlanned) · 新词 \(dailyPlan.newPlanned)）→") {
-                        let generation = app.routeGeneration, owner = app.auth
-                        Task {
-                            let ready = await app.buildQueue()
-                            guard app.routeGeneration == generation, app.auth == owner else { return }
-                            if ready { app.route = .session }
-                            else { genStatus = "任务加载失败，请返回主页检查网络后重试" }
-                        }
-                    }
-                } else if dailyPlan.dueAvailable > 0 && remainingCapacity == 0 {
-                    Text("今日已达上限，还有 \(dailyPlan.dueAvailable) 词到期；可在设置中调整上限。")
+                    let counts = StudyEngine.dailyCounts(app.S, day: DayUtil.today())
+                    Text("今日 \(counts.total) / \(app.S.settings.dailyCap) 个不同词 · \(counts.attempts) 次练习")
                         .font(.caption).foregroundStyle(Theme.muted)
-                    GhostButton(title: "调整每日上限", color: Theme.accentLight) { app.route = .settings }
-                        .accessibilityIdentifier("adjust-daily-cap")
+                    if todayCount("probe") > 0 {
+                        Text("每日上限还计入 \(todayCount("probe")) 个水平探测词；同一单词当天只计一次。")
+                            .font(.caption).foregroundStyle(Theme.muted)
+                    }
+                    if dailyPlan.repeatPlanned > 0 {
+                        Text("还有 \(dailyPlan.repeatPlanned) 个今天学过的词需要按间隔再复习，不增加今日单词数。")
+                            .font(.caption).foregroundStyle(Theme.muted)
+                    }
+                    if app.dueLaterTodayCount(onlyCompleted: remainingCapacity == 0) > 0 && dailyPlan.duePlanned == 0 {
+                        Text("⏰ 今天晚些时候还有 \(app.dueLaterTodayCount(onlyCompleted: remainingCapacity == 0)) 个词到期，记得回来")
+                            .font(.caption).foregroundStyle(Theme.muted)
+                    }
+                } else if section == 1 {
+                    // v2.0 词级知识预测：预计认识词数 + 滞回级别 + 今日证据
+                    if app.S.calibrated, app.S.posterior != nil {
+                        let shown = app.S.track?.shownLevel ?? levelForPos(max(1, app.S.frontier))
+                        Text("预计认识 \(StudyEngine.expectedKnown(app.S)) 词（\(levelDisplayName(shown))），明天从 \(app.S.pointer) 附近发词")
+                            .font(.caption).foregroundStyle(Theme.accentLight)
+                        Text("今日有效水平证据：" + StudyEngine.effectiveEvidenceSummary(app.S, day: DayUtil.today()))
+                            .font(.caption).foregroundStyle(Theme.muted)
+                        if let note = app.S.track?.lastNote, !note.isEmpty {
+                            Text(note).font(.caption).foregroundStyle(Theme.muted)
+                        }
+                    } else {
+                        Text("完成定级后，这里会显示水平估计。")
+                    }
+                } else {
+                    Text("今日薄弱词 · 个性化例句")
+                        .font(.headline.weight(.bold)).foregroundStyle(Theme.text)
+                    Text(genStatus).font(.footnote).foregroundStyle(Theme.muted)
+                    ForEach(Array(genRows.enumerated()), id: \.offset) { _, r in
+                        VStack(alignment: .leading, spacing: 4) {
+                            HStack(alignment: .top, spacing: 8) {
+                                TagLabel(text: "个性化", color: Theme.warn)
+                                ReadingText(text: r.text, font: .subheadline, title: "完整例句").foregroundStyle(Theme.text)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                PlayButton(text: r.text)
+                            }
+                            Text("（复习词：\(([r.target] + (r.recall?.split(separator: ",").map(String.init) ?? [])).joined(separator: "、"))）")
+                                .font(.caption).foregroundStyle(Theme.muted)
+                            if let zh = r.zh, !zh.isEmpty {
+                                ReadingText(text: zh, font: .footnote, title: "完整译文").foregroundStyle(Theme.muted)
+                            }
+                        }
+                    }
                 }
-                GhostButton(title: "返回主页", color: Theme.muted) { app.route = .home }
+            }.id(section).padding(.top, 8)
+        }.padding(.horizontal, 12)
+            // 底部行动区钉死拇指区
+            .safeAreaInset(edge: .bottom) {
+                VStack(spacing: 8) {
+                    if dailyPlan.duePlanned > 0 || dailyPlan.newPlanned > 0 {
+                        PrimaryButton(title: "继续今日任务（复习 \(dailyPlan.duePlanned) · 新词 \(dailyPlan.newPlanned)）→") {
+                            let generation = app.routeGeneration, owner = app.auth
+                            Task {
+                                let ready = await app.buildQueue()
+                                guard app.routeGeneration == generation, app.auth == owner else { return }
+                                if ready { app.route = .session } else { genStatus = "任务加载失败，请返回主页检查网络后重试" }
+                            }
+                        }
+                    } else if dailyPlan.dueAvailable > 0 && remainingCapacity == 0 {
+                        Text("今日已达上限，还有 \(dailyPlan.dueAvailable) 词到期；可在设置中调整上限。")
+                            .font(.caption).foregroundStyle(Theme.muted)
+                        GhostButton(title: "调整每日上限", color: Theme.accentLight) { app.openSettings(.daily) }
+                            .accessibilityIdentifier("adjust-daily-cap")
+                    }
+                    GhostButton(title: "返回主页", color: Theme.muted) { app.route = .home }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background(.regularMaterial)
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.regularMaterial)
-        }
-        .task {
-            if !marked {
-                marked = true
-                app.markDayDone()
+            .task {
+                if !marked {
+                    marked = true
+                    app.markDayDone()
+                }
+                await app.autoPersonalize(
+                    onStatus: { s in genStatus = s },
+                    onRows: { rows in genRows = rows })
             }
-            await app.autoPersonalize(
-                onStatus: { s in genStatus = s },
-                onRows: { rows in genRows = rows })
-        }
     }
 }
 
