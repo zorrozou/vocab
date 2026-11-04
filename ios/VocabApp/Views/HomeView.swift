@@ -4,6 +4,7 @@ import SwiftUI
 struct HomeView: View {
     @Environment(AppState.self) private var app
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @AppStorage("coach.classic.interface.v1") private var classic=false
     @State private var starting = false
     @State private var startError = ""
 
@@ -24,8 +25,12 @@ struct HomeView: View {
             TopBar()
             ScrollView {
                 VStack(spacing: 14) {
-                    chips
+                    if classic {chips}
                     CoachHomeCard()
+                    if !classic {
+                        HStack {Text("词汇训练").font(.headline);Spacer()}.padding(.horizontal,16)
+                        chips
+                    }
                     if !app.studyNotice.isEmpty {
                         Text(app.studyNotice).font(.system(size: 14)).foregroundStyle(Theme.warn)
                             .accessibilityIdentifier("study-plan-notice")

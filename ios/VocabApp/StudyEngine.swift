@@ -760,7 +760,7 @@ enum StudyEngine {
         let since = DayUtil.addDays(today, -7)
         var seen = Set<String>()
         var out: [String] = []
-        for l in s.log where l.rating <= 2 && l.d >= since {
+        for l in s.log where l.kind != "shadow" && l.rating <= 2 && l.d >= since {
             if excludeMastered, let c = s.cards[l.word], isMastered(c) { continue }
             if seen.insert(l.word).inserted { out.append(l.word) }
         }

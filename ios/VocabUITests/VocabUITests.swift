@@ -10,21 +10,22 @@ final class VocabUITests: XCTestCase {
         let guest=app.buttons["先逛逛（游客模式）"]
         if guest.waitForExistence(timeout:4) {guest.tap()}
         if app.buttons["coach-enable"].exists {app.buttons["coach-enable"].tap()}
-        let begin=app.buttons["coach-start"]
-        XCTAssertTrue(begin.waitForExistence(timeout:10));begin.tap()
+        let bank=app.buttons["coach-bank"]
+        XCTAssertTrue(bank.waitForExistence(timeout:15));bank.tap()
         let transcript=app.buttons["coach-transcript"]
         XCTAssertTrue(transcript.waitForExistence(timeout:18));transcript.tap()
-        let wrong=app.buttons["室内"]
-        XCTAssertTrue(wrong.exists);wrong.tap()
+        let wrong=app.buttons["今天必须取走"]
+        XCTAssertTrue(wrong.waitForExistence(timeout:5));wrong.tap()
         XCTAssertTrue(app.staticTexts["一起看这条线索"].waitForExistence(timeout:10))
         app.buttons["coach-next"].tap()
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format:"label CONTAINS %@", "带着线索再试")).firstMatch.waitForExistence(timeout:5))
+        XCTAssertTrue(app.staticTexts["今天是唯一可取的日子吗？"].waitForExistence(timeout:8))
         app.buttons["暂停并返回首页"].tap()
         app.buttons["切回经典界面"].tap()
-        XCTAssertTrue(app.buttons["coach-enable"].waitForExistence(timeout:5))
-        app.buttons["coach-enable"].tap()
-        begin.tap()
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format:"label CONTAINS %@", "带着线索再试")).firstMatch.waitForExistence(timeout:15))
+        XCTAssertTrue(app.buttons["coach-enable"].waitForExistence(timeout:5));app.buttons["coach-enable"].tap()
+        app.buttons["coach-start"].tap()
+        XCTAssertTrue(app.staticTexts["今天是唯一可取的日子吗？"].waitForExistence(timeout:15))
+        app.buttons["coach-option-0"].tap()
+        XCTAssertTrue(app.buttons["coach-next"].waitForExistence(timeout:10));app.buttons["coach-next"].tap()
         app.buttons["coach-option-0"].tap()
         XCTAssertTrue(app.buttons["coach-next"].waitForExistence(timeout:10));app.buttons["coach-next"].tap()
         XCTAssertTrue(transcript.waitForExistence(timeout:8));transcript.tap()

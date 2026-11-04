@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>词航 · 艾宾浩斯背单词</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%221024%22%20height%3D%221024%22%20viewBox%3D%220%200%201024%201024%22%3E%0A%20%20%3Cdefs%3E%0A%20%20%20%20%3ClinearGradient%20id%3D%22blue%22%20x2%3D%220%22%20y2%3D%221%22%3E%0A%20%20%20%20%20%20%3Cstop%20stop-color%3D%22%23397df4%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23164ab8%22%2F%3E%0A%20%20%20%20%3C%2FlinearGradient%3E%0A%20%20%3C%2Fdefs%3E%0A%20%20%3Cpath%20fill%3D%22url%28%23blue%29%22%20d%3D%22M0%200h1024v1024H0z%22%2F%3E%0A%20%20%3Cpath%20fill%3D%22%23fff%22%20d%3D%22M202%20352c108-34%20200-16%20286%2044v344c-86-60-178-78-286-44V352zm620%200c-108-34-200-16-286%2044v344c86-60%20178-78%20286-44V352z%22%2F%3E%0A%20%20%3Cpath%20fill%3D%22%238edaff%22%20d%3D%22m512%20156%20106%20176-106-38-106%2038%20106-176z%22%2F%3E%0A%20%20%3Cpath%20fill%3D%22none%22%20stroke%3D%22%23c6e2ff%22%20stroke-width%3D%2216%22%20stroke-linecap%3D%22round%22%20d%3D%22M264%20446c58-9%20110%200%20162%2028m-162%2062c58-9%20110%200%20162%2028m172-90c52-28%20104-37%20162-28m-162%20118c52-28%20104-37%20162-28%22%2F%3E%0A%3C%2Fsvg%3E%0A">
+<link rel="stylesheet" href="./studio.css">
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; margin: 0; -webkit-tap-highlight-color: transparent; }
@@ -106,7 +107,7 @@
 </head>
 <body>
 <header>
-  <div class="logo">词航<small>艾宾浩斯背单词</small><span id="userTag" style="font-size:11px;color:#9da6b2;margin-left:8px"></span></div>
+  <div class="logo">词航<small class="classic-subtitle">艾宾浩斯背单词</small><small class="studio-subtitle" hidden>个人英语教练</small><span id="userTag" style="font-size:11px;color:#9da6b2;margin-left:8px"></span></div>
   <div class="row" style="margin:0;gap:6px;align-items:center">
     <span class="muted" id="dateStr"></span>
     <button class="icon" id="btnUser" aria-label="账号与同步" style="flex:0 0 auto;padding:6px 10px;font-size:13px;border-radius:8px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg></button>
@@ -1406,7 +1407,7 @@ async function buildQueue(stillOnPage = () => true, retrySharedSync = true) {
 
 /* 队列确定后立即后台预生成：例句三句套装 + TTS 音频预热，不等翻卡 */
 function prefetchDay(news, reviewWords) {
-  const weak = [...new Set(S.log.filter(l => l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))].slice(0, 15).join(",");
+  const weak = [...new Set(S.log.filter(l => l.kind !== "shadow" && l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))].slice(0, 15).join(",");
   const jobs = news.map(w =>
     fetch(`${API}/api/v1/sentence/trio?word=${encodeURIComponent(w.word)}&weak=${encodeURIComponent(weak)}&cap=${S.pointer + 10}`)
       .then(r => r.json())
@@ -1804,7 +1805,7 @@ function logExposure(word, source, text, played = false, score = null) {
 }
 function logSentenceExposures(text, source, played = false) {
   if (!text) return;
-  const weak = [...new Set(S.log.filter(l => l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))];
+  const weak = [...new Set(S.log.filter(l => l.kind !== "shadow" && l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))];
   const lower = text.toLowerCase();
   for (const w of weak) {
     const esc = w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -1903,7 +1904,7 @@ async function showLearn(item) {
   async function loadTrio() {
     const status = $("#trioStatus");
     if (status) status.textContent = "正在补充例句…";
-    const weak = [...new Set(S.log.filter(l => l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))].slice(0, 15).join(",");
+    const weak = [...new Set(S.log.filter(l => l.kind !== "shadow" && l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))].slice(0, 15).join(",");
     try {
       const response = await fetch(`${API}/api/v1/sentence/trio?word=${encodeURIComponent(w.word)}&weak=${encodeURIComponent(weak)}&cap=${S.pointer + 10}`);
       if (!response.ok) throw new Error("例句请求失败");
@@ -1940,7 +1941,7 @@ async function showLearn(item) {
   // 巩固句：新词例句 40% 概率织入近期薄弱词（每天 ≤3 次，先查句库共现再生成）
   const wk = today();
   if (S.weaveDay !== wk) { S.weaveDay = wk; S.weaveCount = 0; }
-  const weakPool = [...new Set(S.log.filter(l => l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))]
+  const weakPool = [...new Set(S.log.filter(l => l.kind !== "shadow" && l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))]
     .filter(x => x !== w.word && !(S.cards[x] && isMastered(S.cards[x])));
   if ((!AUTH || AUTH.accountId) && !personal && weakPool.length && S.weaveCount < 3 && Math.random() < 0.4) {
     const weakW = weakPool[Math.floor(Math.random() * weakPool.length)];
@@ -2429,7 +2430,7 @@ async function autoPersonalize() {
   if (AUTH && !AUTH.accountId) return;
   const date = today(), state = S, owner = deviceId();
   const status = message => { const el = document.querySelector("#genOut"); if (el && S === state) el.textContent = message; };
-  const weakToday = [...new Set(state.log.filter(l => l.d === date && l.rating <= 2).map(l => l.word))]
+  const weakToday = [...new Set(state.log.filter(l => l.kind !== "shadow" && l.d === date && l.rating <= 2).map(l => l.word))]
     .filter(w => { const c = state.cards[w]; return !c || !isMastered(c); });
   const weakKey = [...weakToday].sort().join(",");
   if (!weakToday.length) {

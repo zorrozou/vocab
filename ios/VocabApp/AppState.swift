@@ -85,6 +85,7 @@ final class AppState {
     }
     private(set) var routeGeneration: UInt64 = 0
     var coachTrack = "life"
+    var coachEdition = 2
     var session = Session()
     var studyNotice = ""
     private var sharedStudyPlan: SharedStudyPlan?
@@ -1606,11 +1607,9 @@ final class AppState {
         }
     }
 
-    /// 跟读结果入档：完整度 <60 记薄弱（进薄弱词管线，当晚就定制例句），≥60 记一次影子练习
-    /// 让跟读真正参与学习决策，而不是"白评了"
+    /// 跟读只记录练习。转写覆盖率无法证明词义遗忘。
     func recordShadow(word: String, result: ShadowResult) {
-        let rating = result.completeness < 60 ? 1 : 3
-        S.log.append(LogEntry(d: DayUtil.today(), word: word, rating: rating, kind: "shadow"))
+        S.log.append(LogEntry(d: DayUtil.today(), word: word, rating: 3, kind: "shadow"))
         logExposure(word: word, source: "shadow", text: word, played: true, score: result.completeness)
         save()
     }
@@ -1972,7 +1971,7 @@ final class AppState {
         if let auth, auth.accountId == nil { onStatus("请重新登录并核对旧存档"); return }
         let date = DayUtil.today(), owner = deviceId(), slot = slotKey
         let weakToday = StudyEngine.recentWeakWords(S, today: date)
-            .filter { w in S.log.contains(where: { $0.d == date && $0.word == w && $0.rating <= 2 }) }
+            .filter { w in S.log.contains(where: { $0.d == date && $0.word == w && $0.rating <= 2 && $0.kind != "shadow" }) }
         let weakKey = weakToday.sorted().joined(separator: ",")
         guard !weakToday.isEmpty else {
             S.personalizedDay = date; S.personalizedWeak = ""; save()

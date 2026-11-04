@@ -104,12 +104,11 @@ struct ShadowResultDisplay: View {
                 Text("\(result.completeness)%")
                     .font(.system(size: 17, weight: .bold))
                     .foregroundStyle(result.completeness >= 80 ? Theme.ok : Theme.warn)
+                if let confidence=result.confidence {
                 Text("置信度").font(.system(size: 12)).foregroundStyle(Theme.muted)
-                Text("\(result.confidence)%")
+                Text("\(confidence)%")
                     .font(.system(size: 17, weight: .bold))
-                    .foregroundStyle(result.confidence >= 75 ? Theme.ok : Theme.warn)
-                if result.completeness < 60 {
-                    Text("已记入薄弱词").font(.system(size: 11)).foregroundStyle(Theme.bad)
+                    .foregroundStyle(confidence >= 75 ? Theme.ok : Theme.warn)
                 }
             }
             Text("完整度是识别到的目标词比例；识别置信度不代表发音准确度。")

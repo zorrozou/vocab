@@ -569,7 +569,15 @@ app = FastAPI(title="vocab-api", version="0.2.0", on_startup=[init_db, start_per
 mount_auth(app)
 from app.coach import mount_coach
 mount_coach(app, lambda: PERSONAL_DB, personal_owner,
-            lambda: not (DATA_DIR / "coach.disabled").exists(), lambda prompt: llm(prompt))
+            lambda: not (DATA_DIR / "coach.disabled").exists(), lambda prompt: llm(prompt),
+            author=lambda prompt: hunyuan_chat(prompt,temperature=0.55,max_tokens=3800),
+            assess=lambda prompt: hunyuan_chat(prompt,temperature=0.15,max_tokens=360),
+            valid_word=lambda w: w in WORD2ID)
+
+
+@app.get("/studio.css", include_in_schema=False)
+def studio_style():
+    return FileResponse(STATIC_DIR / "studio.css", media_type="text/css",headers={"Cache-Control":"no-cache"})
 
 
 @app.get("/coach.js", include_in_schema=False)

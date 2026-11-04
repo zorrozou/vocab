@@ -2161,7 +2161,7 @@ actor APIClient {
     }
     func coach<T:Decodable>(_ action:String,_ body:CoachBody,token expected:String?) async throws -> T {
         guard token==expected else { throw APIError(message:"账号已切换") }
-        return try await request("POST","/api/v1/coach/"+action,body:body,timeout:action=="explanation" ? 45 : 9)
+        return try await request("POST","/api/v1/coach/"+action,body:body,timeout:action=="prepare" ? 115 : ["reply","explanation"].contains(action) ? 50 : 9)
     }
     func personalize(_ body: PersonalizeIn, expectedToken: String? = nil, enforceSession: Bool = false) async throws -> PersonalizeResponse {
         try requireToken(expectedToken, enforceSession: enforceSession)

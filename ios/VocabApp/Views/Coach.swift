@@ -11,6 +11,15 @@ struct CoachBody: Encodable {
     var replay: Bool?
     var kind:String?
     var event:String?
+    var edition:Int?
+    var goal:String?
+    var level:Int?
+    var due:Int?
+    var activity:String?
+    var study:Bool?
+    var words:[String]?
+    var text:String?
+    var attempt:Int?
 }
 struct CoachClockReply: Decodable {
     let day:String
@@ -20,17 +29,22 @@ struct CoachClockReply: Decodable {
 }
 struct CoachTask: Decodable {
     let id, passage, question, kind, purpose, hint:String
+    let title:String?
     let options:[String]
     let shown:Bool
     let plays:Int
 }
 struct CoachResult: Decodable {
+    let id:String
+    let response:StudioReply?
     let ok:Bool
     let mode, explanation, reply, expected:String
 }
 struct CoachLesson: Decodable {
     let day, focus, reason, track:String
     let step, count, independent:Int
+    let title,source,debrief:String?
+    let words:[String]?
     let task:CoachTask?
     let last:CoachResult?
 }
@@ -45,6 +59,7 @@ final class CoachClock {
     private var boundToken:String?
     private var worker:Task<Void,Never>?
     var up: TimeInterval { ProcessInfo.processInfo.systemUptime }
+    var isClass=false
     func start(token:String?) {
         if !client.isEmpty && boundToken != token { stop() }
         guard client.isEmpty else { return }
@@ -54,7 +69,7 @@ final class CoachClock {
             while !Task.isCancelled && id==client {
                 let sent=up
                 do {
-                    let reply:CoachClockReply = try await APIClient.shared.coach("clock",CoachBody(client:id,action:"pulse"),token:token)
+                    let reply:CoachClockReply = try await APIClient.shared.coach("clock",CoachBody(client:id,action:"pulse",activity:isClass ? "class":"vocab"),token:token)
                     guard !Task.isCancelled,client==id else {
                         await self.release(id,token);return
                     }
@@ -140,33 +155,9 @@ struct CoachTimeGate: ViewModifier {
             } else { content }
         }
         .task(id:"\(active)-\(scene == .active)-\(app.auth?.accountId ?? "guest")"){
-            if active && scene == .active { clock.start(token:app.auth?.token) } else {clock.stop()}
+            if active && scene == .active { clock.isClass=app.route == .coach;clock.start(token:app.auth?.token) } else {clock.stop()}
         }
         .onDisappear{clock.stop()}
-    }
-}
-
-struct CoachHomeCard:View {
-    @Environment(AppState.self) var app
-    @State private var track="life"
-    @State private var available=true
-    @AppStorage("coach.classic.interface.v1") private var classic=false
-    var body:some View {
-        Group {
-        if !available {EmptyView()}
-        else if classic {
-            Button("开启听读教练"){classic=false}.accessibilityIdentifier("coach-enable")
-        } else {
-            Card {
-                Text("今日教练课").font(.headline)
-                Text("听一则消息，读懂变化，再决定怎样回应。约 3 分钟。").font(.subheadline)
-                Picker("课程情境",selection:$track){Text("日常生活").tag("life");Text("工作沟通").tag("work")}.pickerStyle(.segmented)
-                Button("进入今日教练课"){app.coachTrack=track;app.route = .coach}.accessibilityIdentifier("coach-start")
-                Text("听读和背词共用 30 分钟，主动延长后最多 40 分钟。").font(.caption).foregroundStyle(.secondary)
-                Button("切回经典界面"){classic=true}.font(.caption)
-            }
-        }
-        }.task { if let value=try? await APIClient.shared.coachAvailable() {available=value} }
     }
 }
 
@@ -181,26 +172,53 @@ struct CoachLessonView: View {
     @State private var plays=0
     @State private var notice=""
     @State private var aiText=""
+    @State private var draft=""
+    @State private var reply:StudioReply?
+    @State private var revising=false
+    @State private var recording=UUID()
+    private func dictate(_ id:String) async {
+        if app.speech.state == .listening {app.speech.stopCapture(finalize:true);return}
+        let attempt=UUID();recording=attempt
+        let token=app.auth?.token
+        let allowed=await SpeechService.requestPermissions()
+        guard app.route == .coach,app.auth?.token==token,
+              feedback,lesson?.last?.id==id,recording==attempt,clock.until>clock.up else{return}
+        guard allowed else {notice="未获得听写权限，可直接打字。";return}
+        app.speech.start(target:""){result in
+            guard recording==attempt,app.route == .coach,app.auth?.token==token,feedback,
+                  lesson?.last?.id==id,clock.until>clock.up else{return}
+            if let text=result?.text {draft=String(text.prefix(180))}
+            else {notice="本机未取得转写，可直接打字。"}
+        }
+    }
     private func send(_ action:String,_ choice:Int?=nil,aid:String?=nil) async {
         guard !busy,app.route == .coach,!clock.client.isEmpty,clock.until>clock.up else {return}
         let token=app.auth?.token,id=clock.client
         busy=true;notice=""
         defer {busy=false}
         var b=CoachBody(client:id,track:app.coachTrack)
+        StudioTheme.context(&b,app);b.edition=app.coachEdition
         if let t=lesson?.task, let choice {
             b.task=t.id;b.choice=choice;b.replay=plays>1
             b.mode = !t.hint.isEmpty ? "assisted" : t.kind=="read" ? "read" : shown ? "assisted" : "listen"
         }
         if let aid,let t=lesson?.task {b.task=t.id;b.kind=aid;b.event=UUID().uuidString}
         do{
-            if action=="explanation" {
+            if action=="reply" {
+                b.attempt=(reply ?? lesson?.last?.response)?.attempt==1 ? 2 : 1
+                b.text=draft.trimmingCharacters(in:.whitespacesAndNewlines);b.task=lesson?.last?.id
+                let result:StudioReply=try await APIClient.shared.coach(action,b,token:token)
+                guard id==clock.client,token==app.auth?.token else{return}
+                reply=result;revising=false
+            } else if action=="explanation" {
                 let r:CoachExplanation=try await APIClient.shared.coach(action,b,token:token)
                 guard id==clock.client,token==app.auth?.token else{return}
                 aiText=(r.ai ? "AI 教练 · " : "课程题解 · ")+r.text
             }else{
+                if action=="undo" {b.task=lesson?.last?.id}
                 let r:CoachLesson=try await APIClient.shared.coach(action,b,token:token)
                 guard id==clock.client,token==app.auth?.token else{return}
-                lesson=r;feedback=choice != nil;sample=false;shown=r.task?.shown ?? false;plays=r.task?.plays ?? 0;aiText=""
+                lesson=r;feedback=choice != nil;sample=false;shown=r.task?.shown ?? false;plays=r.task?.plays ?? 0;aiText="";draft="";reply=nil;revising=false
             }
         }catch{notice=error.localizedDescription}
     }
@@ -209,7 +227,11 @@ struct CoachLessonView: View {
             VStack(alignment:.leading,spacing:16){
                 Button("暂停并返回首页"){app.audio.stop();app.route = .home}
                 if let l=lesson {
-                    Text(l.focus).font(.title2.bold())
+                    Text((l.source ?? "教研课程")+" / "+(StudioTheme.names[l.track] ?? "听读工作室")).font(.caption.bold()).foregroundStyle(StudioTheme.mint)
+                    Text(l.task?.title ?? l.title ?? l.focus).font(.title.bold())
+                    ProgressView(value:Double(l.step),total:Double(l.count)).tint(StudioTheme.mint)
+                    Text(l.focus+" · 已完成 \(l.step) / \(l.count)").font(.caption)
+                    if let words=l.words,!words.isEmpty {Text("课中复现 · "+words.joined(separator:" / ")).font(.caption)}
                     if feedback,let a=l.last {
                         Text(a.ok ? "理解正确" : "一起看这条线索").font(.headline)
                         Text(a.explanation);Text("正确行动 · "+a.expected)
@@ -217,24 +239,49 @@ struct CoachLessonView: View {
                         if sample { Text(a.reply) }
                         Button("请 AI 再讲一句"){Task{await send("explanation")}}
                         if !aiText.isEmpty {Text(aiText)}
-                        Button(l.task==nil ? "看本课小结":"继续"){feedback=false}.accessibilityIdentifier("coach-next")
+                        if app.coachEdition==2 {
+                            if let result=reply ?? a.response,!revising {
+                                Text(result.verdict).bold();Text(result.tip);Text("参考 · "+result.example).font(.caption)
+                                if (result.attempt ?? 0)<2 {Button(result.attempt==nil ? "重新尝试反馈":"改一句再试"){draft="";revising=true}}
+                            }else{
+                                TextField("用一句英语回应（可跳过）",text:$draft,axis:.vertical)
+                                    .textFieldStyle(.roundedBorder).onChange(of:draft){_,v in if v.count>180 {draft=String(v.prefix(180))}}
+                                if app.speech.onDeviceAvailable {
+                                    Button(app.speech.state == .listening ? "结束听写":"口述一句，先核对文字"){Task{await dictate(a.id)}}
+                                }
+                                Text("点击后发送文字取得建议，只保存反馈，不计词汇掌握。").font(.caption)
+                                Button("看看我的回应"){Task{await send("reply")}}.disabled(draft.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty || busy)
+                            }
+                            Button("撤销这次选择"){Task{await send("undo")}}.font(.caption).disabled(busy)
+                        }
+                        Button(l.task==nil ? "看本课小结":"继续"){feedback=false}.disabled(busy).accessibilityIdentifier("coach-next")
                     }else if let t=l.task{
                         Text("\(t.purpose) · \(l.step+1)/\(l.count)").font(.headline);Text(l.reason).font(.subheadline)
                         if t.kind=="listen" {
                             Button(plays==0 ? "播放消息" : "再听一遍"){app.audio.play(t.passage,voice:app.S.settings.voice)}
                             Button("看原文"){Task{await send("aid",aid:"transcript")}}.accessibilityIdentifier("coach-transcript")
                         }
-                        if t.kind=="read" || shown {Text(t.passage).font(.title3)}
+                        if t.kind=="read" || shown {Text(t.passage).font(.title3).padding(14).frame(maxWidth:.infinity,alignment:.leading).background(StudioTheme.panel,in:RoundedRectangle(cornerRadius:12))}
                         if !t.hint.isEmpty {Text(t.hint)}
                         Text(t.question).bold()
                         ForEach(t.options.indices,id:\.self){i in
                             Button(t.options[i]){app.audio.stop();Task{await send("answer",i)}}
-                                .disabled(t.kind=="listen" && !shown && plays==0).accessibilityIdentifier("coach-option-\(i)")
+                                .buttonStyle(.bordered).tint(StudioTheme.mint).disabled(busy || (t.kind=="listen" && !shown && plays==0)).accessibilityIdentifier("coach-option-\(i)")
                         }
                     }else{
                         Text("今日教练课完成").font(.headline)
                         Text("本课 \(l.step) 道任务，独立理解 \(l.independent) 道。")
-                        Text(l.last?.ok==true && l.last?.mode != "assisted" ? "下一课换一个理解重点。" : "下一课将换个情境再验证。")
+                        Button("接着练今天的词汇"){
+                            if !app.S.calibrated {app.route = .placement;return}
+                            let identity=app.auth,generation=app.routeGeneration
+                            Task {
+                                let ready=await app.buildQueue()
+                                guard ready,app.auth==identity,app.routeGeneration==generation,app.route == .coach else{return}
+                                if app.session.queue.isEmpty {app.markDayDone()}
+                                app.route = .session
+                            }
+                        }.buttonStyle(.borderedProminent)
+                        Text(l.debrief ?? (l.last?.ok==true && l.last?.mode != "assisted" ? "下一课换一个理解重点。" : "下一课将换个情境再验证。"))
                     }
                 }else if notice.isEmpty {ProgressView("正在准备课程…")}
                 if !notice.isEmpty {Text(notice);Button("取回今日课程"){Task{await send("lesson")}}}
@@ -245,7 +292,7 @@ struct CoachLessonView: View {
         .onChange(of:app.audio.playingText){_,text in
             if let t=lesson?.task,t.kind=="listen",text==t.passage {Task {await send("aid",aid:"play")}}
         }
-        .onDisappear{app.audio.stop()}
+        .onDisappear{recording=UUID();app.speech.stopCapture(finalize:false);app.audio.stop()}
         .modifier(CoachTimeGate(active:lesson==nil || lesson?.task != nil || feedback))
     }
 }

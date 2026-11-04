@@ -7,7 +7,13 @@ const {chromium} = require('playwright');
     const errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.goto('http://127.0.0.1:18765/');
     await page.locator('#wGuest').click();
-    await page.getByRole('button',{name:'进入今日教练课'}).click();
+    // Simulate an unfinished lesson from the original client version.
+    await page.evaluate(async()=>{
+      const headers={...await personalHeaders(),'Content-Type':'application/json'},client=crypto.randomUUID();
+      const post=async(path,more)=>{const r=await fetch(API+'/api/v1/coach/'+path,{method:'POST',headers,body:JSON.stringify({client,offset:-new Date().getTimezoneOffset(),...more})});if(!r.ok)throw Error('fixture seed failed');};
+      await post('clock',{action:'pulse'});await post('lesson',{track:'life'});await post('clock',{action:'stop'});home();
+    });
+    await page.getByRole('button',{name:'接着完成上一版的课'}).click();
     await page.getByRole('button',{name:'看原文'}).click();
     await page.getByRole('button',{name:'室内',exact:true}).click();
     await page.getByText('一起看这条线索').waitFor();
@@ -18,7 +24,7 @@ const {chromium} = require('playwright');
     await page.getByRole('button',{name:'开启听读教练'}).waitFor();
     await page.reload();
     await page.getByRole('button',{name:'开启听读教练'}).click();
-    await page.getByRole('button',{name:'进入今日教练课'}).click();
+    await page.getByRole('button',{name:'接着完成上一版的课'}).click();
     await page.getByText('带着线索再试',{exact:false}).waitFor();
     await page.locator('#app button.opt').first().click();
     await page.getByRole('button',{name:'继续',exact:true}).click();

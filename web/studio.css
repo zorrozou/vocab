@@ -1,0 +1,44 @@
+/* Personal English studio; leave the classic vocabulary presentation independent. */
+.studio {--sea:#78e0c6;--ink:#eaf3f3;--faint:#a7babc;--line:#30444a;color:var(--ink);text-align:left}
+.studio-shell {border:1px solid var(--line);border-radius:22px;background:#131d23;margin:15px 0;overflow:hidden}
+.studio-nav,.studio-actions,.studio-row,.studio-track {display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.studio-nav {padding:10px 14px;background:#10191e;border-bottom:1px solid var(--line)}
+.studio-nav button,.studio .quiet {border-radius:10px;background:transparent;border:1px solid transparent;color:var(--faint);min-height:44px;padding:8px 13px;flex:0 auto}
+.studio-nav button[aria-pressed="true"],.studio .quiet:hover {color:var(--sea);background:#203739;border-color:#385b59}
+.studio-hero {padding:24px 24px 20px;background:linear-gradient(135deg,#143432 0%,#17282e 66%,#202938 100%)}
+.studio-kicker {color:var(--sea);font-size:12px;font-weight:700;letter-spacing:.08em}
+.studio h2 {color:var(--ink);font-weight:700;font-size:clamp(22px,4vw,32px);line-height:1.35;margin:8px 0}
+.studio h3 {font-size:17px;margin:8px 0;color:var(--ink)}
+.studio p {line-height:1.65}.studio .muted {color:var(--faint)}
+.studio-chip {display:inline-block;padding:3px 9px;border:1px solid #476065;border-radius:20px;color:#c0dbd8;font-size:12px}
+.studio .primary {background:var(--sea);color:#082620;border:0;border-radius:11px;min-height:46px;padding:10px 18px;font-weight:700}
+.studio .secondary {color:#d8eae8;background:#24383b;border:1px solid #436062;border-radius:11px;min-height:46px;padding:10px 16px}
+.studio-actions {margin-top:15px}.studio-body {padding:16px 24px}
+.studio-grid {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin:11px 0}
+.studio-metric {background:#10191e;border:1px solid #2c3d44;border-radius:12px;padding:10px;display:flex;flex-direction:column;font-size:13px;color:var(--faint)}
+.studio-metric strong {font-size:21px;color:var(--ink);line-height:1.5}
+.studio-line {padding:10px 0;border-bottom:1px solid var(--line);line-height:1.6}
+.studio-lesson {padding:22px;background:#142026;border:1px solid #34494c;border-radius:20px;margin:12px 0}
+.studio-lesson blockquote {font-size:clamp(19px,3vw,24px);line-height:1.5;background:#0e191d;padding:16px;margin:15px 0;border-left:3px solid var(--sea)}
+.studio-lesson .opt {min-height:50px;border-color:#3a5055;background:#1d2d32}
+.studio-lesson details {margin:12px 0;padding:12px;border:1px solid var(--line);border-radius:12px}
+.studio-lesson textarea {width:100%;box-sizing:border-box;border:1px solid #486168;border-radius:10px;color:var(--ink);background:#0f191d;padding:10px;font:inherit;min-height:66px}
+.studio-steps {display:flex;gap:4px;margin:12px 0}.studio-steps i {height:4px;flex:1;background:#33464d;border-radius:4px}.studio-steps i.on{background:var(--sea)}
+@media(max-width:480px){.studio-hero,.studio-body,.studio-lesson{padding:16px}.studio-nav{gap:3px;padding:6px}.studio-nav button{padding:8px 10px}.studio-actions button{flex:1 1 auto}}
+
+@media(min-width:860px){
+ body.studio-home{display:grid;grid-template-columns:minmax(0,1.56fr) minmax(280px,.82fr);column-gap:22px;max-width:1100px}
+ body.studio-home>header,body.studio-home>#securityNotice,body.studio-home>#syncStatus,body.studio-home>#chips,body.studio-home>.foot{grid-column:1/-1}
+ body.studio-home>#coachControls{grid-column:1;align-self:start}
+ body.studio-home>#app{grid-column:2;align-self:start}
+ body.studio-home>#app .card{margin-top:15px}
+}
+
+.studio-route{display:flex;align-items:flex-start;margin-top:18px;max-width:410px}
+.studio-route span{position:relative;flex:1;display:flex;align-items:center;gap:6px;color:#c7e6df}
+.studio-route span:not(:last-child)::after{content:"";height:1px;background:#51756e;flex:1;margin:0 6px}
+.studio-route b{font:600 11px ui-monospace,monospace;border:1px solid #577f76;padding:3px;border-radius:5px}
+.studio-allocation{display:flex;gap:3px;height:5px;overflow:hidden;border-radius:4px}
+.studio-allocation i:nth-child(1){background:#82ddc7}.studio-allocation i:nth-child(2){background:#709fd6}.studio-allocation i:nth-child(3){background:#e4c992}
+body.studio-home .classic-subtitle{display:none}body.studio-home .studio-subtitle[hidden]{display:inline-block!important;color:#9dc6bf}
+@media(max-width:520px){body.studio-home #dateStr{display:none}body.studio-home header .logo small{display:block;margin:0}body.studio-home #userTag{display:none!important}}

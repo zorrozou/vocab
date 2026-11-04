@@ -6,7 +6,7 @@ import Speech
 struct ShadowResult {
     let text: String
     let completeness: Int             // 词命中率 %（对齐 web 算法：目标句词被覆盖比例）
-    let confidence: Int               // 识别置信度 %
+    let confidence: Int?               // 识别置信度 %
     let words: [(text: String, confidence: Float)]   // 逐词置信度（逐词标色用）
 }
 
@@ -156,7 +156,7 @@ final class SpeechService: NSObject {
         // Each recognized occurrence can cover only one target occurrence.
         let pct = shadowCompleteness(target: target, recognized: text)
         // 置信度：词级置信度均值（0~1）；同时产出逐词置信度用于标色
-        var conf = 70
+        var conf: Int? = nil
         var words: [(text: String, confidence: Float)] = []
         if let segments, !segments.isEmpty {
             let avg = segments.map { $0.confidence }.reduce(0, +) / Float(segments.count)
