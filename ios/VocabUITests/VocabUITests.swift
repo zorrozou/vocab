@@ -2,6 +2,70 @@ import XCTest
 
 /// Run only against the isolated loopback fixture; never touches a production account.
 final class VocabUITests: XCTestCase {
+    func testListeningCoachAndClassicSwitch() throws {
+        continueAfterFailure = false
+        let app=XCUIApplication()
+        app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765"
+        app.launch()
+        let guest=app.buttons["先逛逛（游客模式）"]
+        if guest.waitForExistence(timeout:4) {guest.tap()}
+        if app.buttons["coach-enable"].exists {app.buttons["coach-enable"].tap()}
+        let begin=app.buttons["coach-start"]
+        XCTAssertTrue(begin.waitForExistence(timeout:10));begin.tap()
+        let transcript=app.buttons["coach-transcript"]
+        XCTAssertTrue(transcript.waitForExistence(timeout:18));transcript.tap()
+        let wrong=app.buttons["室内"]
+        XCTAssertTrue(wrong.exists);wrong.tap()
+        XCTAssertTrue(app.staticTexts["一起看这条线索"].waitForExistence(timeout:10))
+        app.buttons["coach-next"].tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format:"label CONTAINS %@", "带着线索再试")).firstMatch.waitForExistence(timeout:5))
+        app.buttons["暂停并返回首页"].tap()
+        app.buttons["切回经典界面"].tap()
+        XCTAssertTrue(app.buttons["coach-enable"].waitForExistence(timeout:5))
+        app.buttons["coach-enable"].tap()
+        begin.tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format:"label CONTAINS %@", "带着线索再试")).firstMatch.waitForExistence(timeout:15))
+        app.buttons["coach-option-0"].tap()
+        XCTAssertTrue(app.buttons["coach-next"].waitForExistence(timeout:10));app.buttons["coach-next"].tap()
+        XCTAssertTrue(transcript.waitForExistence(timeout:8));transcript.tap()
+        app.buttons["coach-option-0"].tap()
+        XCTAssertTrue(app.buttons["coach-next"].waitForExistence(timeout:10));app.buttons["coach-next"].tap()
+        XCTAssertTrue(app.staticTexts["今日教练课完成"].waitForExistence(timeout:8))
+    }
+
+    func testCoachTimeLimitInClassic() throws {
+        let app=XCUIApplication()
+        app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765"
+        app.launch()
+        let guest=app.buttons["先逛逛（游客模式）"]
+        if guest.waitForExistence(timeout:3) {guest.tap()}
+        func setBoundary(_ n:Int) throws {
+            var request=URLRequest(url:URL(string:"http://127.0.0.1:18765/__fixture/clock/\(n)")!)
+            request.httpMethod="POST"
+            let ready=expectation(description:"seed isolated clock")
+            URLSession.shared.dataTask(with:request){_,r,_ in
+                XCTAssertEqual((r as? HTTPURLResponse)?.statusCode,200);ready.fulfill()
+            }.resume()
+            wait(for:[ready],timeout:8)
+        }
+        if app.buttons["切回经典界面"].exists {app.buttons["切回经典界面"].tap()}
+        let start=app.buttons["开始定级"]
+        XCTAssertTrue(start.waitForExistence(timeout:8))
+        start.tap()
+        // Once a lease exists, the next heartbeat will see the injected boundary.
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format:"label CONTAINS %@", "今日练习")).firstMatch.waitForExistence(timeout:15))
+        try setBoundary(1799)
+        let extend=app.buttons["再练最多 10 分钟"]
+        XCTAssertTrue(extend.waitForExistence(timeout:25));extend.tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format:"label CONTAINS %@", "/ 40 分钟")).firstMatch.waitForExistence(timeout:15))
+        try setBoundary(2399)
+        XCTAssertTrue(app.staticTexts["今天已到 40 分钟，明天再继续。"].waitForExistence(timeout:25))
+        XCTAssertFalse(extend.exists)
+        app.buttons["暂停并返回首页"].tap()
+        try setBoundary(0)
+        XCTAssertTrue(app.buttons["coach-enable"].exists)
+    }
+
     func testGuestPlacementAndFirstStudy() throws {
         continueAfterFailure = false
         let app = XCUIApplication()

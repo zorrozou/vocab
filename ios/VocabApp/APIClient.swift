@@ -1397,7 +1397,7 @@ actor APIClient {
                                        headers: [String: String] = [:],
                                        timeout: TimeInterval? = nil) async throws -> T {
         let expectedSession = token
-        let personal = ["/api/v1/personalize", "/api/v1/personalized", "/api/v1/personalized/job", "/api/v1/sentence/weave", "/api/v1/content/report"].contains(path)
+        let personal = path.hasPrefix("/api/v1/coach/") || ["/api/v1/personalize", "/api/v1/personalized", "/api/v1/personalized/job", "/api/v1/sentence/weave", "/api/v1/content/report"].contains(path)
         let guest = personal && expectedSession == nil ? try await guestCredential() : nil
         guard token == expectedSession else { throw APIError(message: "账号已切换，操作已取消") }
         var req = URLRequest(url: try url(path, query))
@@ -2154,6 +2154,15 @@ actor APIClient {
         var request_id: String? = nil
     }
 
+    func coachAvailable() async throws -> Bool {
+        struct Availability: Decodable { let enabled:Bool }
+        let r:Availability=try await request("GET","/api/v1/coach/availability",timeout:4)
+        return r.enabled
+    }
+    func coach<T:Decodable>(_ action:String,_ body:CoachBody,token expected:String?) async throws -> T {
+        guard token==expected else { throw APIError(message:"账号已切换") }
+        return try await request("POST","/api/v1/coach/"+action,body:body,timeout:action=="explanation" ? 45 : 9)
+    }
     func personalize(_ body: PersonalizeIn, expectedToken: String? = nil, enforceSession: Bool = false) async throws -> PersonalizeResponse {
         try requireToken(expectedToken, enforceSession: enforceSession)
         return try await request("POST", "/api/v1/personalize", body: body, timeout:15)

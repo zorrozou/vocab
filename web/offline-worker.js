@@ -1,6 +1,6 @@
 /* Public vocabulary only. Auth, progress, personal sentences and mutations never enter this cache. */
 importScripts('./offline-library.js');
-const SHELL = 'vocab-shell-20261030-library1', CONTENT = 'vocab-public-20261030-';
+const SHELL = 'vocab-shell-20261104-coach1', CONTENT = 'vocab-public-20261030-';
 const base = new URL(self.registration.scope).pathname.replace(/\/$/, '');
 VocabLibrary.init(base);
 let revision = null;
@@ -24,9 +24,11 @@ self.addEventListener('install', event => event.waitUntil((async()=>{
   const response = await fetch(self.registration.scope, {cache:'reload'});
   if (!response.ok) throw Error('Offline shell unavailable');
   await (await caches.open(SHELL)).put(self.registration.scope,response);
-  const script=await fetch(base+'/offline-library.js',{cache:'reload'});
-  if(!script.ok)throw Error('Offline library script unavailable');
-  await(await caches.open(SHELL)).put(base+'/offline-library.js',script);
+  for (const path of ['/offline-library.js','/coach.js']) {
+    const script=await fetch(base+path,{cache:'reload'});
+    if(!script.ok)throw Error('Offline script unavailable');
+    await(await caches.open(SHELL)).put(base+path,script);
+  }
   await self.skipWaiting();
 })()));
 self.addEventListener('activate', event => event.waitUntil((async()=>{
@@ -36,7 +38,7 @@ self.addEventListener('activate', event => event.waitUntil((async()=>{
 self.addEventListener('fetch', event => {
   const req=event.request, url=new URL(req.url);
   if(req.method!=='GET'||url.origin!==location.origin||!url.pathname.startsWith(base+'/'))return;
-  if(url.pathname===base+'/offline-library.js'){event.respondWith((async()=>{try{return await fetch(req);}catch(e){return(await caches.open(SHELL)).match(url.pathname);}})());return;}
+  if([base+'/offline-library.js',base+'/coach.js'].includes(url.pathname)){event.respondWith((async()=>{try{return await fetch(req);}catch(e){return(await caches.open(SHELL)).match(url.pathname);}})());return;}
   if(req.mode==='navigate' && [base+'/',base].includes(url.pathname)) {
     event.respondWith((async()=>{try{const r=await fetch(req);if(r.ok)try{await(await caches.open(SHELL)).put(self.registration.scope,r.clone());}catch(_){}return r;}catch(e){return (await caches.open(SHELL)).match(self.registration.scope);}})());return;
   }

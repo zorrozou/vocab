@@ -567,13 +567,22 @@ def start_personal_worker():
 
 app = FastAPI(title="vocab-api", version="0.2.0", on_startup=[init_db, start_personal_worker])
 mount_auth(app)
+from app.coach import mount_coach
+mount_coach(app, lambda: PERSONAL_DB, personal_owner,
+            lambda: not (DATA_DIR / "coach.disabled").exists(), lambda prompt: llm(prompt))
+
+
+@app.get("/coach.js", include_in_schema=False)
+def coach_script():
+    return FileResponse(STATIC_DIR / "coach.js", media_type="application/javascript",
+                        headers={"Cache-Control":"no-cache"})
 
 
 @app.middleware("http")
 async def no_cache_account_state(request: Request, call_next):
     response = await call_next(request)
     path = request.url.path
-    if path == "/api/v1/me/state" or path.startswith("/api/v1/me/state/") or path.startswith("/api/v1/me/fsrs-schedulers"):
+    if path.startswith("/api/v1/coach/") or path == "/api/v1/me/state" or path.startswith("/api/v1/me/state/") or path.startswith("/api/v1/me/fsrs-schedulers"):
         # Include validation and conflict responses: 410 is cacheable by
         # default and can mask a later generation or history change.
         response.headers["Cache-Control"] = "no-store"

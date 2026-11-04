@@ -11,6 +11,7 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
     shutil.copy2(root / 'web' / 'index.html', isolated / 'static' / 'index.html')
     shutil.copy2(root / 'web' / 'offline-worker.js', isolated / 'static' / 'offline-worker.js')
     shutil.copy2(root / 'web' / 'offline-library.js', isolated / 'static' / 'offline-library.js')
+    shutil.copy2(root / 'web' / 'coach.js', isolated / 'static' / 'coach.js')
     sys.path.insert(0, str(isolated))
     from app import main
     import uvicorn
@@ -21,6 +22,18 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
     from fastapi import Header, Request
     from fastapi.responses import JSONResponse, PlainTextResponse
     from app import auth
+    @main.app.post('/__fixture/clock/{used}')
+    def seed_coach_clock(used:int):
+        from app import coach
+        from fastapi import HTTPException
+        if used not in (0,1799,2399):
+            raise HTTPException(422)
+        with sqlite3.connect(main.PERSONAL_DB) as conn:
+            coach.init(conn)
+            conn.execute("UPDATE coach_clock_v1 SET used=?,extra=?,client=NULL,start=NULL,end=NULL WHERE owner LIKE 'guest:%'",
+                         (used,int(used>1800)))
+        return {"ok":True}
+
     scheduler_resolve_gate = threading.Event()
     scheduler_resolve_started = threading.Event()
     scheduler_resolve_control = {'hold':False}

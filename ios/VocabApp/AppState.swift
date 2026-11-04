@@ -68,6 +68,7 @@ enum Route: Equatable {
     case home
     case placement
     case validation
+    case coach
     case session
     case stats
     case settings
@@ -83,6 +84,7 @@ final class AppState {
         didSet { if oldValue != route { routeGeneration &+= 1 } }
     }
     private(set) var routeGeneration: UInt64 = 0
+    var coachTrack = "life"
     var session = Session()
     var studyNotice = ""
     private var sharedStudyPlan: SharedStudyPlan?

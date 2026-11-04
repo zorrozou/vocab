@@ -119,6 +119,7 @@
 </aside>
 <button class="sync-status" id="syncStatus" hidden></button>
 <div class="chips" id="chips"></div>
+<section id="coachControls" hidden aria-label="英语教练"></section>
 <main id="app"></main>
 <div class="foot" id="foot">
   调度：FSRS-6（官方 py-fsrs · 保持率 90%）· 定级：CAT 自适应 · 例句：静态 + AI 个性化 · 语音：神经网络 TTS<br>
@@ -129,6 +130,7 @@
 </div>
 
 <script src="./offline-library.js"></script>
+<script src="./coach.js"></script>
 <script>
 "use strict";
 // 反代部署在 /vocab/；本地直接访问服务根路径时不添加前缀。
@@ -439,7 +441,7 @@ async function localSpeak(text, token) {
   const speech=new SpeechSynthesisUtterance(text);speech.voice=voices.find(v=>v.lang===(S.settings.voice?.startsWith("en-GB")?"en-GB":"en-US"))||voices[0];speech.lang=speech.voice.lang;
   return await new Promise(resolve=>{let done=false;const finish=ok=>{if(done)return;done=true;clearTimeout(timer);resolve(ok);};speech.onend=()=>finish(true);speech.onerror=()=>finish(false);const timer=setTimeout(()=>{if(token===seqToken)speechSynthesis.cancel();finish(false);},120000);speechSynthesis.speak(speech);});
 }
-async function playText(text) {
+async function playText(text, recordExposure = true) {
   stopAudio();
   const my = ++seqToken;
   try {
@@ -451,8 +453,9 @@ async function playText(text) {
     const src = ctx.createBufferSource();
     src.buffer = buf; src.connect(ctx.destination);
     activeSrcs.push(src); src.start();
-    logSentenceExposures(text, "audio", true);
-  } catch (e) { if (my === seqToken && !await localSpeak(text,my)) apHint(); }
+    if(recordExposure)logSentenceExposures(text, "audio", true);
+    return true;
+  } catch (e) { if(my===seqToken){if(await localSpeak(text,my))return true;apHint();} return false; }
 }
 function stopAudio() {
   seqToken++;
@@ -1455,6 +1458,7 @@ function renderChips() {
 }
 
 function home() {
+  globalThis.VocabCoach?.page("home");
   refreshPersonalJobs().catch(() => {});
   renderChips();
   const el = $("#app");
@@ -1559,6 +1563,7 @@ function placementScoreText() {
 }
 
 async function place() {
+  globalThis.VocabCoach?.page("practice");
   const current = viewGuard();
   if (S.probeCount === 0 && !S.posterior) {
     placePositions = makePlacementPositions();
@@ -1619,6 +1624,7 @@ async function place() {
 }
 
 function finishPlace(r) {
+  globalThis.VocabCoach?.page("other");
   S.calibrated = true;
   S.frontier = placementPointer();
   S.pointer = S.frontier;
@@ -1648,6 +1654,7 @@ function finishPlace(r) {
 
 /* ---- 学习卡 ---- */
 function step() {
+  globalThis.VocabCoach?.page("practice");
   stopAudio();
   if (session.idx >= session.queue.length) return maybeQuiz();
   const item = session.queue[session.idx];
@@ -2214,6 +2221,7 @@ function recordStudyDay(date) {
 
 /* ---- 完成 + 自动触发个性化 ---- */
 function doneDay(refreshOnly = false) {
+  globalThis.VocabCoach?.page("home");
   const personalHTML = refreshOnly ? $("#genOut")?.innerHTML : null;
   if (!refreshOnly) prunePersonalized();
   const day = today();
@@ -2636,6 +2644,7 @@ async function downloadTodayOffline(target) {
 }
 
 function showStats() {
+  globalThis.VocabCoach?.page("other");
   stopAudio();
   const words = Object.entries(S.cards);
   const retention = retentionSummary(S.cards, S.log, Date.now(), S.fsrsSchedulers || {});
@@ -2712,6 +2721,7 @@ async function startValidation() {
 }
 
 async function showValidation() {
+  globalThis.VocabCoach?.page("practice");
   if (!validation) return;
   const current = viewGuard(), activeValidation = validation, index = validation.idx;
   if (validation.idx >= validation.words.length) return finishValidation();
@@ -2796,6 +2806,7 @@ function unverifiedKeys(auth) {
   return keys.sort();
 }
 function showSettings() {
+  globalThis.VocabCoach?.page("other");
   const st = S.settings;
   $("#app").innerHTML = `<div class="card">
     <h2 class="today-title">设置</h2>
@@ -7910,6 +7921,7 @@ function loadSlot(key) {
 }
 
 function welcome() {
+  globalThis.VocabCoach?.page("other");
   studyNotice = "";
   renderUserTag();
   $("#app").innerHTML = `<div class="card center">
@@ -7936,6 +7948,7 @@ function welcome() {
 }
 
 function authForm(mode) {
+  globalThis.VocabCoach?.page("other");
   const isLogin = mode === "login";
   $("#app").innerHTML = `<div class="card">
     <h2>${isLogin ? "登录" : "注册"}</h2>
@@ -7968,6 +7981,7 @@ function authForm(mode) {
 // No local slot is evidence that a remote account is empty. Keep the account
 // read-only until a complete, account-scoped read succeeds.
 function showAwaitingServer() {
+  globalThis.VocabCoach?.page("other");
   const auth = AUTH, slot = accountSlot(auth), token = auth?.token, owner = auth?.userId;
   if (!auth || !localStorage.getItem(awaitingServerSlot(slot))) return;
   const controls = ["#btnUser", "#btnSettings", "#btnStats", "#syncStatus"];
@@ -8303,6 +8317,7 @@ async function onAuthed(d, isRegister) {
 }
 
 async function userMenu() {
+  globalThis.VocabCoach?.page("other");
   if (!AUTH) {
     // 游客：归档游客进度后去欢迎页
     archiveCurrent();

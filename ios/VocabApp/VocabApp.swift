@@ -4,11 +4,13 @@ import Network
 @main
 struct VocabApp: App {
     @State private var app = AppState()
+    @State private var coachClock = CoachClock()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(app)
+                .environment(coachClock)
                 .preferredColorScheme(.dark)
                 .task { await app.boot() }
         }
@@ -30,9 +32,11 @@ struct RootView: View {
             case .home:
                 HomeView()
             case .placement:
-                PlacementView().id(app.placementSession)
+                PlacementView().id(app.placementSession).modifier(CoachTimeGate(active:true))
             case .validation:
-                ValidationView()
+                ValidationView().modifier(CoachTimeGate(active:true))
+            case .coach:
+                CoachLessonView().id(app.auth?.accountId ?? "guest")
             case .session:
                 SessionView()
             case .stats:

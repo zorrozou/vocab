@@ -41,6 +41,7 @@ struct SessionView: View {
                 DoneView()
             }
         }
+        .modifier(CoachTimeGate(active:app.session.idx < app.session.queue.count || needsAcceptance))
         .onDisappear { app.audio.stop() }
     }
 }
