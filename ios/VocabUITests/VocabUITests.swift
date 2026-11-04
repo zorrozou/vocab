@@ -320,6 +320,67 @@ final class VocabUITests: XCTestCase {
         _ = try await fixtureRequest("/api/v1/me/state", method: "PUT", token: token, body: state)
     }
 
+    @MainActor func testAutomaticSyncAfterNavigationAndOutage() async throws {
+        continueAfterFailure=false
+        let control="/api/v1/__ui_fixture/auto-sync"
+        let seed=try await fixtureRequest("/api/v1/__ui_fixture/recovery-case",method:"POST")
+        let token=try XCTUnwrap(seed["token"] as? String)
+        let app=XCUIApplication()
+        app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765"
+        let username=try XCTUnwrap(seed["username"] as? String),password=try XCTUnwrap(seed["password"] as? String)
+        _ = try await fixtureRequest(control,method:"POST",body:[:])
+        func launchAccount(){
+            app.launch()
+            // The isolated unsigned simulator bundle can lack a Keychain access group.
+            // Only sign in again on its welcome screen; both paths must use the same verified slot.
+            if app.buttons["登录"].waitForExistence(timeout:3) && !app.buttons["account-menu"].exists {
+                app.buttons["登录"].tap()
+                let user=app.textFields["auth-username"],pass=app.secureTextFields["auth-password"]
+                XCTAssertTrue(user.waitForExistence(timeout:15));user.tap();user.typeText(username)
+                pass.tap();pass.typeText(password);app.buttons["登录"].tap()
+            }
+        }
+        launchAccount()
+        let account=app.buttons["account-menu"]
+        let count=app.descendants(matching:.any)["learned-count"]
+        let banner=app.buttons["sync-status"]
+        func expectCount(_ n:Int) {
+            let check=expectation(for:NSPredicate(format:"label BEGINSWITH %@",String(n)),evaluatedWith:count)
+            wait(for:[check],timeout:35)
+        }
+        XCTAssertTrue(account.waitForExistence(timeout:30));expectCount(1)
+        app.terminate()
+        try await addRemoteCard("banana",token:token)
+        _ = try await fixtureRequest(control,method:"POST",body:["hold":true])
+        defer {Task {_ = try? await self.fixtureRequest(control,method:"POST",body:["release":true])}}
+        launchAccount();XCTAssertTrue(account.waitForExistence(timeout:20))
+        var held=false
+        for _ in 0..<50 {
+            if try await fixtureRequest(control)["held"] as? Bool==true {held=true;break}
+            try await Task.sleep(for:.milliseconds(100))
+        }
+        XCTAssertTrue(held);XCTAssertFalse(banner.exists);account.tap()
+        _ = try await fixtureRequest(control,method:"POST",body:["release":true])
+        let status=app.staticTexts["account-sync-message"]
+        let synced=expectation(for:NSPredicate(format:"label == %@","✓ 已同步"),evaluatedWith:status)
+        await fulfillment(of:[synced],timeout:35)
+        app.buttons["返回学习"].tap();expectCount(2);XCTAssertFalse(banner.exists)
+        app.terminate();try await addRemoteCard("cherry",token:token)
+        _ = try await fixtureRequest(control,method:"POST",body:["failures":2])
+        launchAccount();XCTAssertTrue(account.waitForExistence(timeout:20));XCTAssertFalse(banner.exists)
+        expectCount(3);XCTAssertFalse(banner.exists)
+        let attempts=try await fixtureRequest(control);XCTAssertEqual(attempts["injected"] as? Int,2)
+        // A genuine restore/generation conflict must stay visible, with no retry loop.
+        app.terminate()
+        _ = try await fixtureRequest(control,method:"POST",body:["conflict":true])
+        defer { Task {_ = try? await self.fixtureRequest(control,method:"POST",body:[:])} }
+        launchAccount();XCTAssertTrue(banner.waitForExistence(timeout:25));expectCount(3)
+        let reads=try await fixtureRequest(control)["reads"] as? Int
+        try await Task.sleep(for:.seconds(3))
+        let after=try await fixtureRequest(control)["reads"] as? Int
+        XCTAssertEqual(after,reads)
+    }
+
     @MainActor func testPrunedIncrementalReadFallsBack() async throws {
         continueAfterFailure = false
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/recovery-case", method: "POST")
@@ -450,7 +511,12 @@ final class VocabUITests: XCTestCase {
             return
         }
         XCTAssertTrue(restartedLearned.label.contains("1"))
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "同步失败")).firstMatch.waitForExistence(timeout: 20))
+        let conflict = app.buttons["sync-status"]
+        XCTAssertTrue(conflict.waitForExistence(timeout: 20))
+        XCTAssertTrue(restartedLearned.label.contains("1"), "database rotation must keep the trusted local state")
+        conflict.tap()
+        XCTAssertTrue(app.staticTexts["account-sync-message"].waitForExistence(timeout: 10))
+        XCTAssertFalse(app.staticTexts["✓ 已同步"].exists)
     }
 
     @MainActor func testFileBackupAndRestore() async throws {
@@ -857,6 +923,10 @@ final class VocabUITests: XCTestCase {
         app.buttons["返回学习"].tap(); app.buttons["settings-menu"].tap()
         let settings = app.buttons["setting-new-15"]
         XCTAssertTrue(settings.waitForExistence(timeout: 20))
+        // Keep the fresh automatic read parked so a stale manual response cannot mask a navigation-fence regression.
+        let retryGate="/api/v1/__ui_fixture/auto-sync"
+        _ = try await fixtureRequest(retryGate,method:"POST",body:["hold":true])
+        defer {Task {_ = try? await self.fixtureRequest(retryGate,method:"POST",body:["release":true])}}
         _ = try await fixtureRequest("/api/v1/__ui_fixture/state-get-release", method: "POST")
         var completed = 0
         for _ in 0..<50 {
@@ -870,9 +940,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(settings.exists, "late pull replaced the settings page")
         app.buttons["返回"].tap()
         XCTAssertTrue(learned.waitForExistence(timeout: 20)); XCTAssertTrue(learned.label.contains("2"), "late pull changed state after navigation")
-        app.buttons["account-menu"].tap(); XCTAssertTrue(sync.waitForExistence(timeout: 20)); sync.tap()
-        XCTAssertTrue(app.staticTexts["✓ 已同步"].waitForExistence(timeout: 30))
-        app.buttons["返回学习"].tap()
+        _ = try await fixtureRequest(retryGate,method:"POST",body:["release":true])
         let refreshed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label CONTAINS %@", "3"), object: learned)
         await fulfillment(of: [refreshed], timeout: 20)
     }

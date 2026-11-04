@@ -100,8 +100,38 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
     fixture['guarded_merge_successes'] = 0
     fixture['study_plan_offline'] = False
 
+    # Test-only control for a read in flight during foreground navigation and retry.
+    sync_probe = {"hold":False,"held":False,"failures":0,"injected":0,"reads":0,"conflict":False}
+    sync_release = asyncio.Event()
+
+    @main.app.get('/api/v1/__ui_fixture/auto-sync')
+    def auto_sync_status():
+        return dict(sync_probe)
+
+    @main.app.post('/api/v1/__ui_fixture/auto-sync')
+    async def auto_sync_control(body:dict):
+        if body.get("release"):
+            sync_release.set()
+        else:
+            sync_probe.update(hold=bool(body.get("hold")),held=False,failures=int(body.get("failures",0)),
+                              injected=0,reads=0,conflict=bool(body.get("conflict")))
+            sync_release.clear()
+        return dict(sync_probe)
+
     @main.app.middleware('http')
     async def fixture_controls(request: Request, call_next):
+        if request.method=="GET" and request.url.path=="/api/v1/me/state/changes":
+            sync_probe["reads"]+=1
+            if sync_probe["hold"]:
+                sync_probe["hold"]=False
+                sync_probe["held"]=True
+                await asyncio.wait_for(sync_release.wait(),timeout=60)
+            if sync_probe["failures"]>0:
+                sync_probe["failures"]-=1
+                sync_probe["injected"]+=1
+                return JSONResponse({"detail":"test service unavailable"},status_code=503)
+            if sync_probe["conflict"]:
+                return JSONResponse({"detail":"服务器同步代次已变化，请先导出并核对"},status_code=409)
         if fixture['study_plan_offline'] and request.url.path == '/api/v1/me/study-plan':
             return JSONResponse({'detail':'fixture study plan unavailable'}, status_code=503)
         if fixture['static_swap_case'] and request.url.path == '/api/v1/lexicon/word' and request.query_params.get('word') == 'apple':

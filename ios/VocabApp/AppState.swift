@@ -81,7 +81,16 @@ final class AppState {
     var S = LearningState()
     var auth: Auth?
     var route: Route = .welcome {
-        didSet { if oldValue != route { routeGeneration &+= 1 } }
+        didSet {
+            if oldValue != route {
+                routeGeneration &+= 1
+                if oldValue == .session && route == .home && !syncFailed {
+                    requestRetry()
+                } else {
+                    armRetry()
+                }
+            }
+        }
     }
     private(set) var routeGeneration: UInt64 = 0
     var coachTrack = "life"
@@ -104,6 +113,179 @@ final class AppState {
     private var pushTask: Task<Void, Never>?
     var syncFailed = false   // 上次推送服务器失败（顶栏显示 ⚠️）
     var localSaveFailed = false
+
+    private enum SyncWork { case upload, refresh, manual }
+    private struct SyncFlight {
+        let id: UUID
+        let account: Auth
+        let work: SyncWork
+        let task: Task<Bool,Never>
+    }
+    @ObservationIgnored private var flight: SyncFlight?
+    @ObservationIgnored private var exclusiveSync: UUID?
+    @ObservationIgnored private var retryTask: Task<Void,Never>?
+    private var retryStep = 0
+    private(set) var syncWaiting = false
+    private var sceneActive = false
+    private var networkAvailable = true
+    private var accountLoaded = false
+    // A slot with no trusted local copy must complete a verified read before any upload.
+    private var initialRead: (snapshot:LearningState, guest:LearningState?)?
+
+    private var mayRefreshInBackground: Bool {
+        switch route {
+        case .home, .stats, .settings, .userMenu: true
+        default: false
+        }
+    }
+
+    private func clearRetry() {
+        retryTask?.cancel()
+        retryTask = nil
+        syncWaiting = false
+        retryStep = 0
+    }
+
+    private func resetAccountSync() {
+        clearRetry()
+        pushTask?.cancel()
+        pushTask = nil
+        flight?.task.cancel()
+        flight = nil
+        exclusiveSync = nil
+        initialRead = nil
+        accountLoaded = false
+        syncFailed = false
+        syncMsg = ""
+    }
+
+    // Restore and checkpoint use their own durable revision fences. Pause ordinary
+    // uploads and retries until that explicit operation has released its slot.
+    private func suspendOrdinarySync() throws -> UUID {
+        guard exclusiveSync == nil else {throw APIError(message:"已有进度维护操作正在进行")}
+        let id=UUID()
+        exclusiveSync=id
+        pushTask?.cancel()
+        pushTask=nil
+        retryTask?.cancel()
+        retryTask=nil
+        flight?.task.cancel()
+        return id
+    }
+
+    private func resumeOrdinarySync(_ id:UUID) {
+        if exclusiveSync == id {
+            exclusiveSync=nil
+            armRetry()
+        }
+    }
+
+    private func requestRetry() {
+        guard auth?.accountId != nil, !localSaveFailed else { return }
+        syncWaiting = true
+        // Do not hide an unresolved disk, credential, or history error.
+        if !syncFailed {
+            syncMsg = initialRead == nil ? "进度已保存在本机，等待自动同步" : "等待读取账号进度，将自动重试"
+        }
+        armRetry()
+    }
+
+    private func armRetry() {
+        guard syncWaiting, retryTask == nil, exclusiveSync == nil, sceneActive, networkAvailable, accountLoaded,
+              mayRefreshInBackground, undoSnapshot == nil, !localSaveFailed, let owner=auth else { return }
+        let delays = [2,5,15,60,120]
+        let delay = delays[retryStep]
+        retryStep = min(retryStep+1,delays.count-1)
+        retryTask = Task { [weak self] in
+            do { try await Task.sleep(for:.seconds(delay)) } catch { return }
+            guard let self, self.auth==owner else { return }
+            self.retryTask=nil
+            guard self.sceneActive,self.networkAvailable,self.mayRefreshInBackground else { return }
+            _ = await self.syncFromServer()
+        }
+    }
+
+    func updateScene(active:Bool) {
+        sceneActive = active
+        if active {
+            guard accountLoaded else { return } // Boot/login owns the first read.
+            Task { await pullIfNewer() }
+        } else {
+            retryTask?.cancel()
+            retryTask=nil
+        }
+    }
+
+    func updateNetwork(available:Bool) async {
+        let wasAvailable=networkAvailable
+        networkAvailable=available
+        if !available {
+            retryTask?.cancel()
+            retryTask=nil
+        } else if !wasAvailable && sceneActive && accountLoaded {
+            await networkReconnected()
+        }
+    }
+
+    private func runSync(_ work:SyncWork) async -> Bool {
+        guard accountLoaded, let owner=auth,owner.accountId != nil else { return false }
+        if exclusiveSync != nil {requestRetry();return false}
+        if work != .manual && !networkAvailable {requestRetry();return false}
+        while let current=flight, current.account==owner {
+            let result=await current.task.value
+            if flight?.id==current.id { flight=nil }
+            guard auth==owner,accountLoaded else { return false }
+            if exclusiveSync != nil {requestRetry();return false}
+            if current.work==work && work != .upload { return result }
+            if work == .upload && result && !localSaveFailed &&
+                UserDefaults.standard.double(forKey:"vocab_write_"+slotKey)<=UserDefaults.standard.double(forKey:lastSyncKey) {return true}
+        }
+        let id=UUID()
+        let task=Task { () -> Bool in
+            guard self.auth==owner,!Task.isCancelled else { return false }
+            let page=self.routeGeneration,slot=self.slotKey
+            let write=UserDefaults.standard.double(forKey:"vocab_write_"+slot)
+            let result:Bool
+            if self.initialRead != nil {
+                result=await self.readInitialSlot(owner)
+            } else {
+                switch work {
+                case .upload: result=await self.uploadLocal(owner)
+                case .manual: result=await self.performManualSync()
+                case .refresh: result=await self.refreshFromServer()
+                }
+            }
+            guard self.auth==owner,!Task.isCancelled else { return false }
+            if result && work != .upload {
+                self.clearRetry()
+                self.syncFailed=false
+                self.syncMsg="✓ 已同步"
+            } else if !result && !self.syncFailed &&
+                        (page != self.routeGeneration || write != UserDefaults.standard.double(forKey:"vocab_write_"+slot)) {
+                self.requestRetry()
+            }
+            return result
+        }
+        flight=SyncFlight(id:id,account:owner,work:work,task:task)
+        let result=await task.value
+        if flight?.id==id { flight=nil }
+        return result
+    }
+
+    private func uploadLocal(_ owner:Auth) async -> Bool {
+        guard let account=owner.accountId,undoSnapshot==nil,!localSaveFailed else { return false }
+        let snapshot=S,slot=slotKey
+        do {
+            try await delta.push(account:account,token:owner.token,target:snapshot)
+            guard auth==owner,S==snapshot,slotKey==slot,!localSaveFailed else {return false}
+            UserDefaults.standard.set(UserDefaults.standard.double(forKey:"vocab_write_"+slot),forKey:lastSyncKey)
+            if syncWaiting { armRetry() }
+            return true
+        }catch{
+            if auth==owner {await handleSyncError(error)}
+            return false
+        }
+    }
 
     var isGuest: Bool { auth == nil }
 
@@ -171,7 +353,8 @@ final class AppState {
         }
         guard auth == active, slotKey == slot, route == .settings, routeGeneration == page,
               undoSnapshot == nil, !localSaveFailed else { throw APIError(message:"账号或页面已变化，请重试") }
-        pushTask?.cancel()
+        let operation=try suspendOrdinarySync()
+        defer {resumeOrdinarySync(operation)}
         let confirm: @MainActor @Sendable (LearningState) throws -> Void = { [weak self] target in
             guard let self, self.auth == active, self.slotKey == slot, self.route == .settings,
                   self.routeGeneration == page, self.undoSnapshot == nil, !self.localSaveFailed,
@@ -215,7 +398,8 @@ final class AppState {
         guard let active=auth, let account=active.accountId, route == .settings,
               undoSnapshot == nil, !localSaveFailed else { throw APIError(message:"请先登录并完成当前复习") }
         let slot=slotKey, page=routeGeneration
-        pushTask?.cancel()
+        let operation=try suspendOrdinarySync()
+        defer {resumeOrdinarySync(operation)}
         try await delta.cancelExperimentalLargeOperation(account:account,token:active.token,restore:restore) { [weak self] previous in
             guard let self, self.auth == active, self.slotKey == slot, self.route == .settings, self.routeGeneration == page,
                   self.undoSnapshot == nil, !self.localSaveFailed, self.S == previous,
@@ -287,7 +471,8 @@ final class AppState {
 
     /// 回到前台：有未同步修改先补推，再拉服务器合并结果（学习会话中不打扰）
     func pullIfNewer() async {
-        guard route != .session else { return }
+        guard sceneActive,accountLoaded else { return }
+        guard mayRefreshInBackground else {if auth != nil {requestRetry()};return}
         if auth != nil { await syncFromServer() }
         if route == .home {
             await flushPendingFsrs()
@@ -300,11 +485,12 @@ final class AppState {
         guard booted else { return }
         guard auth == nil || auth?.accountId != nil else { return }
         if route == .session {
+            if auth != nil {requestRetry()}
             guard undoSnapshot == nil else { return }
             await flushPendingFsrs()
             let defaults = UserDefaults.standard
             if auth != nil, defaults.double(forKey: "vocab_write_\(slotKey)") > defaults.double(forKey: lastSyncKey) {
-                await pushNow()
+                _ = await runSync(.upload)
             }
         } else {
             await pullIfNewer()
@@ -447,7 +633,8 @@ final class AppState {
             throw APIError(message: "进度已变化，请重新选择备份")
         }
         try backupLocalState(plan.before, slot: plan.slot)
-        pushTask?.cancel()
+        let operation=try suspendOrdinarySync()
+        defer {resumeOrdinarySync(operation)}
         if plan.owner != nil {
             guard let account = auth?.accountId, let token = plan.token else { throw APIError(message: "账号已切换，请重试") }
             if let payload=plan.largePayload {
@@ -503,6 +690,8 @@ final class AppState {
         }
         pushTask?.cancel()
         guard await syncFromServer() else { throw APIError(message: "同步未完成，请先处理待同步进度") }
+        let operation=try suspendOrdinarySync()
+        defer {resumeOrdinarySync(operation)}
         let before = S, slot = slotKey
         guard auth?.token == active.token, auth?.userId == active.userId else { throw APIError(message: "账号已切换") }
         let remote = try await api.pullState(expectedToken: active.token)
@@ -583,7 +772,8 @@ final class AppState {
         guard latest.updated_at == plan.updatedAt, latest.state != nil, latest.state_revision == plan.revision,
               latest.sync_generation == plan.generation else { throw APIError(message: "服务器进度已变化，请重试") }
         try backupLocalState(plan.before, slot: plan.slot)
-        pushTask?.cancel()
+        let operation=try suspendOrdinarySync()
+        defer {resumeOrdinarySync(operation)}
         guard let account = auth?.accountId else { throw APIError(message: "账号已切换，请重试") }
         try await delta.reloadCheckAndClear(account: account, token: plan.token, updatedAt: plan.updatedAt,
                                                 revision: plan.revision, generation: plan.generation, archiveDirectory: recoveryDirectory,
@@ -617,6 +807,15 @@ final class AppState {
     }
 
     private func handleSyncError(_ error: Error) async {
+        if Task.isCancelled || error is CancellationError {return}
+        let apiError=error as? APIError
+        let temporaryNetwork:[URLError.Code]=[.cancelled,.timedOut,.networkConnectionLost,.notConnectedToInternet,.cannotConnectToHost,.cannotFindHost,.dnsLookupFailed,.internationalRoamingOff,.dataNotAllowed]
+        if apiError?.code=="sync-deferred" || (error as? URLError).map({temporaryNetwork.contains($0.code)})==true ||
+           [408,425,429,500,502,503,504].contains(apiError?.statusCode ?? 0) {
+            requestRetry()
+            return
+        }
+        clearRetry()
         if isAuthError(error) {
             guard switchAccount() else { syncFailed = true; return }
             route = .auth(login: true)
@@ -636,53 +835,51 @@ final class AppState {
         if localSaveFailed { S.log = originalLog }
         pushTask?.cancel()
         guard undoSnapshot == nil, !localSaveFailed else { return } // 撤销窗口及本机保存失败时不上传。
-        guard let active = auth, let account = active.accountId else { return }
-        let owner = active.userId, slot = slotKey, token = active.token
-        let snapshot = S   // 值类型快照：防止切换账号后旧任务把新状态写错账号
-        pushTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 2_000_000_000)
-            guard let self, !Task.isCancelled else { return }
-            guard self.auth?.userId == owner, self.auth?.token == token, self.slotKey == slot else { return }   // 账号已切换，旧推送作废
-            do {
-                try await self.delta.push(account: account, token: token, target: snapshot)
-                guard self.auth?.userId == owner, self.auth?.token == token, self.slotKey == slot else { return }
-                if self.S == snapshot && !self.localSaveFailed {
-                    UserDefaults.standard.set(UserDefaults.standard.double(forKey: "vocab_write_\(self.slotKey)"), forKey: self.lastSyncKey)
-                }
-                self.syncFailed = false
-            } catch {
-                guard self.auth?.userId == owner, self.auth?.token == token, self.slotKey == slot else { return }
-                await self.handleSyncError(error)
-            }
+        guard let active=auth,active.accountId != nil,accountLoaded else {return}
+        pushTask=Task { [weak self] in
+            do { try await Task.sleep(for:.seconds(2)) } catch {return}
+            guard let self,self.auth==active,!Task.isCancelled else {return}
+            self.pushTask=nil // A later save cancels the timer, never an upload already on the wire.
+            _ = await self.runSync(.upload)
         }
     }
 
-    func pushNow() async {
-        guard let active = auth else { return }
-        guard let account = active.accountId else { syncMsg = "旧会话仅保存在本机，请重新登录并核对旧存档"; return }
-        let owner = active.userId, token = active.token
-        guard undoSnapshot == nil else { syncMsg = "请先完成当前复习"; return }
-        guard !localSaveFailed else { syncMsg = "本机保存失败，请先导出进度并释放空间"; return }
+    @discardableResult
+    func pushNow() async -> Bool {
+        if auth?.accountId == nil {syncMsg="请重新登录后同步";return false}
         pushTask?.cancel()
+        pushTask=nil
+        return await runSync(.manual)
+    }
+
+    private func performManualSync() async -> Bool {
+        guard let active = auth else { return false }
+        guard let account = active.accountId else { syncMsg = "旧会话仅保存在本机，请重新登录并核对旧存档"; return false }
+        let owner = active.userId, token = active.token
+        guard undoSnapshot == nil else { syncMsg = "请先完成当前复习"; return false }
+        guard !localSaveFailed else { syncMsg = "本机保存失败，请先导出进度并释放空间"; return false }
+        syncMsg="正在同步…"
         let slot = slotKey, snapshot = S, generation = routeGeneration
         do {
             try await delta.push(account: account, token: token, target: snapshot)
-            guard auth?.userId == owner, auth?.token == token, slotKey == slot else { return }
-            guard S == snapshot, !localSaveFailed else {
-                syncMsg = "先前进度已同步，最新修改等待同步"
-                syncFailed = false
-                return
+            guard auth?.userId == owner, auth?.token == token, slotKey == slot else { return false }
+            guard !localSaveFailed else {
+                syncFailed=true
+                syncMsg="本机保存失败，请先导出进度并释放空间"
+                return false
             }
+            guard S==snapshot else {requestRetry();return false}
             if route != .session {
                 let largeBaseline = try await delta.hasLargeBaseline(account: account)
                 guard auth?.userId == owner, auth?.token == token, slotKey == slot, S == snapshot,
-                      !localSaveFailed, undoSnapshot == nil, routeGeneration == generation, route != .session else { return }
+                      !localSaveFailed, undoSnapshot == nil, routeGeneration == generation, route != .session else { return false }
                 if largeBaseline {
                     let installed = try await delta.readAndApply(account: account, token: token, local: snapshot) { [weak self] previous, target in
+                        try Task.checkCancellation()
                         guard let self, self.auth?.userId == owner, self.auth?.token == token, self.slotKey == slot,
                               self.S == previous, !self.localSaveFailed, self.undoSnapshot == nil,
                               self.routeGeneration == generation, self.route != .session else {
-                            throw APIError(message: "本机进度或页面已变化，请重试")
+                            throw APIError(message: "本机进度或页面已变化，将自动同步",code:"sync-deferred")
                         }
                         self.S = target
                         self.saveLocal()
@@ -693,23 +890,23 @@ final class AppState {
                     }
                     guard installed else { throw APIError(message: "缺少大状态同步基线，请先导出本机进度") }
                     guard auth?.userId == owner, auth?.token == token, slotKey == slot,
-                          !localSaveFailed, undoSnapshot == nil, routeGeneration == generation, route != .session else { return }
+                          !localSaveFailed, undoSnapshot == nil, routeGeneration == generation, route != .session else { return false }
                 } else {
                 let remote = try await api.pullState(expectedToken: token)
-                guard auth?.userId == owner, auth?.token == token, slotKey == slot else { return }
+                guard auth?.userId == owner, auth?.token == token, slotKey == slot else { return false }
                 guard S == snapshot, !localSaveFailed, undoSnapshot == nil,
                       routeGeneration == generation, route != .session else {
                     syncMsg = "进度已上传，服务器合并结果等待重新同步"
-                    return
+                    return false
                 }
                 guard let merged = remote.state else { throw APIError(message: "服务器未返回合并后的进度，请重试") }
                 try await delta.verifyPulled(account: account, token: token, remote: remote)
                 guard auth?.userId == owner, auth?.token == token, slotKey == slot, S == snapshot,
-                      !localSaveFailed, undoSnapshot == nil, routeGeneration == generation, route != .session else { return }
+                      !localSaveFailed, undoSnapshot == nil, routeGeneration == generation, route != .session else { return false }
                 if remote.fromLargeSnapshot {
                     try await delta.prime(account: account, token: token, remote: remote, local: merged)
                     guard auth?.userId == owner, auth?.token == token, slotKey == slot, S == snapshot,
-                          !localSaveFailed, undoSnapshot == nil, routeGeneration == generation, route != .session else { return }
+                          !localSaveFailed, undoSnapshot == nil, routeGeneration == generation, route != .session else { return false }
                 }
                 S = merged
                 saveLocal()
@@ -717,34 +914,37 @@ final class AppState {
                     S = snapshot
                     syncFailed = true
                     syncMsg = "无法保存服务器进度，请先导出并释放空间"
-                    return
+                    return false
                 }
                 if !remote.fromLargeSnapshot { try? await delta.prime(account: account, token: token, remote: remote, local: merged) }
                 guard auth?.userId == owner, auth?.token == token, slotKey == slot,
                       S == merged, !localSaveFailed, undoSnapshot == nil,
-                      routeGeneration == generation, route != .session else { return }
+                      routeGeneration == generation, route != .session else { return false }
                 }
             }
             UserDefaults.standard.set(UserDefaults.standard.double(forKey: "vocab_write_\(slotKey)"), forKey: lastSyncKey)
-            syncMsg = "✓ 已同步"
-            syncFailed = false
+            return true
         } catch {
-            guard auth?.userId == owner, auth?.token == token, slotKey == slot else { return }
+            guard auth?.userId == owner, auth?.token == token, slotKey == slot else { return false }
             await handleSyncError(error)
+            return false
         }
     }
 
     /// 有未同步修改先补推，再拉服务器合并结果；没有未同步修改则以服务器为准。
     /// 避免“本地时间新”被误当成“本地内容更新”而覆盖新服务器状态。
     @discardableResult
-    func syncFromServer() async -> Bool {
+    func syncFromServer() async -> Bool { await runSync(.refresh) }
+
+    private func refreshFromServer() async -> Bool {
         guard undoSnapshot == nil, !localSaveFailed, let active = auth, let account = active.accountId else { return false }
         let owner = active.userId, token = active.token, slot = slotKey, startingRoute = routeGeneration
         let install: @MainActor @Sendable (LearningState, LearningState) throws -> Void = { [weak self] previous, target in
+            try Task.checkCancellation()
             guard let self, self.auth?.userId == owner, self.auth?.token == token, self.slotKey == slot,
                   self.routeGeneration == startingRoute, self.route != .session,
-                  !self.localSaveFailed, self.undoSnapshot == nil else { throw APIError(message: "本机进度或页面已变化，请重试") }
-            if self.S == previous {
+                  !self.localSaveFailed, self.undoSnapshot == nil else { throw APIError(message: "本机进度或页面已变化，将自动同步",code:"sync-deferred") }
+            if self.S != target && self.S == previous {
                 self.S = target
                 self.saveLocal()
                 guard !self.localSaveFailed else {
@@ -752,17 +952,17 @@ final class AppState {
                     throw APIError(message: "无法保存服务器进度，请先导出并释放空间")
                 }
             } else if self.S != target {
-                throw APIError(message: "本机进度已变化，请先导出并处理未完成下载")
+                throw APIError(message: "下载期间有新进度，将自动接续",code:"sync-deferred")
             }
             UserDefaults.standard.set(UserDefaults.standard.double(forKey: "vocab_write_\(slot)"), forKey: self.lastSyncKey)
             self.syncFailed = false
         }
         do {
-            if try await delta.resumePull(account: account, token: token, local: S, install: install) {
-                guard auth?.userId == owner, auth?.token == token, slotKey == slot, !localSaveFailed, undoSnapshot == nil else { return false }
-                return UserDefaults.standard.double(forKey: "vocab_write_\(slot)") <= UserDefaults.standard.double(forKey: lastSyncKey)
-            }
-            guard auth?.userId == owner, auth?.token == token, slotKey == slot, !localSaveFailed, undoSnapshot == nil else { return false }
+            // A recovered download can be older than the current server head. Commit it
+            // safely, then read again from its acknowledged revision before reporting success.
+            _ = try await delta.resumePull(account:account,token:token,local:S,install:install)
+            guard auth==active,slotKey==slot,routeGeneration==startingRoute,route != .session,
+                  !localSaveFailed,undoSnapshot==nil else {return false}
             let snapshot = S
             let localTs = UserDefaults.standard.double(forKey: "vocab_write_\(slotKey)")
             let lastSync = UserDefaults.standard.double(forKey: lastSyncKey)
@@ -805,7 +1005,7 @@ final class AppState {
                       !localSaveFailed, undoSnapshot == nil else { return false }
                 return true
             }
-            return false
+            return snapshot == LearningState() && pending == nil
         } catch {
             guard auth?.userId == owner, auth?.token == token, slotKey == slot else { return false }
             await handleSyncError(error)
@@ -859,54 +1059,75 @@ final class AppState {
             auth = a
             await api.setToken(a.token)
             guard auth == a else { return }
-            let local = loadLocal(slot: slotKey, forUsername: a.username)
-            S = local ?? LearningState()   // 先装本机存档，绝不能用空白内存覆盖服务器
-            if a.accountId == nil {
-                syncFailed = true
-                syncMsg = "旧会话仅保存在本机，请重新登录并核对旧存档"
-                route = .home
-                return
-            }
-            if local != nil {
-                _ = await syncFromServer()
-            } else {
-                // 无可信本地槽位时只拉取，不能用空白状态和旧时间戳先推送。
-                let snapshot = S
-                do {
-                    if try await recoverPendingSlot(a) {
-                        _ = await syncFromServer()
-                        guard auth == a else { return }
-                        route = .home
-                        return
-                    }
-                    let remote = try await api.pullState(expectedToken: a.token)
-                    guard auth == a, S == snapshot else { return }
-                    if let state = remote.state {
-                        try await delta.verifyPulled(account: a.accountId!, token: a.token, remote: remote)
-                        guard auth == a, S == snapshot else { return }
-                        if remote.fromLargeSnapshot {
-                            try await delta.prime(account: a.accountId!, token: a.token, remote: remote, local: state)
-                            guard auth == a, S == snapshot else { return }
-                        }
-                        S = state; saveLocal()
-                        if !localSaveFailed {
-                            UserDefaults.standard.set(UserDefaults.standard.double(forKey: "vocab_write_\(slotKey)"), forKey: lastSyncKey)
-                            if !remote.fromLargeSnapshot { try? await delta.prime(account: a.accountId!, token: a.token, remote: remote, local: state) }
-                            guard auth == a, S == state else { return }
-                        }
-                    }
-                } catch {
-                    guard auth == a else { return }
-                    await handleSyncError(error)
-                }
-            }
-            guard auth == a else { return }   // 401 已切到登录页，不再跳回主页
-            route = .home
+            await openAccount(a)
         } else if UserDefaults.standard.bool(forKey: "vocab_guest") {
             S = loadLocal(slot: "guest") ?? LearningState()
+            accountLoaded=true
             route = .home
         } else {
             route = .welcome
+        }
+    }
+
+    private func openAccount(_ owner:Auth,guest:LearningState?=nil) async {
+        guard auth==owner else {return}
+        let startingPage=routeGeneration
+        let local=loadLocal(slot:slotKey,forUsername:owner.username)
+        S=local ?? LearningState()
+        if owner.accountId==nil {
+            syncFailed=true
+            syncMsg="旧会话仅保存在本机，请重新登录并核对旧存档"
+            route = .home
+            return
+        }
+        if local==nil {initialRead=(S,guest)}
+        accountLoaded=true
+        // The foreground and startup now agree on the visible page before the first download starts.
+        if local != nil {route = .home}
+        _ = await syncFromServer()
+        if auth==owner,local==nil,routeGeneration==startingPage {route = .home}
+        armRetry()
+    }
+
+    private func readInitialSlot(_ owner:Auth) async -> Bool {
+        guard let first=initialRead,let account=owner.accountId else {return false}
+        let page=routeGeneration
+        do {
+            guard S==first.snapshot else {throw APIError(message:"首次下载期间已有本机修改，请先导出并核对两端进度")}
+            if try await recoverPendingSlot(owner) {
+                initialRead=nil
+                return await refreshFromServer()
+            }
+            let remote=try await api.pullState(expectedToken:owner.token)
+            guard auth==owner,S==first.snapshot else {return false}
+            if let state=remote.state {
+                try await delta.verifyPulled(account:account,token:owner.token,remote:remote)
+                guard auth==owner,S==first.snapshot else {return false}
+                if remote.fromLargeSnapshot {
+                    try await delta.prime(account:account,token:owner.token,remote:remote,local:state)
+                    guard auth==owner,S==first.snapshot else {return false}
+                }
+                guard undoSnapshot==nil,routeGeneration==page,route != .session else {requestRetry();return false}
+                S=state;saveLocal()
+                guard !localSaveFailed else {S=first.snapshot;throw APIError(message:"无法保存服务器进度，请先导出并释放空间")}
+                UserDefaults.standard.set(UserDefaults.standard.double(forKey:"vocab_write_"+slotKey),forKey:lastSyncKey)
+                if !remote.fromLargeSnapshot {try? await delta.prime(account:account,token:owner.token,remote:remote,local:state)}
+                guard auth==owner else {return false}
+                initialRead=nil
+                return S==state && !localSaveFailed
+            }
+            guard routeGeneration==page,undoSnapshot==nil,route != .session else {requestRetry();return false}
+            initialRead=nil
+            if let guest=first.guest {
+                S=guest
+                saveLocal()
+                guard !localSaveFailed else {syncFailed=true;syncMsg="本机保存失败，请先导出进度";return false}
+                return await uploadLocal(owner)
+            }
+            return true
+        }catch{
+            if auth==owner {await handleSyncError(error)}
+            return false
         }
     }
 
@@ -919,6 +1140,7 @@ final class AppState {
     }
 
     func enterGuest() {
+        accountLoaded=true
         studyNotice = ""
         UserDefaults.standard.set(true, forKey: "vocab_guest")
         placementSet = nil   // 进游客也清空定级题缓存（与账号隔离）
@@ -933,8 +1155,6 @@ final class AppState {
     /// - 登录老账号且两端都空 → 才把当前（游客）进度并入
     func authed(_ r: AuthResponse, isRegistration: Bool = false) async {
         studyNotice = ""
-        pushTask?.cancel()   // 先取消旧账号延迟推送，防止旧状态写到新账号
-        pushTask = nil
         let wasGuest = auth == nil && UserDefaults.standard.bool(forKey: "vocab_guest")
         // 归档当前进度——但空状态不归档（切换/登出后 S 已被重置，
         // 此时归档会把游客等旧槽位覆盖成空白，造成进度丢失）
@@ -945,6 +1165,7 @@ final class AppState {
         guard r.user.account_id == nil || LocalAccountSlot.validAccountID(r.user.account_id!) else { syncMsg = "账号标识无效，请重试"; return }
         let a = Auth(userId: r.user.id, accountId: r.user.account_id, username: r.user.username,
                      nickname: r.user.nickname, token: r.token)
+        resetAccountSync()
         auth = a
         await api.setToken(a.token)
         guard auth == a else { return }
@@ -960,52 +1181,8 @@ final class AppState {
         }
         UserDefaults.standard.set(false, forKey: "vocab_guest")
         let previousState = S
-        let local = loadLocal(slot: slotKey, forUsername: r.user.username)
-        S = local ?? LearningState()   // 先切换到目标账号存档，不能把上一个账号/游客状态误推过去
-        if a.accountId == nil {
-            syncFailed = true
-            syncMsg = "服务器未提供账号标识，请更新服务器后重新登录"
-            route = .home
-            return
-        }
-        if local != nil {
-            _ = await syncFromServer() // 失败时保留该账号的本地状态，不把失败误当成空服务器。
-        } else {
-            let snapshot = S
-            do {
-                if try await recoverPendingSlot(a) {
-                    _ = await syncFromServer()
-                    guard auth == a else { return }
-                    route = .home
-                    return
-                }
-                let remote = try await api.pullState(expectedToken: a.token)
-                guard auth == a, S == snapshot else { return }
-                if let state = remote.state {
-                    try await delta.verifyPulled(account: a.accountId!, token: a.token, remote: remote)
-                    guard auth == a, S == snapshot else { return }
-                    if remote.fromLargeSnapshot {
-                        try await delta.prime(account: a.accountId!, token: a.token, remote: remote, local: state)
-                        guard auth == a, S == snapshot else { return }
-                    }
-                    S = state; saveLocal()
-                    if !localSaveFailed {
-                        UserDefaults.standard.set(UserDefaults.standard.double(forKey: "vocab_write_\(slotKey)"), forKey: lastSyncKey)
-                        if !remote.fromLargeSnapshot { try? await delta.prime(account: a.accountId!, token: a.token, remote: remote, local: state) }
-                        guard auth == a, S == state else { return }
-                    }
-                } else if wasGuest && !isRegistration && (!previousState.cards.isEmpty || previousState.probeCount > 0) {
-                    S = previousState
-                    save() // 只有确认服务器为空且来源确为游客时才导入。
-                }
-                syncFailed = false
-            } catch {
-                guard auth == a else { return }
-                await handleSyncError(error)
-            }
-        }
-        guard auth == a else { return }
-        route = .home
+        let importGuest=wasGuest && !isRegistration && (!previousState.cards.isEmpty || previousState.probeCount>0)
+        await openAccount(a,guest:importGuest ? previousState:nil)
     }
 
     /// 重新定级：重置探测状态并重抽题库（30 题新随机卷）。
@@ -1078,12 +1255,14 @@ final class AppState {
         commitUndoReview()
         pushTask?.cancel()
         pushTask = nil
-        saveLocal()
+        // Leaving an unverified first download must not create a trusted empty slot.
+        if initialRead?.snapshot != S {saveLocal()}
         guard !localSaveFailed else {
             syncMsg = "本机保存失败，请先导出进度并释放空间"
             return false
         }
         let previousToken = auth?.token
+        resetAccountSync()
         auth = nil
         fsrsReplayError = ""
         maintenanceMessage = ""
@@ -1102,9 +1281,9 @@ final class AppState {
         guard let current = auth else { return }
         let generation = routeGeneration
         commitUndoReview()
-        await pushNow()
+        let synced = await pushNow()
         guard auth == current, routeGeneration == generation else { return }
-        guard syncMsg == "✓ 已同步" else {
+        guard synced else {
             if !localSaveFailed { syncMsg += "；本机进度已保留，可重试或选择切换账号" }
             return
         }

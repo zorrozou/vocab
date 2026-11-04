@@ -106,15 +106,16 @@ struct UserMenuView: View {
                 if let a = app.auth {
                     Text(a.nickname).font(.title2.weight(.bold)).foregroundStyle(Theme.text)
                     Text("@\(a.username)\(app.syncFailed ? " · 同步失败" : "")").font(.footnote).foregroundStyle(Theme.muted)
-                    if app.syncFailed && msg.isEmpty {
-                        Text((app.syncMsg.isEmpty || app.syncMsg == "✓ 已同步") ? "同步未完成，请重试或查看账号状态。" : app.syncMsg)
-                            .font(.footnote).foregroundStyle(Theme.warn)
+                    if app.syncFailed || app.syncWaiting || !app.syncMsg.isEmpty {
+                        Text(app.syncFailed && (app.syncMsg.isEmpty || app.syncMsg=="✓ 已同步") ? "请查看账号状态或导出本机进度。" : app.syncMsg)
+                            .font(.footnote).foregroundStyle(app.syncFailed ? Theme.warn:Theme.muted)
+                            .accessibilityIdentifier("account-sync-message")
                     }
                     if !app.fsrsReplayError.isEmpty {
                         Text(app.fsrsReplayError).font(.footnote).foregroundStyle(Theme.warn)
                     }
                     GhostButton(title: "立即同步") {
-                        Task { await app.pushNow(); msg = app.syncMsg }
+                        Task { msg=""; await app.pushNow() }
                     }
                     GhostButton(title: reloading ? "正在读取服务器进度…" : "重新加载服务器进度") {
                         guard !reloading else { return }
@@ -164,7 +165,7 @@ struct UserMenuView: View {
                     }
                 }
                 GhostButton(title: "返回学习", color: Theme.muted) { app.route = .home }
-                if !msg.isEmpty {
+                if !msg.isEmpty && msg != app.syncMsg {
                     Text(msg).font(.footnote).foregroundStyle(Theme.muted)
                 }
             }

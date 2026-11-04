@@ -83,13 +83,9 @@ struct RootView: View {
             NotificationService.apply(settings: settings)
         }
         // 回到前台：服务器有更新的存档就拉过来（多端同步补漏）+ 重排每日提醒
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active {
-                Task {
-                    await app.pullIfNewer()
-                    NotificationService.apply(settings: app.S.settings)
-                }
-            }
+        .onChange(of: scenePhase, initial:true) { _, phase in
+            app.updateScene(active:phase == .active)
+            if phase == .active { NotificationService.apply(settings: app.S.settings) }
         }
     }
 
@@ -100,10 +96,6 @@ struct RootView: View {
             continuation.onTermination = { _ in monitor.cancel() }
             monitor.start(queue: DispatchQueue(label: "vocab.network-recovery"))
         }
-        var previous: Bool?
-        for await online in changes {
-            if online && previous == false { await app.networkReconnected() }
-            previous = online
-        }
+        for await online in changes { await app.updateNetwork(available:online) }
     }
 }

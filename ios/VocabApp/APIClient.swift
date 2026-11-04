@@ -1869,7 +1869,7 @@ actor APIClient {
         try requireToken(expectedToken)
         guard response.generation == generation else { throw APIError(message: "服务器同步代次不一致") }
         if requireCurrent && (response.head_revision != revision || response.change != nil) {
-            throw APIError(message: "服务器进度在下载期间发生变化，请重试", statusCode: 409)
+            throw APIError(message: "服务器进度在下载期间发生变化，请重试", statusCode: 409, code: "sync-deferred")
         }
     }
 
