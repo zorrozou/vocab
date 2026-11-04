@@ -130,7 +130,7 @@ struct ShadowResultDisplay: View {
     let result: ShadowResult
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        Group {
             HStack(spacing: 10) {
                 Text("完整度").font(.caption).foregroundStyle(Theme.muted)
                 Text("\(result.completeness)%")
@@ -146,15 +146,17 @@ struct ShadowResultDisplay: View {
             Text("完整度是识别到的目标词比例；识别置信度不代表发音准确度。")
                 .font(.caption).foregroundStyle(Theme.muted)
             if !result.words.isEmpty {
-                result.words.reduce(Text("")) { acc, w in
-                    acc + Text(w.text + " ").foregroundStyle(color(of: w.confidence))
+                // Keep word-level feedback together in short runs that the page layout can wrap.
+                ForEach(Array(stride(from: 0, to: result.words.count, by: 6)), id: \.self) { start in
+                    let end = min(start + 6, result.words.count)
+                    result.words[start..<end].reduce(Text("")) { line, word in
+                        line + Text(word.text + " ").foregroundStyle(color(of: word.confidence))
+                    }.font(.subheadline)
                 }
-                .font(.subheadline)
             } else {
-                Text(result.text).font(.footnote).foregroundStyle(Theme.muted)
+                ReadingText(text: result.text, font: .footnote, title: "完整跟读记录").foregroundStyle(Theme.muted)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func color(of c: Float) -> Color {
@@ -266,7 +268,7 @@ struct SentenceRow: View {
     @State private var reporting=false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        Group {
             HStack(alignment: .top, spacing: 8) {
                 TagLabel(text: tag, color: tagColor)
                 Spacer()
@@ -326,7 +328,6 @@ struct SentenceRow: View {
                     .font(.footnote).foregroundStyle(Theme.muted)
             }
         }
-        .opacity(swapping ? 0.35 : 1)
     }
 }
 

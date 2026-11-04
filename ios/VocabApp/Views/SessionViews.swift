@@ -183,8 +183,7 @@ struct LearnCardView: View {
     private var shadowArea: some View {
         Group {
             if app.speech.state == .listening {
-                Text(app.speech.liveText.isEmpty ? "请朗读例句，读完松开手…" : app.speech.liveText)
-                    .font(.footnote).foregroundStyle(Theme.accentLight)
+                ReadingText(text: app.speech.liveText.isEmpty ? "请朗读例句，读完松开手…" : app.speech.liveText, font: .footnote, title: "完整跟读记录").foregroundStyle(Theme.accentLight)
             } else if let r = shadowResult {
                 ShadowResultDisplay(result: r)
             } else if !shadowMsg.isEmpty {
@@ -592,8 +591,7 @@ struct AnswerCardView: View {
                     ReadingText(text: shadowTarget(), font: .title3)
                     ShadowHoldButton(target: shadowTarget(), onBusy: { shadowMsg = $0 }, onResult: handleShadow)
                     if app.speech.state == .listening {
-                        Text(app.speech.liveText.isEmpty ? "请朗读例句，读完松开手…" : app.speech.liveText)
-                            .font(.footnote).foregroundStyle(Theme.accentLight)
+                        ReadingText(text: app.speech.liveText.isEmpty ? "请朗读例句，读完松开手…" : app.speech.liveText, font: .footnote, title: "完整跟读记录").foregroundStyle(Theme.accentLight)
                     } else if let r = shadowResult {
                         ShadowResultDisplay(result: r)
                     } else if !shadowMsg.isEmpty {

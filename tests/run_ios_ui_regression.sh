@@ -281,7 +281,7 @@ elif [[ "${2:-guest}" == "appearance" ]]; then
   grep -q VOCAB_REQUEST_SYSTEM_light "$test_tmp/appearance.log"
   wait "$watch_pid"; watch_pid=""
 elif [[ "${2:-guest}" == "single-screen" ]]; then
-  xcodebuild "${xcode_args[@]}" "-only-testing:VocabUITests/VocabUITests/$method" "-only-testing:VocabUITests/VocabUITests/testSingleScreenKeyboardAndLargeText" "-only-testing:VocabUITests/VocabUITests/testSingleScreenLongExample" test
+  xcodebuild "${xcode_args[@]}" "-only-testing:VocabUITests/VocabUITests/$method" "-only-testing:VocabUITests/VocabUITests/testSingleScreenKeyboardAndLargeText" "-only-testing:VocabUITests/VocabUITests/testSingleScreenLongExample" "-only-testing:VocabUITests/VocabUITests/testSingleScreenValidation" test
 else
   xcodebuild "${xcode_args[@]}" "-only-testing:VocabUITests/VocabUITests/$method" test
 fi

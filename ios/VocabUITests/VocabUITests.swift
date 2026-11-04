@@ -166,6 +166,28 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout: 20))
     }
 
+    @MainActor func testSingleScreenValidation() async throws {
+        continueAfterFailure = false
+        let app = vocabularyApp()
+        app.launchEnvironment["VOCAB_UI_TEST_API"] = "http://127.0.0.1:18765"
+        app.launchArguments += ["-vocab_guest","NO"]
+        app.launch()
+        app.buttons["先逛逛（游客模式）"].tap()
+        app.buttons["settings-menu"].tap()
+        selectSection("定级与校验", in: app)
+        let validate = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "独立水平校验")).firstMatch
+        reveal(validate, in: app); validate.tap()
+        for i in 1...24 {
+            let prompt = app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "独立水平校验 \(i)/24")).firstMatch
+            XCTAssertTrue(prompt.waitForExistence(timeout: 15))
+            let choices = app.buttons["quiz-option-0"]
+            XCTAssertTrue(choices.waitForExistence(timeout: 15)); reveal(choices, in: app); choices.tap()
+        }
+        XCTAssertTrue(app.staticTexts["独立校验结果"].waitForExistence(timeout: 20))
+        let back = app.buttons["返回设置"]; reveal(back,in:app);back.tap()
+        XCTAssertTrue(validate.waitForExistence(timeout: 15))
+    }
+
     func testListeningCoachAndClassicSwitch() throws {
         continueAfterFailure = false
         let app=XCUIApplication()
