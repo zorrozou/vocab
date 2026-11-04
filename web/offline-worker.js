@@ -1,6 +1,6 @@
 /* Public vocabulary only. Auth, progress, personal sentences and mutations never enter this cache. */
 importScripts('./offline-library.js');
-const SHELL = 'vocab-shell-20261104-bilingual', CONTENT = 'vocab-public-20261030-';
+const SHELL = 'vocab-shell-20261104-appearance', CONTENT = 'vocab-public-20261030-';
 const base = new URL(self.registration.scope).pathname.replace(/\/$/, '');
 VocabLibrary.init(base);
 let revision = null;

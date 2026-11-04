@@ -603,6 +603,7 @@ def index():
     nonce = secrets.token_urlsafe(24)
     content = (STATIC_DIR / "index.html").read_text(encoding="utf-8")
     content = content.replace("<script>", f'<script nonce="{nonce}">', 1)
+    content = content.replace('<script id="appearance-init">', f'<script id="appearance-init" nonce="{nonce}">', 1)
     policy = (f"default-src 'self'; script-src 'self' 'nonce-{nonce}'; "
               "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
               "media-src 'self' blob:; connect-src 'self'; object-src 'none'; "
