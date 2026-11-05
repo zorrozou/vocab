@@ -8,7 +8,7 @@ const assert=require('node:assert/strict'),{chromium}=require('playwright');
    await page.route('**/api/v1/quiz?**',route=>{
     const pos=Number(new URL(route.request().url()).searchParams.get('pos'));requests.push(pos);
     const actual=injectBad?(high?10987:1):pos;injectBad=false;
-    return route.fulfill({json:{word:actual===10987?'facilitator':'word-'+actual,pos:actual,options:[{text:'correct',ok:true},{text:'wrong one',ok:false},{text:'wrong two',ok:false},{text:'wrong three',ok:false}]}});
+    return route.fulfill({json:{word:actual===10987?'facilitator':'word-'+actual,pos:actual,item_id:'a'.repeat(64),options:[{text:'correct',ok:true},{text:'wrong one',ok:false},{text:'wrong two',ok:false},{text:'wrong three',ok:false}]}});
    });
    await page.goto('http://127.0.0.1:18765/');await page.locator('#wGuest').click();
    await page.evaluate(async high=>{
@@ -31,7 +31,7 @@ const assert=require('node:assert/strict'),{chromium}=require('playwright');
    await page.getByRole('heading',{name:'定级完成',exact:true}).waitFor();
    assert.equal(await page.evaluate(()=>S.log.filter(e=>e.kind==='placement').length),18,'duplicate answer was recorded');
    assert.equal(seen.size,19);assert.equal(new Set(requests).has(high?10987:1),false,'requested used endpoint');
-   if(high){assert((await page.locator('#app').innerText()).includes('已接近词库测量上限'));assert.equal(await page.locator('.score').innerText(),'接近词库上限');}
+   assert(await page.locator('#recognitionRange').isVisible());assert((await page.locator('.score').innerText()).includes('～'));assert.equal(await page.evaluate(()=>Object.keys(S.recognitionEvidence).length),18);
    assert.deepEqual(errors,[]);await page.close();
   }
   console.log('PASS browser upper/lower bounds, duplicate taps, invalid quiz, restored state and 30-question completion');

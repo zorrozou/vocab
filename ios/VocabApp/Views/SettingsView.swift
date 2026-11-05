@@ -433,7 +433,7 @@ struct SettingsView: View {
             Text(validationError).font(.footnote).foregroundStyle(Theme.warn)
         }
         if let r = app.S.evalReport {
-            Text("上次 \(r.date)：独立 ≈\(r.mean)，当前 ≈\(r.appMean)，差值 \(r.delta > 0 ? "+" : "")\(r.delta)")
+            Text(r.recognitionVersion == 1 ? "上次 \(r.date)：词义识别 \(r.lower ?? 0)～\(r.upper ?? 10987)；答对 \(r.correct)/\(r.count)" : "旧版校验只覆盖部分词频，建议使用新版重新校验")
                 .font(.caption).foregroundStyle(Theme.muted)
                 .frame(maxWidth: .infinity, alignment: .leading)
         } else {
@@ -678,7 +678,7 @@ struct ValidationView: View {
                     } else {
                         VStack(spacing: 0) {
                             VStack(spacing: 12) {
-                                let reverse = v.idx % 2 == 1
+                                let reverse = false
                                 if reverse, let prompt = quiz?.prompt {
                                     ReadingText(text: prompt, font: .title2.bold(), title: "完整题干")
                                         .foregroundStyle(Theme.text).multilineTextAlignment(.center)
@@ -695,14 +695,14 @@ struct ValidationView: View {
                         }
                         .frame(maxWidth: .infinity)
                         .onAppear {
-                            if v.idx % 2 == 0 { app.audio.play(v.words[v.idx].word, voice: app.S.settings.voice) }
+                            app.audio.play(v.words[v.idx].word, voice: app.S.settings.voice)
                         }
                     }
                 }
             }
                 if let q = quiz, let v = app.validation, v.idx < v.words.count {
-                    QuizOptionsView(options: q.options,spokenWord:v.idx%2==1 ? nil:v.words[v.idx].word) { ok in
-                        app.answerValidation(ok: ok, verifiedPos: q.pos)
+                    QuizOptionsView(options: q.options,spokenWord:v.words[v.idx].word) { ok in
+                        app.answerValidation(ok: ok, verifiedPos: q.pos, quiz:q)
                         quiz = nil
                         loading = true
                     }
@@ -714,10 +714,10 @@ struct ValidationView: View {
     private func loadQuiz() async {
         guard let v = app.validation, v.idx < v.words.count else { return }
         let w = v.words[v.idx]
-        let reverse = v.idx % 2 == 1
+        let reverse = false
         let owner = app.auth, generation = app.routeGeneration
         let result = try? await APIClient.shared.quiz(pos: w.pos, seed: Int(Date().timeIntervalSince1970) % 99991,
-                                                      mode: reverse ? "reverse" : "forward", word: w.word)
+                                                      mode: "forward", word: w.word, assessment: true)
         guard !Task.isCancelled, app.auth == owner, app.routeGeneration == generation,
               app.route == .validation, app.validation?.id == v.id, app.validation?.idx == v.idx else { return }
         if let q = result, q.options.count == 4 {
@@ -731,12 +731,12 @@ struct ValidationView: View {
     private func resultView(_ r: EvalReport) -> some View {
         ScreenPages(spacing: 14) {
             Text("独立校验结果").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
-            Text("≈\(r.mean)").font(.largeTitle.weight(.bold)).foregroundStyle(Theme.accentLight)
-            Text("独立估值（±\(r.std)） · 答对 \(r.correct)/\(r.count)")
+            Text("\(r.lower ?? 0)～\(r.upper ?? 10987)").font(.largeTitle.weight(.bold)).foregroundStyle(Theme.accentLight)
+            Text("词义识别模型范围 · 答对 \(r.correct)/\(r.count)")
                 .font(.footnote).foregroundStyle(Theme.muted)
-            Text("当前学习系统估值：\(r.appMean)\n差值（当前 − 独立）：\(r.delta > 0 ? "+" : "")\(r.delta)")
+            Text("校验前范围：\(r.appLower ?? 0)～\(r.appUpper ?? 10987)")
                 .font(.body).foregroundStyle(Theme.text).multilineTextAlignment(.center)
-            Text(abs(r.delta) <= 500 ? "与当前估值基本一致" : (r.delta > 0 ? "当前估值可能偏高" : "当前估值可能偏低"))
+            Text((r.appLower ?? 0) > (r.upper ?? 10987) ? "新题表现低于原估计，需继续校准" : (r.appUpper ?? 10987) < (r.lower ?? 0) ? "新题表现高于原估计，需继续校准" : "两个范围重叠，尚不能确认有系统性偏差")
                 .font(.subheadline).foregroundStyle(Theme.warn)
             Text("本次校验没有修改你的后验、卡片或后续发词位置。")
                 .font(.caption).foregroundStyle(Theme.muted)

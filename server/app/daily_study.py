@@ -23,6 +23,7 @@ class Word(BaseModel):
     word: str = Field(min_length=1, max_length=100)
     kind: Literal["learn", "review", "probe"]
     from_pending: StrictBool = False
+    probe_sampler: Literal["band-uniform-v1"] | None = None
 
 
 class PlanRequest(BaseModel):
@@ -99,6 +100,8 @@ def extend_plan(previous, state, body):
             item["from_pending"] = candidate.from_pending
             reserved_new += 1
         if needs_probe:
+            if candidate.probe_sampler:
+                item["probe_sampler"] = candidate.probe_sampler
             item["probe_word"] = True
             reserved_probes += 1
         approved.append(word)

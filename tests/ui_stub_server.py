@@ -13,6 +13,7 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
     shutil.copy2(root / 'web' / 'offline-library.js', isolated / 'static' / 'offline-library.js')
     shutil.copy2(root / 'web' / 'studio.css', isolated / 'static' / 'studio.css')
     shutil.copy2(root / 'web' / 'coach.js', isolated / 'static' / 'coach.js')
+    shutil.copy2(root / 'web' / 'recognition.js', isolated / 'static' / 'recognition.js')
     sys.path.insert(0, str(isolated))
     from app import main
     import uvicorn

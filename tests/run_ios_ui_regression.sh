@@ -4,6 +4,7 @@ set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 if [[ $# -lt 1 || $# -gt 2 ]]; then echo 'Usage: run_ios_ui_regression.sh SIMULATOR_UDID [advisory-time|single-screen|auto-sync|appearance|core-policy|guest|relearning|offline-relearning|queue-budget|shared-plan|shared-evidence|mastery-budget|static-swap|reminder|reminder-sync|account|offline|normal-interop|normal-recovery-interop|normal-backup-interop|normal-checkpoint-interop|normal-reload-interop|large-reload-interop|large-reload-oversize-interop|recovery|recovery-relogin|file|pull-fence|missing-delta|incremental-read|incremental-pruned|interop|replace|personal|identity|legacy|legacy-date|forecast|retention|budget|undo|queue|queue-switch|queue-pages|queue-end|acceptance-switch|meaning|manual-sync|delta-replay|staged-replay|staged-large-replay|large-login|large-restore-resume|large-restore-conflict|large-restore-new|large-restore-interrupt|large-restore-cancel-interrupt|large-checkpoint-interrupt|large-checkpoint-cancel-interrupt|backup-scheduler|disk-failure|fsrs-relogin]' >&2; exit 2; fi
 case "${2:-guest}" in
+  recognition) method=testSingleScreenValidation ;;
   advisory-time) method=testCoachAdvisoryTimeInClassic ;;
   single-screen) method=testSingleScreenNavigation ;;
   auto-sync) method=testAutomaticSyncAfterNavigationAndOutage ;;

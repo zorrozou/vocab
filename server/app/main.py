@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 from fastapi import FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StrictInt
 from typing import Literal
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
@@ -580,6 +580,12 @@ def studio_style():
     return FileResponse(STATIC_DIR / "studio.css", media_type="text/css",headers={"Cache-Control":"no-cache"})
 
 
+@app.get("/recognition.js", include_in_schema=False)
+def recognition_script():
+    return FileResponse(STATIC_DIR / "recognition.js", media_type="application/javascript",
+                        headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/coach.js", include_in_schema=False)
 def coach_script():
     return FileResponse(STATIC_DIR / "coach.js", media_type="application/javascript",
@@ -897,7 +903,7 @@ def gloss_of(wid):
 
 
 @app.get("/api/v1/quiz")
-def quiz(pos: int = Query(ge=1), seed: int = 0, mode: str = Query(default="forward"), word: str = ""):
+def quiz(pos: int = Query(ge=1), seed: int = 0, mode: str = Query(default="forward"), word: str = "", assessment: bool = False):
     """4 选 1：正确词义 + 3 个同词性、邻近词频（±200 位）的干扰项。
     mode=reverse：反向回想——给中文词义选英文单词（更难，用于稳定度≥14 天的成熟卡）"""
     import random as _r
@@ -915,6 +921,9 @@ def quiz(pos: int = Query(ge=1), seed: int = 0, mode: str = Query(default="forwa
     if not correct:
         return {"word": ID2WORD[wid], "pos": pos, "options": []}
     pcls = (p or "n")[:1]
+    if assessment:
+        mode = "forward"
+        seed = "recognition-v1:" + LEXICON_REVISION + ":" + ID2WORD[wid]
     rng = _r.Random(seed or time.time_ns())
     target_meanings = _QUIZ_MEANINGS.get(wid, _gloss_parts(correct))
     selected, selected_meanings, seen = [], [], {wid}
@@ -934,6 +943,8 @@ def quiz(pos: int = Query(ge=1), seed: int = 0, mode: str = Query(default="forwa
                 continue
             candidates.append((ID2WORD[w2] if mode == "reverse" else g, parts))
         rng.shuffle(candidates)
+        if assessment:
+            candidates.sort(key=lambda candidate: abs(len(candidate[0]) - len(correct)))
         for text, parts in candidates:
             if text == ID2WORD[wid] or text in selected or any(_gloss_overlaps(parts, p) for p in selected_meanings):
                 continue
@@ -946,7 +957,7 @@ def quiz(pos: int = Query(ge=1), seed: int = 0, mode: str = Query(default="forwa
     # 极少数词性（例如感叹词）全库候选不足。使用其他词性兜底，
     # 正向题逐项标注实际词性，避免将候选误标为目标词性。
     fallback_pos = {}
-    if len(selected) < 3:
+    if len(selected) < 3 and not assessment:
         candidates = list(seq)
         rng.shuffle(candidates)
         for row in candidates:
@@ -973,8 +984,12 @@ def quiz(pos: int = Query(ge=1), seed: int = 0, mode: str = Query(default="forwa
     if mode == "reverse":
         return {"word": answer, "pos": pos, "mode": "reverse", "prompt": f"{pcls}. {correct}",
                 "options": [{"text": t, "ok": t == answer} for t in opts]}
-    return {"word": ID2WORD[wid], "pos": pos,
-            "options": [{"text": f"{fallback_pos.get(t, pcls)}. {t}", "ok": t == answer} for t in opts]}
+    result = {"word": ID2WORD[wid], "pos": pos,
+              "options": [{"text": f"{fallback_pos.get(t, pcls)}. {t}", "ok": t == answer} for t in opts]}
+    if assessment:
+        import hashlib
+        result["item_id"] = hashlib.sha256(json.dumps(["recognition-v1", LEXICON_REVISION, result], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    return result
 
 
 # ---------- TTS（神经网络语音，带磁盘缓存；edge-tts 失败时 Kokoro 本地兜底）----------
@@ -1108,11 +1123,43 @@ def sentence_ensure(word: str = Query(min_length=1, max_length=40), request: Req
 
 
 # ---------- 定级题库（30 道 4 选 1，按用户种子随机抽题，词频带结构固定）----------
+class AssessmentSetRequest(BaseModel):
+    seed: str = Field(default="", max_length=200)
+    exclude: list[StrictInt] = Field(default_factory=list, max_length=10987)
+
+
+@app.post("/api/v1/placement/assessment")
+def assessment_set(body: AssessmentSetRequest):
+    # A long-lived account can exclude thousands of practiced words. Keep that
+    # list out of the URL so reverse-proxy request-line limits cannot block it.
+    if any(p < 1 or p > 10987 for p in body.exclude):
+        raise HTTPException(422, "校验排除位置无效")
+    return placement_set(seed=body.seed, assessment=True, exclude=",".join(map(str, body.exclude)))
+
+
 @app.get("/api/v1/placement/set")
-def placement_set(seed: str = ""):
+def placement_set(seed: str = "", assessment: bool = False, exclude: str = Query(default="", max_length=66000)):
     import random as _r
     seed_val = seed or str(time.time_ns())
     rng = _r.Random(seed_val)
+    if assessment:
+        if exclude and not re.fullmatch(r"[0-9,]+", exclude):
+            raise HTTPException(422, "校验排除位置无效")
+        used = {int(x) for x in exclude.split(",") if x}
+        items = []
+        for lo, hi in ((1,2000),(2001,4000),(4001,6000),(6001,8000),(8001,10000),(10001,10987)):
+            pool = [p for p in range(lo,min(hi,len(seq))+1) if p not in used]
+            rng.shuffle(pool)
+            chosen = []
+            for p in pool:
+                q = quiz(pos=p, seed=1, mode="forward", word="", assessment=True)
+                if len(q.get("options", [])) == 4:
+                    chosen.append(q)
+                if len(chosen) == 4: break
+            if len(chosen) != 4:
+                raise HTTPException(503, "独立校验题目不足")
+            items.extend(chosen)
+        return {"words": items, "seed": seed_val}
     bands = [300, 500, 750, 1000, 1250, 1500, 1750, 2000,
              2250, 2500, 2750, 3000, 3500, 4000, 4500]
     items = []

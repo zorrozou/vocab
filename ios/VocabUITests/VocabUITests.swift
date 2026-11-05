@@ -28,6 +28,18 @@ final class VocabUITests: XCTestCase {
         return app
     }
 
+    private func credentialWarningVisible(_ app: XCUIApplication) -> Bool {
+        // Unsigned simulator builds can reject Keychain writes. Compact home
+        // pages keep secondary notices in the top bar's More sheet.
+        if app.buttons["credential-status"].exists { return true }
+        let more = app.buttons.matching(NSPredicate(format:"label BEGINSWITH %@","更多（")).firstMatch
+        guard more.exists else { return false }
+        more.tap()
+        let visible = app.buttons["credential-status"].waitForExistence(timeout:3)
+        app.buttons["关闭"].tap()
+        return visible
+    }
+
     private func onScreen(_ element: XCUIElement, app: XCUIApplication) -> Bool {
         guard element.exists, element.isHittable else { return false }
         let frame = element.frame
@@ -464,11 +476,12 @@ final class VocabUITests: XCTestCase {
         try await Task.sleep(nanoseconds: 3_000_000_000)
         let remoteBefore = try await remoteCard(token)
         XCTAssertNil(remoteBefore["pendingFsrs"], "fixture unexpectedly stored the offline event")
-        let credentialWarning = app.staticTexts["⚠️ 登录凭证未保存，重启后需重新登录"].exists
+        let credentialWarning = credentialWarningVisible(app)
         app.terminate(); app.launch()
         if !start.waitForExistence(timeout: 8) {
             // Unsigned simulator builds may have no Keychain entitlement. The app must
             // warn before restart, and re-login must recover the original local work.
+            if !credentialWarning { print("SHARED-PLAN-RESTART",app.debugDescription);capture("shared-plan-restart-state",app:app) }
             XCTAssertTrue(credentialWarning, "session vanished without a credential warning")
             let login = app.buttons["登录"]
             XCTAssertTrue(login.waitForExistence(timeout: 15)); login.tap()
@@ -2025,9 +2038,10 @@ final class VocabUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["dog"].exists)
         XCTAssertTrue(app.buttons["退出"].waitForExistence(timeout:10)); app.buttons["退出"].tap()
         _ = try await fixtureRequest("/api/v1/__ui_fixture/study-plan-offline", method:"POST", body:["enabled":true])
-        let credentialWarning = app.staticTexts["⚠️ 登录凭证未保存，重启后需重新登录"].exists
+        let credentialWarning = credentialWarningVisible(app)
         app.terminate(); app.launch()
         if !app.buttons["start-today"].waitForExistence(timeout:8) {
+            if !credentialWarning { print("SHARED-PLAN-RESTART",app.debugDescription);capture("shared-plan-restart-state",app:app) }
             XCTAssertTrue(credentialWarning, "session vanished without a credential warning")
             XCTAssertTrue(app.buttons["登录"].waitForExistence(timeout:15)); app.buttons["登录"].tap()
             XCTAssertTrue(user.waitForExistence(timeout:15)); user.tap(); user.typeText(username)
@@ -2454,7 +2468,7 @@ final class VocabUITests: XCTestCase {
             }
         }
         XCTAssertTrue(app.staticTexts["定级完成"].waitForExistence(timeout:20))
-        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","已接近词库测量上限")).firstMatch.exists)
+        XCTAssertTrue(app.staticTexts["recognition-range"].exists)
         capture("placement-ceiling-finished",app:app)
         var state:[String:Any]=[:]
         for _ in 0..<100 {
@@ -2514,19 +2528,10 @@ final class VocabUITests: XCTestCase {
         for index in 4...30 { answer(index) }
         let finish = app.buttons["开始学习"]
         XCTAssertTrue(finish.waitForExistence(timeout: 30))
-        let summary = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "发词位置")).firstMatch
-        XCTAssertTrue(summary.waitForExistence(timeout: 10))
-        let label = summary.label
-        let regex = try NSRegularExpression(pattern: "：([0-9]+)/([0-9]+)")
-        let matches = regex.matches(in: label, range: NSRange(label.startIndex..., in: label))
-        XCTAssertEqual(matches.count, 6)
-        let scores = matches.map { match -> (Int, Int) in
-            let correct = Int(String(label[Range(match.range(at: 1), in: label)!]))!
-            let total = Int(String(label[Range(match.range(at: 2), in: label)!]))!
-            return (correct, total)
-        }
-        XCTAssertEqual(scores.reduce(0) { $0 + $1.0 }, 0)
-        XCTAssertEqual(scores.reduce(0) { $0 + $1.1 }, 30)
+        let range=app.staticTexts["recognition-range"]
+        XCTAssertTrue(range.waitForExistence(timeout:10));XCTAssertTrue(range.label.hasPrefix("0～"))
+        XCTAssertTrue(onScreen(finish,app:app))
+        capture("recognition-range-after-resume",app:app)
         app.buttons["返回首页"].tap()
         XCTAssertTrue(learned.waitForExistence(timeout: 30)); XCTAssertTrue(learned.label.contains("1"))
         app.buttons["account-menu"].tap()
@@ -2539,6 +2544,9 @@ final class VocabUITests: XCTestCase {
         XCTAssertEqual(state["probeCount"] as? Int, 30)
         XCTAssertEqual(state["calibrated"] as? Bool, true)
         XCTAssertNotNil(state["placementVersion"] as? [String: Any])
+        let recognition=state["recognitionEvidence"] as? [String:[String:Any]] ?? [:]
+        XCTAssertEqual(recognition.count,30)
+        XCTAssertEqual(Set(recognition.values.compactMap{$0["pos"] as? Int}).count,30)
     }
 
     @MainActor func testWebLargeReloadSettingsSync() async throws {

@@ -109,7 +109,7 @@ struct HomeView: View {
 
     private var chips: some View {
         LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: dynamicTypeSize.isAccessibilitySize ? 2 : 4), spacing: 8) {
-            Chip(label: "词汇边界", value: app.S.calibrated ? "≈\(app.S.frontier)" : "未定级")
+            Chip(label: "学习位置", value: app.S.calibrated ? "\(app.S.pointer)" : "未定级")
             Chip(label: "已学", value: "\(learnedCount)")
                 .accessibilityElement(children: .combine)
                 .accessibilityIdentifier("learned-count")
@@ -122,11 +122,11 @@ struct HomeView: View {
     private var placementIntro: some View {
         Group {
             Text(app.S.placementVersion == nil ? "首次使用 · 智能定级" : "重新定级").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
-            Text("共 30 道词义选择题，约需几分钟。难度会随作答调整，结果用于估计适合你的新词起点。可以中途退出，之后继续。")
+            Text("共 30 道词义选择题，约需几分钟。覆盖六个词频区间，结果给出粗略识别范围和新词起点。可以中途退出，之后继续。")
                 .font(.subheadline).foregroundStyle(Theme.text)
                 .multilineTextAlignment(.center)
             if app.S.probeCount > 0 {
-                Text("已完成 \(app.S.probeCount)/30\(app.S.probeCount >= 4 ? " · 当前估计 ≈\(Int(StudyEngine.postMean(app.S)))" : "")")
+                Text("已完成 \(app.S.probeCount)/30")
                     .font(.footnote).foregroundStyle(Theme.muted)
             }
 
@@ -155,8 +155,7 @@ struct HomeView: View {
                     .accessibilityIdentifier("daily-new-planned")
                 // v1.3：已校准就显示后验估值 + 滞回级别（不再显示发词游标）
                 if app.S.calibrated, app.S.posterior != nil {
-                    let shown = app.S.track?.shownLevel ?? levelForPos(max(1, app.S.frontier))
-                    StatCell(number: "≈\(StudyEngine.expectedKnown(app.S)) · \(levelDisplayName(shown))", label: "预计认识")
+                    StatCell(number: StudyEngine.recognitionEstimate(app.S).rangeText, label: "词义识别范围")
                 } else {
                     StatCell(number: "未定级", label: "预计认识")
                 }
@@ -169,7 +168,7 @@ struct HomeView: View {
                 Text("其中 \(plan.repeatPlanned) 个是今天学过的词，按间隔再复习，不增加今日单词数。")
                     .font(.caption).foregroundStyle(Theme.muted)
             }
-            Text("先预留每日新词名额，再安排到期复习；实际队列可能包含探测或提前复习。").font(.caption).foregroundStyle(Theme.muted)
+            Text("先保留新词名额；另含最多 \(plan.probePlanned) 个校准词，总量仍遵守每日上限。").font(.caption).foregroundStyle(Theme.muted)
         }
     }
 }

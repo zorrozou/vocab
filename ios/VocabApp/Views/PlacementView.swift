@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// 定级测试共 30 题：前 12 题覆盖六个词汇量区间，后 18 题围绕当前估计探测。
+/// 定级测试共 30 题：在六个词频区间内均匀抽样，优先补足样本少的区间。
 /// 答完后根据各区间累计证据计算学习边界。
 struct PlacementView: View {
     @Environment(AppState.self) private var app
@@ -9,7 +9,6 @@ struct PlacementView: View {
     @State private var loadFailed = false
     @State private var unavailablePositions: Set<Int> = []
     @State private var requestID = UUID()
-    @State private var recentMeans: [Double] = []
     @State private var finished: Int? = nil
     @State private var answering = false
     @State private var startingStudy = false
@@ -22,11 +21,6 @@ struct PlacementView: View {
         guard let quiz else { return 1 }
         return (bands.firstIndex { quiz.pos >= $0.0 && quiz.pos <= $0.1 } ?? 0) + 1
     }
-    private var finalMean: Int {
-        let a = recentMeans.suffix(5).sorted()
-        return a.isEmpty ? max(1, Int(StudyEngine.postMean(app.S).rounded())) : Int(a[a.count / 2].rounded())
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             if let f = finished {
@@ -69,24 +63,6 @@ struct PlacementView: View {
         .onDisappear { requestID = UUID(); app.audio.stop() }
     }
 
-    private func posteriorAround(_ mean: Int, sd: Double = 500) -> [Double] {
-        let raw = StudyEngine.grid.map { exp(-pow(($0 - Double(mean)) / sd, 2) / 2) }
-        let sum = raw.reduce(0, +)
-        return raw.map { $0 / sum }
-    }
-
-    private var scoreText: String {
-        bands.enumerated().map { i, b in
-            let stat = app.S.bandStats?["\(i)"]
-            let known = stat?.a ?? 0, total = known + (stat?.b ?? 0)
-            return "\(b.0)~\(b.1)：\(formatCount(known))/\(formatCount(total))"
-        }.joined(separator: "　")
-    }
-
-    private func formatCount(_ value: Double) -> String {
-        value.rounded() == value ? String(format: "%.0f", value) : String(format: "%.1f", value)
-    }
-
     private func loadNext() async {
         let id = UUID(); requestID = id
         let owner = app.auth, epoch = app.S.placementVersion, session = app.placementSession
@@ -97,7 +73,7 @@ struct PlacementView: View {
         }
         answering = false
         quiz = nil
-        if probeCount >= 30 { finish(boundary: finalMean); return }
+        if probeCount >= 30 { finish(); return }
         loading = true
         loadFailed = false
         for _ in 0..<3 {
@@ -105,7 +81,7 @@ struct PlacementView: View {
             if probeCount != count { await loadNext(); return }
             guard let pos = StudyEngine.placementCandidatePool(app.S, excluding: unavailablePositions).randomElement() else { break }
             do {
-                let cand = try await APIClient.shared.quiz(pos: pos, seed: Int.random(in: 1...99990))
+                let cand = try await APIClient.shared.quiz(pos: pos, seed: Int.random(in: 1...99990), assessment: true)
                 guard active() else { return }
                 if probeCount != count { await loadNext(); return }
                 guard cand.pos == pos, cand.matches(word: cand.word),
@@ -133,9 +109,9 @@ struct PlacementView: View {
         guard !StudyEngine.placementUsedPositions(app.S).contains(q.pos) else {
             Task { await loadNext() }; return
         }
+        StudyEngine.recordRecognition(&app.S, quiz:q, ok:ok, source:"placement")
         StudyEngine.recordKnowledge(&app.S, word: q.word, pos: q.pos, ok: ok, isPlacement: true)
         StudyEngine.posteriorUpdate(&app.S, rank: q.pos, resp: ok ? 1 : 0, guess: guessed ? 0.25 : 0)
-        recentMeans.append(StudyEngine.postMean(app.S))
         app.S.log.append(LogEntry(d: DayUtil.today(), word: q.word, rating: ok ? 4 : 1, kind: "placement"))
         if !ok && !app.S.pendingNew.contains(where: { $0.word == q.word }) {
             app.S.pendingNew.append(NewWord(word: q.word, pos: q.pos))
@@ -144,7 +120,7 @@ struct PlacementView: View {
         Task { await loadNext() }
     }
 
-    private func finish(boundary: Int) {
+    private func finish() {
         app.S.calibrated = true
         app.S.frontier = StudyEngine.placementPointer(app.S)
         app.S.pointer = app.S.frontier
@@ -156,17 +132,16 @@ struct PlacementView: View {
     private func doneView(boundary: Int) -> some View {
         ScreenPages {
             Text("定级完成").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
-            Text(StudyEngine.placementAtCeiling(app.S) ? "接近词库上限" : "预计认识 \(StudyEngine.expectedKnown(app.S)) 词")
-                .font(.largeTitle.weight(.bold)).foregroundStyle(Theme.accentLight)
-            Text(
-                "当前级别：\(levelDisplayName(levelForPos(boundary))) · 发词位置 \(boundary)\n\(scoreText)\n新词将从这个位置开始，\(app.S.pendingNew.count) 个答错词会优先补学"
-            )
-            .font(.subheadline).foregroundStyle(Theme.muted)
-            .multilineTextAlignment(.center)
-            Text(StudyEngine.placementAtCeiling(app.S)
-                 ? "已接近词库测量上限，更高水平暂无法可靠区分；此结果仅为近似估计。"
-                 : "这是近似估计，可随学习逐步调整。")
-                .font(.footnote).foregroundStyle(Theme.muted)
+            Text("词库内词义识别范围").font(.subheadline).foregroundStyle(Theme.muted)
+            Text(StudyEngine.recognitionEstimate(app.S).rangeText)
+                .accessibilityIdentifier("recognition-range")
+                .font(.largeTitle.weight(.bold)).minimumScaleFactor(0.65).lineLimit(1).foregroundStyle(Theme.accentLight)
+            Text(StudyEngine.recognitionEstimate(app.S).note)
+                .font(.footnote).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
+            Text("建议学习起点：\(boundary) 附近；\(app.S.pendingNew.count) 个答错词优先补学。每天最多 3 道新题继续校准。")
+                .font(.subheadline).foregroundStyle(Theme.text).multilineTextAlignment(.center)
+            Text("选择题结果不代表听说写能力。")
+                .font(.caption).foregroundStyle(Theme.muted)
             PrimaryButton(title: startingStudy ? "正在准备…" : "开始学习") {
                 guard !startingStudy else { return }
                 startingStudy = true

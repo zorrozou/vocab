@@ -18,38 +18,39 @@ enum APIClient {
     }
 }
 
-struct SelectionCase: Decodable {
-    let name: String
-    let probeCount, gridIndex: Int
-    let used: [Int]
-    let excludedRanges: [[Int]]
-    let low, high: Int?
-    let count: Int
-    let ceiling: Bool
+struct RecognitionFixture: Decodable {
+    struct Count: Decodable {let n,k:Int}
+    let name:String
+    let stats:[Count]
+    let lower,upper,pointer:Int
+    let mean:Double
 }
 @main struct PlacementSelectionCheck {
     static func main() throws {
-        let cases = try JSONDecoder().decode([SelectionCase].self, from: Data(contentsOf: URL(fileURLWithPath:"tests/placement_selection_fixtures.json")))
-        for c in cases {
-            var s=LearningState();s.posterior=Array(repeating:0,count:49);s.posterior?[c.gridIndex]=1
-            for pos in c.used {StudyEngine.recordKnowledge(&s,word:"word-\(pos)",pos:pos,ok:true,isPlacement:true)}
-            s.probeCount=c.probeCount
-            let excluded=Set(c.excludedRanges.flatMap { Array($0[0]...$0[1]) })
-            let pool=StudyEngine.placementCandidatePool(s,excluding:excluded)
-            precondition(pool.count==c.count && pool.first==c.low && pool.last==c.high,c.name)
-            precondition(StudyEngine.placementAtCeiling(s)==c.ceiling,c.name)
+        let cases=try JSONDecoder().decode([RecognitionFixture].self,from:Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "tests/recognition_fixtures.json")))
+        for f in cases {
+            var s=LearningState();s.recognitionEvidence=[:]
+            for (b,c) in f.stats.enumerated() { for i in 0..<c.n {
+                s.recognitionEvidence?["\(b)-\(i)"]=RecognitionEvent(word:"w\(b)-\(i)",pos:StudyEngine.placementBands[b].0+i,
+                    at:String(format:"2026-11-05T01:%02d:%02dZ",b,i%60),correct:i<c.k,source:"placement",itemId:String(repeating:"a",count:64))
+            }}
+            let e=StudyEngine.recognitionEstimate(s)
+            precondition(e.lower==f.lower && e.upper==f.upper && abs(e.mean-f.mean)<1e-6 && StudyEngine.placementPointer(s)==f.pointer,f.name)
+            let roundtrip=try JSONDecoder().decode(LearningState.self,from:JSONEncoder().encode(s))
+            precondition(roundtrip.recognitionEvidence==s.recognitionEvidence)
         }
-        for correct in [true,false] {
-            var s=LearningState(),seen=Set<Int>()
-            for i in 0..<30 {
-                let pool=StudyEngine.placementCandidatePool(s),pos=pool[pool.count/2]
-                precondition(seen.insert(pos).inserted)
-                StudyEngine.recordKnowledge(&s,word:"word-\(pos)",pos:pos,ok:correct,isPlacement:true)
-                StudyEngine.posteriorUpdate(&s,rank:pos,resp:correct ? 1:0,guess:0.25)
-                if i==16 {s=try JSONDecoder().decode(LearningState.self,from:JSONEncoder().encode(s))}
-            }
-            precondition(seen.count==30 && s.probeCount==30)
+        var s=LearningState(),seen=Set<Int>()
+        for i in 0..<30 {
+            let pool=StudyEngine.placementCandidatePool(s),pos=pool[pool.count/2]
+            precondition(seen.insert(pos).inserted)
+            let q=Quiz(word:"w\(pos)",pos:pos,options:[QuizOption(text:"yes",ok:true),QuizOption(text:"a",ok:false),QuizOption(text:"b",ok:false),QuizOption(text:"c",ok:false)],item_id:String(repeating:"a",count:64))
+            StudyEngine.recordRecognition(&s,quiz:q,ok:i%2==0,source:"placement")
+            StudyEngine.recordKnowledge(&s,word:q.word,pos:pos,ok:i%2==0,isPlacement:true)
+            StudyEngine.posteriorUpdate(&s,rank:pos,resp:i%2==0 ? 1:0,guess:0.25)
+            if i==17 {s=try JSONDecoder().decode(LearningState.self,from:JSONEncoder().encode(s))}
         }
-        print("PASS Swift placement limits, persisted exclusions, exhausted windows and 30 unique all-correct/all-wrong answers")
+        precondition(StudyEngine.recognitionCounts(s).map(\.n)==[5,5,5,5,5,5])
+        precondition(StudyEngine.placementCandidatePool(s,excluding:Set(1...10987)).isEmpty)
+        print("PASS Swift/Web recognition intervals, start positions, restart, coverage and unique questions")
     }
 }

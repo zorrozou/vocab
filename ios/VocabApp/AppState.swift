@@ -21,6 +21,8 @@ struct Session {
 }
 
 struct ValidationSession {
+    var assessment = LearningState()
+    var baseline: StudyEngine.RecognitionEstimate? = nil
     let id = UUID()
     var words: [PlacementItem]
     var idx = 0
@@ -1203,6 +1205,7 @@ final class AppState {
         S.track = nil          // 追踪状态一并刷新（先验更换）
         S.bandStats = nil      // 重新定级重置档位先验；词级历史证据保留
         S.bandEvidence = nil
+        S.recognitionEvidence = nil
         S.placementResetAt = Date().timeIntervalSince1970   // 显式重测，服务端不得合并回旧后验
         placementSet = nil
         placementSession = UUID()
@@ -1213,17 +1216,19 @@ final class AppState {
     /// 独立留出水平校验：单独维护一份后验，不写 S.posterior/log/cards/pendingNew，不影响学习计划
     func startValidation() async throws {
         let owner = auth, generation = routeGeneration, origin = route
-        let r = try await api.placementSet(seed: "validation-\(deviceId())-\(Int(Date().timeIntervalSince1970))")
+        let excluded = Set(StudyEngine.recognitionEvents(S).map{$0.1.pos}).union(StudyEngine.placementUsedPositions(S)).union(S.cards.values.compactMap(\.pos)).union(S.pendingNew.map(\.pos))
+        let r = try await api.placementSet(seed: "validation-\(deviceId())-\(Int(Date().timeIntervalSince1970))", assessment:true, excluding:excluded)
         guard auth == owner, route == origin, routeGeneration == generation, !Task.isCancelled else { return }
         guard r.words.count >= 24 else { throw APIError(message: "校验题目不足，请稍后重试") }
-        validation = ValidationSession(words: Array(r.words.prefix(24)))
+        validation = ValidationSession(baseline:StudyEngine.recognitionEstimate(S),words: Array(r.words.prefix(24)))
         route = .validation
     }
 
-    func answerValidation(ok: Bool, countEvidence: Bool = true, verifiedPos: Int? = nil) {
+    func answerValidation(ok: Bool, countEvidence: Bool = true, verifiedPos: Int? = nil, quiz: Quiz? = nil) {
         guard var v = validation, v.idx < v.words.count else { return }
         let w = v.words[v.idx]
-        if countEvidence {
+        if countEvidence, let quiz, quiz.item_id != nil {
+            StudyEngine.recordRecognition(&v.assessment,quiz:quiz,ok:ok,source:"placement")
             v.posterior = StudyEngine.posteriorCalc(v.posterior, rank: verifiedPos ?? w.pos, resp: ok ? 1 : 0,
                                                     weight: 1.0, guess: 0.25)
             if ok { v.correct += 1 }
@@ -1234,12 +1239,10 @@ final class AppState {
         validation = v
         if v.idx >= v.words.count {
             if v.failed == 0 {
-                let mean = Int(StudyEngine.posteriorMean(v.posterior).rounded())
-                let std = Int(StudyEngine.posteriorStd(v.posterior).rounded())
-                let appMean = Int(StudyEngine.postMean(S).rounded())
-                S.evalReport = EvalReport(date: DayUtil.today(), mean: mean, std: std,
-                                          appMean: appMean, delta: appMean - mean,
-                                          correct: v.correct, count: v.words.count)
+                let estimate=StudyEngine.recognitionEstimate(v.assessment),base=v.baseline ?? StudyEngine.recognitionEstimate(S)
+                S.evalReport = EvalReport(recognitionVersion:1,lower:estimate.lower,upper:estimate.upper,appLower:base.lower,appUpper:base.upper,
+                    date:DayUtil.today(),mean:Int(estimate.mean.rounded()),std:(estimate.upper-estimate.lower)/2,
+                    appMean:Int(base.mean.rounded()),delta:Int((base.mean-estimate.mean).rounded()),correct:v.correct,count:v.words.count)
             } else {
                 S.evalReport = nil   // 有题目失败，不给出伪精确估值
             }
@@ -1518,7 +1521,7 @@ final class AppState {
             switch item {
             case .review(let word): return SharedStudyWord(word: word, kind: "review")
             case .learn(let word): return SharedStudyWord(word: word.word, kind: "learn", from_pending: word.fromPending ?? false)
-            case .probe(let word, _): return SharedStudyWord(word: word.word, kind: "probe")
+            case .probe(let word, _): return SharedStudyWord(word: word.word, kind: "probe",probe_sampler:word.recognitionSample == true ? "band-uniform-v1":nil)
             }
         }
         var completedEvents: [String:SharedStudyWord] = [:]
@@ -1559,7 +1562,12 @@ final class AppState {
             guard !seen.contains(entry.word), plan.permits(word: entry.word, kind: entry.kind),
                   completed.contains(entry.word) || slots > 0,
                   entry.kind != "learn" || newSlots > 0, entry.kind != "probe" || probes > 0 else { return }
-            queue.append(item); seen.insert(entry.word)
+            var gradedItem = item
+            if case .probe(var word, let reverse) = item {
+                word.recognitionSample = plan.items.first(where:{$0.word==word.word})?.probe_sampler == "band-uniform-v1"
+                gradedItem = .probe(word:word,reverse:reverse)
+            }
+            queue.append(gradedItem); seen.insert(entry.word)
             if !completed.contains(entry.word) { slots -= 1 }
             if entry.kind == "learn" { newSlots -= 1 }
             if entry.kind == "probe" { probes -= 1 }
@@ -1668,57 +1676,17 @@ final class AppState {
         if rating<=2 {prepareWeakExamples()}
     }
 
-    /// 每天首次 buildQueue 时运行：T=后验均值。
-    /// T 超前 pointer >500 且证据够硬(std<800) → pointer 跳到 T（中间词视为已会）；
-    /// 新词数始终使用用户设置，不因水平估计降低。
-    /// v1.3：评估前先做置信度扩散（每日一次）；级别变更须连续 3 天跨边界（滞回防抖）
+    /// 清理旧模型的级别提示；学习位置与新词目标不随估计自动变化。
     func trackLevelDaily() {
-        guard S.calibrated, S.posterior != nil else { return }
-        if var track = S.track, track.throttle == true {
-            track.throttle = false; track.lowSince = nil
-            if track.lastNote?.contains("新词临时降到") == true { track.lastNote = nil }
-            S.track = track
-        }
-        let today = DayUtil.today()
-        if S.track?.evalDay == today { return }   // 每日最多一次
-        var track = S.track ?? TrackState()
-        if track.diffuseDay != today {
-            StudyEngine.diffusePosterior(&S)
-            track.diffuseDay = today
-        }
-        let T = Int(StudyEngine.postMean(S).rounded())
-        let std = StudyEngine.postStd(S)
-        if Double(T - S.pointer) > 500 && std < 800 {
-            track.lastNote = "连续表现超过当前级别，发词位置从 \(S.pointer) 追平到 ≈\(T)（\(levelDisplayName(levelForPos(T)))），中间词视为已会跳过"
-            S.pointer = T
-            track.lowSince = nil
-            track.throttle = false
-        } else {
-            track.lowSince = nil
-            track.throttle = false
-        }
-        // v1.3 级别滞回：后验均值跨边界须连续 3 天，才正式调整展示级别（防单日抖动）
-        let band = levelForPos(max(1, T))
-        if track.shownLevel == nil { track.shownLevel = levelForPos(max(1, S.pointer)) }
-        if band != track.shownLevel {
-            if track.pendingBand == band { track.pendingDays = (track.pendingDays ?? 0) + 1 }
-            else { track.pendingBand = band; track.pendingDays = 1 }
-            if (track.pendingDays ?? 0) >= 3 {
-                track.shownLevel = band
-                track.lastNote = "词汇水平连续 3 天稳定在「\(levelDisplayName(band))」区间，当前级别已调整"
-                track.pendingBand = nil
-                track.pendingDays = 0
-            }
-        } else {
-            track.pendingBand = nil
-            track.pendingDays = 0
-        }
-        track.evalDay = today
-        S.track = track
-        save()
+        guard S.calibrated else {return}
+        var track=S.track ?? TrackState()
+        if track.evalDay==DayUtil.today() && track.recognitionVersion==1 {return}
+        track.throttle=false;track.lowSince=nil;track.lastNote=nil
+        track.pendingBand=nil;track.pendingDays=0;track.shownLevel=levelForPos(max(1,S.pointer))
+        track.evalDay=DayUtil.today();track.recognitionVersion=1;S.track=track;save()
     }
 
-    /// v1.4 主动探测选词：上方近端反向回想 / 上方远端正向再认 / 下方正向回归检查
+    /// 从证据较少的词频档均匀抽取未练过的新题，每天最多三题。
     private func pickProbes(reviewWords: [String], news: [NewWord], active: () -> Bool) async -> [(word: NewWord, reverse: Bool)] {
         guard S.calibrated, S.posterior != nil else { return [] }
         let today = DayUtil.today()
@@ -1726,32 +1694,20 @@ final class AppState {
         let already = S.log.filter { $0.kind == "probe" && $0.d == today }.count
         let need = 3 - already
         guard need > 0 else { return [] }
-        let m = StudyEngine.postMean(S), sd = max(60, StudyEngine.postStd(S))
-        let recentProbe = Set(S.log.filter { $0.kind == "probe" && $0.d >= DayUtil.addDays(today, -14) }.map(\.word))
-        var busy = Set(reviewWords)
-        news.forEach { busy.insert($0.word) }
-        let zones: [(Double, Double, Bool)] = [
-            (m + 0.5 * sd, m + 1.0 * sd, true),   // 上方近端：从中文选英文，补充另一方向的证据
-            (m + 1.5 * sd, m + 2.0 * sd, false),  // 上方远端：正向再认，探大幅进步
-            (m - 1.0 * sd, m - 0.5 * sd, false),  // 下方：正向再认，高估回归检查
-        ]
+        let busy = Set(reviewWords).union(news.map(\.word))
+        var excluded=Set(S.cards.values.compactMap(\.pos)).union(S.pendingNew.map(\.pos))
         var out: [(word: NewWord, reverse: Bool)] = []
-        for (lo, hi, reverse) in zones {
-            if out.count >= need { break }
-            let a = max(1, Int(lo.rounded())), b = min(10991, Int(hi.rounded()))
-            guard a <= b else { continue }
-            for _ in 0..<6 {
-                let pos = Int.random(in: a...b)
-                let result = try? await api.lexiconAt(pos: pos, n: 1)
-                guard active() else { return [] }
-                guard let r = result, let w = r.words.first,
-                      S.cards[w.word] == nil,
-                      !recentProbe.contains(w.word),
-                      !busy.contains(w.word),
-                      !out.contains(where: { $0.word.word == w.word }),
-                      !S.pendingNew.contains(where: { $0.word == w.word }) else { continue }
-                out.append((word: w, reverse: reverse))
-                break
+        for _ in 0..<need {
+            for _ in 0..<8 {
+                guard let pos=StudyEngine.recognitionCandidates(S,excluding:excluded).randomElement() else {break}
+                let result=try? await api.lexiconAt(pos:pos,n:1)
+                guard active() else {return []}
+                guard let r=result else {break}
+                excluded.insert(pos)
+                guard let w=r.words.first,w.pos==pos,S.cards[w.word]==nil,!busy.contains(w.word),
+                      !out.contains(where:{$0.word.word==w.word}),!S.pendingNew.contains(where:{$0.word==w.word}) else {continue}
+                var chosen=w;chosen.recognitionSample=true
+                out.append((word:chosen,reverse:false));break
             }
         }
         return out
@@ -1759,8 +1715,9 @@ final class AppState {
 
     /// v1.4 探测作答：全额证据；正反向均为四选一，猜测率 0.25；答错 → 进明日新词候选
     @discardableResult
-    func answerProbe(_ w: NewWord, ok: Bool, reverse: Bool) -> Bool {
+    func answerProbe(_ w: NewWord, ok: Bool, reverse: Bool, quiz: Quiz? = nil) -> Bool {
         guard admitStudy(word: w.word, kind: "probe") else { return false }
+        if let quiz, !reverse, w.recognitionSample == true {StudyEngine.recordRecognition(&S,quiz:quiz,ok:ok,source:"probe")}
         let evidenceKey = auth == nil ? nil : cachedSharedPlan()?.evidenceKey(word:w.word,kind:"probe")
         if auth == nil || evidenceKey != nil {
             StudyEngine.posteriorUpdate(&S, rank: w.pos, resp: ok ? 1 : 0, weight: 1.0, guess: 0.25,evidenceKey:evidenceKey)
@@ -1945,16 +1902,11 @@ final class AppState {
         guard news.count == nNew || exhausted else { return false }   // 仅服务端明确词库结束时允许不足额
         let repeats = due.filter { completed.contains($0) }
         let freshDue = due.filter { !completed.contains($0) }
-        let reviews = repeats + freshDue.prefix(max(0, remaining - news.count))
-        let reviewsAll = reviews
-        // Lower-band checks use the shared probe pool; never replace a reserved
-        // new word with an untested random word from a skipped range.
-
-        // v1.3 每日主动探测：3 个探测词（2 个后验上方区 / 1 个下方区）随机混入复习段，
-        // 4选1 形式与复习测验无差别——用户无感知，证据全额（与定级同级 weight 1.0）
-        let probeBudget = max(0, remaining - reviewsAll.filter { !completed.contains($0) }.count - news.count)
-        let probes = probeBudget > 0 ? Array((await pickProbes(reviewWords: reviewsAll, news: news, active: active)).prefix(probeBudget)) : []
-        guard active() else { return false }
+        // A backlog cannot starve calibration. Failed loading releases slots.
+        let probeBudget=max(0,remaining-news.count)
+        let probes=probeBudget > 0 ? Array((await pickProbes(reviewWords:due,news:news,active:active)).prefix(probeBudget)):[]
+        guard active() else {return false}
+        let reviewsAll=repeats + freshDue.prefix(max(0,remaining-news.count-probes.count))
         var revBlock: [Session.Item] = reviewsAll.map { .review(word: $0) }
         for p in probes {
             let at = Int.random(in: 0...revBlock.count)

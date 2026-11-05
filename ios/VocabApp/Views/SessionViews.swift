@@ -392,7 +392,7 @@ struct ProbeQuizView: View {
                 QuizOptionsView(options: quiz.options,spokenWord:reverse ? nil:item.word) { ok in
                     var observed = item
                     observed.pos = quiz.pos
-                    guard app.answerProbe(observed, ok: ok, reverse: reverse) else { return }
+                    guard app.answerProbe(observed, ok: ok, reverse: reverse, quiz: quiz) else { return }
                     app.session.idx += 1
                     app.save()
                 }
@@ -405,7 +405,7 @@ struct ProbeQuizView: View {
         let owner = app.auth, sessionID = app.session.id, index = app.session.idx, generation = app.routeGeneration
         let pos = item.pos > 0 ? item.pos : app.S.pointer
         let result = try? await APIClient.shared.quiz(pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991,
-                                                       mode: reverse ? "reverse" : "forward", word: item.word)
+                                                       mode: "forward", word: item.word, assessment: true)
         guard !Task.isCancelled, app.auth == owner, app.session.id == sessionID,
               app.session.idx == index, app.routeGeneration == generation, app.route == .session else { return }
         if let q = result, q.options.count >= 4 {
@@ -687,10 +687,9 @@ struct DoneView: View {
                 } else if section == 1 {
                     // v2.0 词级知识预测：预计认识词数 + 滞回级别 + 今日证据
                     if app.S.calibrated, app.S.posterior != nil {
-                        let shown = app.S.track?.shownLevel ?? levelForPos(max(1, app.S.frontier))
-                        Text("预计认识 \(StudyEngine.expectedKnown(app.S)) 词（\(levelDisplayName(shown))），明天从 \(app.S.pointer) 附近发词")
+                        Text("词义识别 \(StudyEngine.recognitionEstimate(app.S).rangeText) · 学习位置 \(app.S.pointer)")
                             .font(.caption).foregroundStyle(Theme.accentLight)
-                        Text("今日有效水平证据：" + StudyEngine.effectiveEvidenceSummary(app.S, day: DayUtil.today()))
+                        Text(StudyEngine.recognitionEstimate(app.S).note)
                             .font(.caption).foregroundStyle(Theme.muted)
                         if let note = app.S.track?.lastNote, !note.isEmpty {
                             Text(note).font(.caption).foregroundStyle(Theme.muted)

@@ -55,6 +55,15 @@ const assert = require('assert');
     assert.equal(full.queue.filter(x=>x.kind==='review').length,90);
     assert(!full.queue.some(x=>x.word.startsWith('mastered')));
     assert.equal(full.plan.dueAvailable,95); assert.equal(full.plan.duePlanned,90); assert.equal(full.plan.newPlanned,10);
+    const calibration = await page.evaluate(async()=>{
+      S.calibrated=true;S.posterior=Array(49).fill(1/49);
+      pickProbes=async()=>[0,1,2].map(i=>({word:'calibration'+i,pos:9000+i,recognitionSample:true}));
+      await buildQueue();return {kinds:session.queue.map(i=>i.kind),summary:dailyPlanSummary(S)};
+    });
+    assert.equal(calibration.kinds.length,100);assert.equal(calibration.kinds.filter(k=>k==='learn').length,10);
+    assert.equal(calibration.kinds.filter(k=>k==='review').length,87);assert.equal(calibration.kinds.filter(k=>k==='probe').length,3);
+    assert.equal(calibration.summary.duePlanned,87);assert.equal(calibration.summary.probePlanned,3);assert.equal(calibration.summary.totalPlanned,100);
+    await page.evaluate(()=>{S.calibrated=false;pickProbes=async()=>[]});
     await page.route('**/api/v1/lexicon/at?**', route => route.fulfill({json:{words:[],exhausted:true,next_pos:10988}}));
     const exhausted = await page.evaluate(async () => {
       S.pendingNew = []; S.pointer = 10987;

@@ -244,7 +244,7 @@ const Appearance = (() => {
 <section id="coachControls" hidden aria-label="英语教练"></section>
 <main id="app"></main>
 <div class="foot" id="foot">
-  调度：FSRS-6（官方 py-fsrs · 保持率 90%）· 定级：CAT 自适应 · 例句：静态 + AI 个性化 · 语音：神经网络 TTS<br>
+  调度：FSRS-6（官方 py-fsrs · 保持率 90%）· 定级：分档抽测 · 例句：静态 + AI 个性化 · 语音：神经网络 TTS<br>
   <span class="tools" id="testTools" style="display:none">
     <button id="tNextDay">快进一天（测试）</button>
     <button id="tReset">清空本机缓存</button>
@@ -253,6 +253,7 @@ const Appearance = (() => {
 
 <script src="./offline-library.js"></script>
 <script src="./coach.js"></script>
+<script src="./recognition.js"></script>
 <script>
 "use strict";
 // 反代部署在 /vocab/；本地直接访问服务根路径时不添加前缀。
@@ -926,7 +927,7 @@ async function prepareSharedQueue(proposed, newExhausted, active, adoptPool = tr
     if(offline)throw new Error("使用已领取的离线任务");
     const resp = await fetch(`${API}/api/v1/me/study-plan`, {method:"POST", cache:"no-store", signal:AbortSignal.timeout(15000),
       headers:{...authHeaders(),"Content-Type":"application/json"},body:JSON.stringify({day,offset_minutes:-new Date().getTimezoneOffset(),
-        candidates:proposed.map(i => ({word:i.word,kind:i.kind,from_pending:!!i.detail?.fromPending})),
+        candidates:proposed.map(i => ({word:i.word,kind:i.kind,from_pending:!!i.detail?.fromPending,probe_sampler:i.kind==="probe" && i.detail?.recognitionSample ? "band-uniform-v1":null})),
         completed:[...completedEvents.values()],new_exhausted:!!newExhausted})});
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({}));
@@ -958,6 +959,7 @@ async function prepareSharedQueue(proposed, newExhausted, active, adoptPool = tr
   function append(item) {
     if (seen.has(item.word) || !sharedPlanPermits(plan,item.word,item.kind) || (!completed.has(item.word) && !slots) ||
         (item.kind==="learn" && !newSlots) || (item.kind==="probe" && !probes)) return false;
+    if(item.kind==="probe")item={...item,detail:{...item.detail,recognitionSample:plan.items.find(p=>p.word===item.word)?.probe_sampler==="band-uniform-v1"}};
     queue.push(item);seen.add(item.word);
     if (!completed.has(item.word)) slots--;
     if (item.kind==="learn") newSlots--;
@@ -1228,56 +1230,15 @@ function bandIndexOfPos(pos) {
   return PLACEMENT_BANDS.length - 1;
 }
 
-function bandPrior(i) {
-  const st = S.bandStats && S.bandStats[i];
-  if (st && st.a + st.b > 0) return st.a / (st.a + st.b);
-  // 没有定级证据时用当前边界做弱先验，避免默认所有词都未知
-  const center = (PLACEMENT_BANDS[i].lo + PLACEMENT_BANDS[i].hi) / 2;
-  if (S.frontier) return Math.max(0.05, Math.min(0.95, logistic((S.frontier - center) / 400)));
-  return 0.2;   // 没有定级证据时保持保守先验，避免默认每档都“会一半”导致预计认识词数虚高
-}
-
-function knowledgeProb(word, pos) {
-  const c = S.cards[word];
-  if (c && c.fsrs) {
-    const last = c.fsrs.lastReview || c.fsrs.last_review || lastReviewDate(word);
-    const elapsed = last ? Math.max(0, (Date.now() - new Date(last.length === 10 ? last + "T08:00:00Z" : last).getTime()) / 86400000) : 0;
-    return Math.pow(1 + 0.9805 * elapsed / Math.max(0.2, c.fsrs.stability), -0.1542);
-  }
-  const k = S.knowledge && S.knowledge[word];
-  if (k && k.a + k.b > 0) return k.a / (k.a + k.b);
-  return bandPrior(bandIndexOfPos(pos));
-}
-
-function expectedKnown() {
-  let total = 0;
-  const adjusted = new Set();
-  for (let i = 0; i < PLACEMENT_BANDS.length; i++) {
-    const b = PLACEMENT_BANDS[i];
-    const size = b.hi - b.lo + 1;
-    total += size * bandPrior(i);
-  }
-  // 有词级证据或卡片的词，用更准确的概率替换档位先验
-  const words = new Set([...Object.keys(S.knowledge || {}), ...Object.keys(S.cards || {})]);
-  words.forEach(w => {
-    const pos = (S.cards[w] && S.cards[w].pos) || (S.knowledge[w] && S.knowledge[w].pos) || S.pointer;
-    const idx = bandIndexOfPos(pos);
-    const size = PLACEMENT_BANDS[idx].hi - PLACEMENT_BANDS[idx].lo + 1;
-    total += knowledgeProb(w, pos) - bandPrior(idx);
-    adjusted.add(w);
-  });
-  return Math.max(0, Math.round(total));
-}
-
-function placementPointer() {
-  for (let i = 0; i < PLACEMENT_BANDS.length; i++) {
-    const b = PLACEMENT_BANDS[i];
-    const p = bandPrior(i);
-    if (p < 0.75) {
-      return Math.max(b.lo, Math.min(b.hi, b.lo + Math.floor((b.hi - b.lo + 1) * p)));
-    }
-  }
-  return PLACEMENT_BANDS[PLACEMENT_BANDS.length - 1].hi - 50;
+function bandPrior(i) { return VocabRecognition.bandMean(VocabRecognition.counts(S)[i]); }
+function knowledgeProb(word, pos) { return bandPrior(bandIndexOfPos(pos)); }
+function expectedKnown() { return Math.round(VocabRecognition.estimate(S).mean); }
+function placementPointer() { return VocabRecognition.pointer(S); }
+function recordRecognition(quiz, ok, source) {
+  if (!/^[a-f0-9]{64}$/.test(quiz?.item_id || '') || VocabRecognition.evidence(S).some(e=>e.pos===quiz.pos)) return;
+  S.recognitionEvidence ||= {};
+  S.recognitionEvidence[crypto.randomUUID().toLowerCase()] = {version:1, word:quiz.word, pos:quiz.pos,
+    at:new Date().toISOString(),correct:ok,source,itemId:quiz.item_id};
 }
 
 function recordKnowledge(word, pos, ok, isPlacement = false) {
@@ -1325,38 +1286,13 @@ function diffusePosterior() {
 
 /* ---------------- v1.2/v1.3 自适应水平追踪：每日一次评估与重规划 ---------------- */
 function trackLevelDaily() {
-  if (!S.calibrated || !S.posterior) return;
-  if (S.track?.throttle) {
-    S.track.throttle = false; S.track.lowSince = null;
-    if (S.track.lastNote?.includes("新词临时降到")) S.track.lastNote = null;
-  }
-  if (S.track && S.track.evalDay === today()) return;   // 每日最多一次
+  if (!S.calibrated) return;
+  // A recognition estimate must never promote skipped words to "known".
   const track = S.track || {};
-  // v1.3：先做置信度扩散（每日一次），再评估
-  if (track.diffuseDay !== today()) { diffusePosterior(); track.diffuseDay = today(); }
-  const T = Math.round(postMean()), std = postStd();
-  if (T - S.pointer > 500 && std < 800) {
-    track.lastNote = `连续表现超过当前级别，发词位置从 ${S.pointer} 追平到 ≈${T}（${LVL_NAME[lvlOfPos(T)]}），中间词视为已会跳过`;
-    S.pointer = T;
-    track.lowSince = null; track.throttle = false;
-  } else {
-    track.lowSince = null; track.throttle = false;
-  }
-  // v1.3 级别滞回：后验均值跨边界须连续 3 天，才正式调整展示级别（防单日抖动）
-  const band = lvlOfPos(Math.max(1, T));
-  if (!track.shownLevel) track.shownLevel = lvlOfPos(Math.max(1, S.pointer));
-  if (band !== track.shownLevel) {
-    if (track.pendingBand === band) track.pendingDays = (track.pendingDays || 0) + 1;
-    else { track.pendingBand = band; track.pendingDays = 1; }
-    if (track.pendingDays >= 3) {
-      track.shownLevel = band;
-      track.lastNote = `词汇水平连续 3 天稳定在「${LVL_NAME[band]}」区间，当前级别已调整`;
-      track.pendingBand = null; track.pendingDays = 0;
-    }
-  } else { track.pendingBand = null; track.pendingDays = 0; }
-  track.evalDay = today();
-  S.track = track;
-  save();
+  if(track.evalDay===today() && track.recognitionVersion===1)return;
+  track.throttle=false;track.lowSince=null;track.lastNote=null;
+  track.pendingBand=null;track.pendingDays=0;track.shownLevel=lvlOfPos(Math.max(1,S.pointer));
+  track.evalDay=today();track.recognitionVersion=1;S.track=track;save();
 }
 
 /* 定级题库：30 道 4 选 1，一次拉取，答题零网络 */
@@ -1382,30 +1318,22 @@ async function pickProbes(reviewsAll, news, active = () => true) {
   const already = S.log.filter(l => l.kind === "probe" && l.d === today()).length;
   const need = 3 - already;
   if (need <= 0) return [];
-  const m = postMean(), sd = Math.max(60, postStd());
-  const recentProbe = new Set(S.log.filter(l => l.kind === "probe" && l.d >= addDays(today(), -14)).map(l => l.word));
-  const busy = new Set([...reviewsAll, ...news.map(w => w.word)]);
-  const zones = [
-    [m + 0.5 * sd, m + 1.0 * sd, true],   // 上方近端：从中文选英文，补充另一方向的证据
-    [m + 1.5 * sd, m + 2.0 * sd, false],  // 上方远端：正向再认，探大幅进步
-    [m - 1.0 * sd, m - 0.5 * sd, false],  // 下方：正向再认，高估回归检查
-  ];
+  const busy = new Set([...reviewsAll, ...news.map(w=>w.word)]);
+  const excluded = new Set([...Object.values(S.cards).map(c=>c.pos), ...S.pendingNew.map(w=>w.pos)].filter(Number.isInteger));
   const out = [];
-  for (const [lo, hi, reverse] of zones) {
-    if (out.length >= need) break;
-    const a = Math.max(1, Math.round(lo)), b = Math.min(10991, Math.round(hi));
-    if (a > b) continue;
-    for (let tries = 0; tries < 6; tries++) {
-      const pos = a + Math.floor(Math.random() * (b - a + 1));
+  for(let slot=0;slot<need;slot++) {
+    for(let tries=0;tries<8;tries++) {
+      const pool=VocabRecognition.candidatePool(S,[...excluded]);if(!pool.length)break;
+      const pos=pool[Math.floor(Math.random()*pool.length)];
       try {
-        const r = await fetch(`${API}/api/v1/lexicon/at?pos=${pos}&n=1`).then(r => r.json());
-        if (!active()) return [];
-        const w = r.words && r.words[0];
-        if (w && !S.cards[w.word] && !recentProbe.has(w.word) && !busy.has(w.word)
-            && !out.find(x => x.word === w.word) && !S.pendingNew.find(x => x.word === w.word)) {
-          out.push({ ...w, reverse }); break;
+        const response=await fetch(`${API}/api/v1/lexicon/at?pos=${pos}&n=1`);
+        if(!response.ok)break;
+        const r=await response.json();if(!active())return [];
+        const w=r.words?.[0];excluded.add(pos);
+        if(w && w.pos===pos && !S.cards[w.word] && !busy.has(w.word) && !out.some(x=>x.word===w.word) && !S.pendingNew.some(x=>x.word===w.word)) {
+          out.push({...w,reverse:false,recognitionSample:true});break;
         }
-      } catch (e) { if (!active()) return []; }
+      }catch(_){if(!active())return [];break;}
     }
   }
   return out;
@@ -1495,13 +1423,12 @@ async function buildQueue(stillOnPage = () => true, retrySharedSync = true) {
     }
   }
   const repeats = due.filter(w => completed.has(w));
-  const reviews = [...repeats, ...due.filter(w => !completed.has(w)).slice(0, Math.max(0, remaining - news.length))];
-  const reviewsAll = reviews;
-  // v1.3 每日主动探测：3 个探测词（2 个后验上方区 / 1 个下方区）随机混入复习段，
-  // 4选1 形式与复习测验无差别——用户无感知，证据全额（与定级同级 weight 1.0）
-  const probeBudget = Math.max(0, remaining - reviewsAll.filter(w=>!completed.has(w)).length - news.length);
-  const probes = probeBudget ? (await pickProbes(reviewsAll, news, active)).slice(0, probeBudget) : [];
-  if (!active()) return false;
+  // Reserve fresh calibration within the same daily capacity. A backlog must
+  // not indefinitely starve calibration; unavailable probes release their slots.
+  const probeBudget = Math.max(0,remaining-news.length);
+  const probes = probeBudget ? (await pickProbes(due,news,active)).slice(0,probeBudget) : [];
+  if(!active())return false;
+  const reviewsAll=[...repeats,...due.filter(w=>!completed.has(w)).slice(0,Math.max(0,remaining-news.length-probes.length))];
   const revBlock = reviewsAll.map(w => ({ kind: "review", word: w }));
   for (const w of probes) {
     const at = Math.floor(Math.random() * (revBlock.length + 1));
@@ -1566,8 +1493,9 @@ function dailyPlanSummary(state, day = today(), now = new Date()) {
   const repeatPlanned = due.filter(([word]) => completed.has(word)).length;
   const learned = new Set(state.log.filter(x => x.d === day && x.kind === "learn").map(x => x.word)).size;
   const newPlanned = Math.min(Math.max(0, state.settings.newPerDay - learned), remaining, availableNewCount(state));
-  const duePlanned = repeatPlanned + Math.min(dueAvailable - repeatPlanned, Math.max(0, remaining - newPlanned));
-  return {completed:completed.size, dueAvailable, duePlanned, newPlanned, repeatPlanned, totalPlanned:completed.size + duePlanned + newPlanned - repeatPlanned};
+  const probePlanned = state.calibrated && state.posterior ? Math.min(Math.max(0,3-state.log.filter(e=>e.kind==="probe" && e.d===day).length),Math.max(0,remaining-newPlanned)):0;
+  const duePlanned = repeatPlanned + Math.min(dueAvailable - repeatPlanned, Math.max(0, remaining - newPlanned-probePlanned));
+  return {completed:completed.size, dueAvailable, duePlanned, newPlanned, probePlanned, repeatPlanned, totalPlanned:completed.size + duePlanned + newPlanned + probePlanned - repeatPlanned};
 }
 
 /* ---------------- 渲染 ---------------- */
@@ -1575,7 +1503,7 @@ function renderChips() {
   const learned = Object.keys(S.cards).length;
   const mastered = Object.values(S.cards).filter(isMastered).length;
   $("#chips").innerHTML = `
-    <span class="chip0">词汇边界 <b>${escapeHTML(S.calibrated ? "≈" + S.frontier : "未定级")}</b></span>
+    <span class="chip0">词义识别 <b>${escapeHTML(S.calibrated ? VocabRecognition.rangeText(S) : "未定级")}</b></span>
     <span class="chip0">已学 <b>${learned}</b></span>
     <span class="chip0">已掌握 <b>${mastered}</b></span>
     <span class="chip0">连续 <b>${escapeHTML(S.streak)}</b> 天</span>`;
@@ -1595,8 +1523,8 @@ function home() {
   if (!S.calibrated) {
     el.innerHTML = guestBanner + `<div class="card center">
       <h2>${S.placementVersion ? "重新定级" : "首次使用 · 智能定级"}</h2>
-      <p style="font-size:15px;margin:10px 0">共 30 道词义选择题，约需几分钟。难度会随作答调整，结果用于估计适合你的新词起点。<br>可以中途退出，之后继续。</p>
-      <p class="muted">已完成 ${escapeHTML(S.probeCount)}/30${S.probeCount >= 4 ? ` · 当前估计 ≈${Math.round(postMean())}` : ""}</p>
+      <p style="font-size:15px;margin:10px 0">共 30 道词义选择题，约需几分钟。覆盖六个词频区间，结果给出粗略识别范围和新词起点。<br>可以中途退出，之后继续。</p>
+      <p class="muted">已完成 ${escapeHTML(S.probeCount)}/30</p>
       <div class="row"><button class="act" id="bPlace">${S.probeCount > 0 ? "继续定级" : "开始定级"}</button></div>
     </div>`;
     $("#bPlace").onclick = () => place();
@@ -1618,7 +1546,7 @@ function home() {
     ${plan.dueAvailable > plan.duePlanned ? `<p class="muted">另有 ${plan.dueAvailable - plan.duePlanned} 个词已到期，超出今日上限，暂未安排。</p>` : ""}
     ${plan.repeatPlanned ? `<p class="muted">其中 ${plan.repeatPlanned} 个是今天学过的词，按间隔再复习，不增加今日单词数。</p>` : ""}
     <div class="row"><button class="act" id="bStart">${document.body.classList.contains("studio-home") ? (plan.completed ? "继续词汇练习" : "开始词汇练习") : (plan.completed ? "继续今天" : "开始今天")}</button></div>
-    <p class="muted" id="startHint" style="margin-top:10px">先预留每日新词名额，再安排到期复习；水平探测也计入每日不同词上限。</p>
+    <p class="muted" id="startHint" style="margin-top:10px">先保留新词名额；${plan.probePlanned ? `另含最多 ${plan.probePlanned} 个校准词，` : ""}总量仍遵守每日不同词上限。</p>
   </div>`;
   $("#bStart").onclick = async () => {
     const b = $("#bStart"); b.disabled = true; b.textContent = "正在准备今日任务…";
@@ -1635,74 +1563,23 @@ function home() {
 }
 
 /* ---- 定级流程（30 题） ----
-   前 12 题覆盖六个区间，后 18 题围绕当前估计探测；答完后根据累计证据计算边界。 */
+   六个区间优先补足覆盖，每档内均匀抽取未答过的词；结果展示不确定范围。 */
 const PLACEMENT_BANDS = [
   { lo: 1, hi: 2000 }, { lo: 2001, hi: 4000 }, { lo: 4001, hi: 6000 },
   { lo: 6001, hi: 8000 }, { lo: 8001, hi: 10000 }, { lo: 10001, hi: 10987 }
 ];
-let placeAnswers = [];
 let placementRequest = 0;
 function placementUsedPositions(state) {
   return new Set(Object.values(state.bandEvidence || {}).flatMap(b => Object.values(b.events || {}).map(e => e.pos)));
 }
-function placementCandidatePool(state, excluding = []) {
-  const used = new Set([...placementUsedPositions(state), ...excluding]);
-  const upper = PLACEMENT_BANDS.at(-1).hi;
-  if (state.probeCount < 12) {
-    const b = PLACEMENT_BANDS[Math.floor(Math.max(0, state.probeCount) / 2)];
-    return Array.from({length:b.hi-b.lo+1}, (_,i) => b.lo+i).filter(p => !used.has(p));
-  }
-  const center = Math.min(upper, Math.max(1, Math.round(posteriorMean(state.posterior))));
-  for (const radius of [150,600,2000,upper]) {
-    const width = Math.min(upper, radius*2+1);
-    const lo = Math.max(1, Math.min(center-radius, upper-width+1));
-    const candidates = Array.from({length:width}, (_,i) => lo+i).filter(p => !used.has(p));
-    if (candidates.length) return candidates;
-  }
-  return [];
-}
-function placementAtCeiling(state) { return posteriorMean(state.posterior) >= PLACEMENT_BANDS.at(-1).hi; }
-
-function catFinalMean() {
-  const a = catMeans.slice(-5).sort((x, y) => x - y);
-  return a.length ? Math.round(a[Math.floor(a.length / 2)]) : Math.max(1, Math.round(postMean()));
-}
-let catMeans = [];
-
-function placementEstimate() {
-  let estimate = PLACEMENT_BANDS[0].lo;
-  for (let i = 0; i < PLACEMENT_BANDS.length; i++) {
-    const b = PLACEMENT_BANDS[i];
-    const score = placeAnswers.slice(i * 5, i * 5 + 5).filter(Boolean).length;
-    if (score < 3) break;   // 低于60%：该区间不扎实，停在最后通过区间的估值
-    estimate = Math.min(b.hi, b.lo + Math.round((b.hi - b.lo) * (score - 1) / 5));
-  }
-  return estimate;
-}
-
-function posteriorAround(mean, sd = 500) {
-  const raw = GRID.map(g => Math.exp(-((g - mean) ** 2) / (2 * sd * sd)));
-  const sum = raw.reduce((a, b) => a + b, 0);
-  return raw.map(v => v / sum);
-}
-
-function placementScoreText() {
-  return PLACEMENT_BANDS.map((b, i) => {
-    const st = S.bandStats?.[i] || {a: 0, b: 0};
-    const format = n => Number.isInteger(n) ? String(n) : n.toFixed(1);
-    return `${b.lo}~${b.hi}：${format(st.a)}/${format(st.a + st.b)}`;
-  }).join("　");
-}
+function placementCandidatePool(state, excluding = []) { return VocabRecognition.candidatePool(state,excluding,true); }
+function placementAtCeiling(state) { const e=VocabRecognition.estimate(state);return e.n>=24 && e.upper===10987; }
 
 async function place() {
   globalThis.VocabCoach?.page("practice");
   const request = ++placementRequest, count = S.probeCount;
   const guardView = viewGuard(), current = () => request === placementRequest && guardView();
-  if (S.probeCount === 0 && !S.posterior) {
-    placeAnswers = [];
-    catMeans = [];
-  }
-  if (S.probeCount >= 30) { finishPlace(catFinalMean()); return; }
+  if (S.probeCount >= 30) { finishPlace(); return; }
   const unavailable = new Set();
   let w = null;
   for (let k = 0; k < 3; k++) {
@@ -1710,13 +1587,13 @@ async function place() {
     if (!pool.length) break;
     const pos = pool[Math.floor(Math.random() * pool.length)];
     try {
-      const response = await fetch(`${API}/api/v1/quiz?pos=${pos}&seed=${Date.now() % 99991}`);
+      const response = await fetch(`${API}/api/v1/quiz?pos=${pos}&seed=${Date.now() % 99991}&assessment=true`);
       if (!response.ok) throw new Error('quiz unavailable');
       w = await response.json();
     } catch (_) { w = null; }
     if (!current()) return;
     if (S.probeCount !== count) return place();
-    if (w && w.pos === pos && typeof w.word === 'string' && w.word.trim() &&
+    if (w && /^[a-f0-9]{64}$/.test(w.item_id || '') && w.pos === pos && typeof w.word === 'string' && w.word.trim() &&
         Array.isArray(w.options) && w.options.length === 4 && w.options.filter(o=>o.ok===true).length === 1 &&
         !placementUsedPositions(S).has(w.pos)) break;
     if (w) unavailable.add(pos);
@@ -1751,10 +1628,9 @@ async function place() {
     });
     $("#bUnknown").disabled = true;
     if (!ok && guessed && btn) btn.classList.add("wrong");
-    placeAnswers[S.probeCount] = ok;
+    recordRecognition(w,ok,"placement");
     recordKnowledge(w.word, w.pos, ok, true);
     posteriorUpdate(w.pos, ok ? 1 : 0, 1.0, guessed ? 0.25 : 0);
-    catMeans.push(Math.round(postMean()));
     S.log.push({ eventId: (crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")), d: today(), word: w.word, rating: ok ? 4 : 1, kind: "placement" });
     if (!ok && !S.pendingNew.find(x => x.word === w.word)) S.pendingNew.push(w);
     save();
@@ -1765,7 +1641,7 @@ async function place() {
   $("#bPlaceExit").onclick = home;
 }
 
-function finishPlace(r) {
+function finishPlace() {
   globalThis.VocabCoach?.page("other");
   S.calibrated = true;
   S.frontier = placementPointer();
@@ -1774,8 +1650,9 @@ function finishPlace(r) {
   save();
   $("#app").innerHTML = `<div class="card center">
     <h2>定级完成</h2>
-    <div class="score">${placementAtCeiling(S) ? "接近词库上限" : `预计认识 ${expectedKnown()} 词`}</div>
-    <p class="muted">当前级别：${LVL_NAME[lvlOfPos(S.frontier)]} · 发词位置 ${escapeHTML(S.frontier)}<br>${placementScoreText()}<br>新词将从这个位置开始，${S.pendingNew.length} 个答错词会优先补学。${placementAtCeiling(S) ? "已接近词库测量上限，更高水平暂无法可靠区分。" : "估值会随学习逐步调整。"}</p>
+    <p class="muted">词库内词义识别范围</p>
+    <div class="score" id="recognitionRange">${VocabRecognition.rangeText(S)}</div>
+    <p class="muted">${VocabRecognition.note(S)}<br>建议学习起点：${S.frontier} 附近；${S.pendingNew.length} 个答错词优先补学。<br>每天最多 3 道新题继续校准；选择题结果不代表听说写能力。</p>
     <div class="row"><button class="act" id="bGo">开始学习</button></div>
   </div>`;
   renderChips();
@@ -1808,11 +1685,12 @@ function step() {
 
 // A stored rank is only a hint. Reject old-server or malformed responses
 // that cannot prove they belong to this word before recording any evidence.
-async function wordQuiz(word, pos, mode = "forward") {
+async function wordQuiz(word, pos, mode = "forward", assessment = false) {
   try {
-    const response = await fetch(`${API}/api/v1/quiz?pos=${pos || 1}&word=${encodeURIComponent(word)}&seed=${Date.now() % 99991}&mode=${mode}`);
+    const response = await fetch(`${API}/api/v1/quiz?pos=${pos || 1}&word=${encodeURIComponent(word)}&seed=${Date.now() % 99991}&mode=${mode}${assessment ? "&assessment=true" : ""}`);
     if (!response.ok) return null;
     const quiz = await response.json();
+    if (assessment && !/^[a-f0-9]{64}$/.test(quiz?.item_id || "")) return null;
     if (typeof quiz?.word !== "string" || quiz.word.toLowerCase() !== word.toLowerCase() ||
         !Number.isSafeInteger(quiz.pos) || quiz.pos < 1 || !Array.isArray(quiz.options) || quiz.options.length !== 4 ||
         quiz.options.filter(o => o?.ok === true).length !== 1 ||
@@ -1826,7 +1704,7 @@ async function showProbe(item) {
   const current = sessionViewGuard(item);
   const w = item.detail, pos = w.pos || S.pointer;
   let quiz = null;
-  quiz = await wordQuiz(w.word, pos, w.reverse ? "reverse" : "forward");
+  quiz = await wordQuiz(w.word, pos, "forward", true);
   if (!current()) return;
   if (!quiz || !quiz.options || quiz.options.length < 4) {   // 出题失败直接跳过，不影响主流程
     session.idx++; save(); return step();
@@ -1852,15 +1730,16 @@ async function showProbe(item) {
       if (quiz.options[+x.dataset.i].ok) x.classList.add("right");
     });
     if (!ok) b.classList.add("wrong");
-    if (!answerProbe(w, ok)) return;
+    if (!answerProbe(w, ok, quiz)) return;
     save();
     setTimeout(() => { if (answerCurrent()) { session.idx++; save(); step(); } }, 650);
   });
 }
 
 /* v1.4 探测作答：全额证据；正反向均为四选一，猜测率 0.25；答错 → 进明日新词候选 */
-function answerProbe(w, ok) {
+function answerProbe(w, ok, quiz = null) {
   if (!admitStudy(w.word, "probe")) return false;
+  if(quiz && !w.reverse && w.recognitionSample)recordRecognition(quiz,ok,"probe");
   const evidenceKey = AUTH ? sharedEvidenceKey(w.word,"probe") : null;
   if (!AUTH || evidenceKey) posteriorUpdate(w.pos || S.pointer, ok ? 1 : 0, 1.0, 0.25, evidenceKey);
   S.log.push({ eventId: (crypto.randomUUID ? crypto.randomUUID().toLowerCase() : Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join("")), d: today(), word: w.word, rating: ok ? 4 : 1, kind: "probe", reverse: !!w.reverse });
@@ -2399,7 +2278,7 @@ function doneDay(refreshOnly = false) {
     <p class="muted" id="doneCountText">今日 ${counts.total} / ${S.settings.dailyCap} 个不同词 · ${counts.attempts} 次练习</p>
     ${countToday("probe") ? `<p class="muted">每日上限还计入 ${countToday("probe")} 个水平探测词；同一单词当天只计一次。</p>` : ""}
     ${summary.repeatPlanned ? `<p class="muted">还有 ${summary.repeatPlanned} 个今天学过的词需要按间隔再复习，不增加今日单词数。</p>` : ""}
-    ${S.calibrated && S.posterior ? `<p style="font-size:12px;color:var(--mint);margin-top:8px">预计认识 ${expectedKnown()} 词（${LVL_NAME[(S.track && S.track.shownLevel) || lvlOfPos(S.frontier)]}），明天从 ${escapeHTML(S.pointer)} 附近发词</p><p class="muted" style="font-size:12px;margin-top:4px">今日有效水平证据：${effectiveEvidenceSummary(S, day)}</p>${S.track && S.track.lastNote ? `<p class="muted" style="font-size:12px;margin-top:4px">${escapeHTML(S.track.lastNote)}</p>` : ""}` : ""}
+    ${S.calibrated && S.posterior ? `<p style="font-size:12px;color:var(--mint);margin-top:8px">词义识别 ${VocabRecognition.rangeText(S)} · 学习位置 ${escapeHTML(S.pointer)}</p><p class="muted" style="font-size:12px;margin-top:4px">${VocabRecognition.note(S)}</p>${S.track && S.track.lastNote ? `<p class="muted" style="font-size:12px;margin-top:4px">${escapeHTML(S.track.lastNote)}</p>` : ""}` : ""}
     <div id="laterRow" style="margin-top:10px"></div>
     <div class="card" style="background:var(--well);margin-top:14px">
       <h2>今日薄弱词 · 个性化例句</h2>
@@ -2868,7 +2747,8 @@ async function startValidation() {
   if (button) button.disabled = true;
   let r;
   try {
-    const response = await fetch(`${API}/api/v1/placement/set?seed=${encodeURIComponent("validation-" + deviceId() + "-" + Date.now())}`);
+    const exclude = [...new Set([...VocabRecognition.evidence(S).map(e=>e.pos),...placementUsedPositions(S),...Object.values(S.cards).map(c=>c.pos),...S.pendingNew.map(w=>w.pos)].filter(Number.isInteger))];
+    const response = await fetch(`${API}/api/v1/placement/assessment`, {method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({exclude,seed:"validation-" + deviceId() + "-" + Date.now()})});
     if (!response.ok) throw new Error("校验请求失败");
     r = await response.json();
     if (!Array.isArray(r.words) || r.words.length < 24) throw new Error("校验题目不足");
@@ -2881,8 +2761,8 @@ async function startValidation() {
     return;
   }
   if (!current()) return;
-  const words = r.words.slice(0, 24).map((w, i) => ({ ...w, reverse: i % 2 === 1 }));
-  validation = { words, idx: 0, posterior: null, correct: 0, failed: 0 };
+  const words = r.words.slice(0, 24).map(w => ({ ...w, reverse: false }));
+  validation = { words, idx: 0, posterior: null, correct: 0, failed: 0, recognitionEvidence:{},baseline:VocabRecognition.estimate(S) };
   showValidation();
 }
 
@@ -2893,7 +2773,7 @@ async function showValidation() {
   if (validation.idx >= validation.words.length) return finishValidation();
   const w = validation.words[validation.idx];
   let q = null;
-  q = await wordQuiz(w.word, w.pos, w.reverse ? "reverse" : "forward");
+  q = await wordQuiz(w.word, w.pos, "forward", true);
   if (!current() || validation !== activeValidation || validation.idx !== index) return;
   if (!q || !q.options || q.options.length < 4) { validation.failed++; validation.idx++; return showValidation(); }
   const isRev = w.reverse && q.mode === "reverse" && q.prompt;
@@ -2917,6 +2797,8 @@ async function showValidation() {
       if (q.options[+x.dataset.i].ok) x.classList.add("right");
     });
     if (!ok) b.classList.add("wrong");
+    if(q.item_id)validation.recognitionEvidence[crypto.randomUUID()]={version:1,word:q.word,pos:q.pos,at:new Date().toISOString(),correct:ok,source:"placement",itemId:q.item_id};
+    else validation.failed++;
     validation.posterior = posteriorCalc(validation.posterior, q.pos, ok ? 1 : 0, 1.0, 0.25);
     if (ok) validation.correct++;
     validation.idx++;
@@ -2936,19 +2818,17 @@ function finishValidation() {
     $("#bValBack").onclick = showSettings;
     return;
   }
-  const mean = Math.round(posteriorMean(validation.posterior));
-  const std = Math.round(posteriorStd(validation.posterior));
-  const appMean = Math.round(postMean());
-  const delta = appMean - mean;
-  S.evalReport = { date: today(), mean, std, appMean, delta, correct: validation.correct, count: validation.words.length };
+  const estimate=VocabRecognition.estimate(validation),base=validation.baseline;
+  S.evalReport = {recognitionVersion:1,lower:estimate.lower,upper:estimate.upper,appLower:base.lower,appUpper:base.upper,
+    date:today(),mean:Math.round(estimate.mean),std:Math.round((estimate.upper-estimate.lower)/2),appMean:Math.round(base.mean),delta:Math.round(base.mean-estimate.mean),correct:validation.correct,count:validation.words.length};
   save();
-  const direction = Math.abs(delta) <= 500 ? "与当前估值基本一致" : (delta > 0 ? "当前估值可能偏高" : "当前估值可能偏低");
+  const direction=base.lower>estimate.upper ? "新题表现低于原估计，需继续校准" : base.upper<estimate.lower ? "新题表现高于原估计，需继续校准" : "两个范围重叠，尚不能确认有系统性偏差";
   $("#app").innerHTML = `<div class="card center">
     <h2>独立校验结果</h2>
-    <div class="score">${mean}</div>
-    <p class="muted">独立估值（±${std}） · 答对 ${validation.correct}/${validation.words.length}</p>
-    <p style="font-size:16px">当前学习系统估值：<b>${appMean}</b><br>差值（当前 − 独立）：<b>${delta > 0 ? "+" : ""}${delta}</b></p>
-    <p class="muted">${direction}<br>这次校验没有修改你的后验、卡片或后续发词位置。</p>
+    <div class="score">${estimate.lower}～${estimate.upper}</div>
+    <p class="muted">词义识别模型范围 · 答对 ${validation.correct}/${validation.words.length}</p>
+    <p>校验前范围：${base.lower}～${base.upper}</p>
+    <p class="muted">${direction}<br>这次校验没有修改卡片或后续发词位置。</p>
     <div class="row"><button class="act" id="bValBack">返回设置</button><button class="ghost" id="bValAgain">重新校验</button></div>
   </div>`;
   validation = null;
@@ -3042,7 +2922,7 @@ function showSettings() {
     if (!markPlacementReset()) return;
     S.calibrated = false; S.posterior = null; S.posteriorHistory = null; S.probeCount = 0; S.wrongStreak = 0; S.track = null; quizSet = [];
     S.bandStats = null;   // 重新定级重置档位先验；词级历史证据保留
-    S.bandEvidence = null;
+    S.bandEvidence = null; S.recognitionEvidence = null;
     S.placementResetAt = Date.now() / 1000;   // 告诉服务端：这是显式重测，不要合并回旧后验
     save(); place();
   };

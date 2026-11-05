@@ -138,7 +138,8 @@ enum StudyEngine {
         let duePlanned: Int
         let newPlanned: Int
         let repeatPlanned: Int
-        var totalPlanned: Int { completed + duePlanned + newPlanned - repeatPlanned }
+        var probePlanned: Int = 0
+        var totalPlanned: Int { completed + duePlanned + newPlanned + probePlanned - repeatPlanned }
     }
 
     /// Recent retained learning and review records with repeated difficulty.
@@ -206,8 +207,9 @@ enum StudyEngine {
         let due = dueCards.count
         let learned = Set(s.log.filter { $0.d == day && $0.kind == "learn" }.map(\.word)).count
         let plannedNew = min(max(0, s.settings.newPerDay - learned), remaining, availableNewCount(s))
-        let plannedDue = repeats + min(due - repeats, max(0, remaining - plannedNew))
-        return DailyPlanSummary(completed: completed.count, dueAvailable: due, duePlanned: plannedDue, newPlanned: plannedNew, repeatPlanned: repeats)
+        let probes = s.calibrated && s.posterior != nil ? min(max(0,3-s.log.filter{$0.kind=="probe" && $0.d==day}.count),max(0,remaining-plannedNew)):0
+        let plannedDue = repeats + min(due - repeats, max(0, remaining - plannedNew-probes))
+        return DailyPlanSummary(completed: completed.count, dueAvailable: due, duePlanned: plannedDue, newPlanned: plannedNew, repeatPlanned: repeats,probePlanned:probes)
     }
 
     /// Group actual due instants by the device's calendar day; old date-only
@@ -665,24 +667,12 @@ enum StudyEngine {
     /// Shift the whole sampling window at either edge; never clamp each draw
     /// onto the same endpoint. Exhausted windows expand to unseen vocabulary.
     static func placementCandidatePool(_ s: LearningState, excluding: Set<Int> = []) -> [Int] {
-        let used = placementUsedPositions(s).union(excluding)
-        let upper = placementBands.last!.1
-        if s.probeCount < 12 {
-            let band = placementBands[max(0, s.probeCount) / 2]
-            return (band.0...band.1).filter { !used.contains($0) }
-        }
-        let center = min(upper, max(1, Int(postMean(s).rounded())))
-        for radius in [150, 600, 2000, upper] {
-            let width = min(upper, radius * 2 + 1)
-            let lo = max(1, min(center - radius, upper - width + 1))
-            let candidates = (lo..<(lo + width)).filter { !used.contains($0) }
-            if !candidates.isEmpty { return candidates }
-        }
-        return []
+        recognitionCandidates(s, excluding: excluding.union(placementUsedPositions(s)))
     }
 
     static func placementAtCeiling(_ s: LearningState) -> Bool {
-        postMean(s) >= Double(placementBands.last!.1)
+        let e = recognitionEstimate(s)
+        return e.n >= 24 && e.upper == 10987
     }
 
     static func bandIndex(of pos: Int) -> Int {
@@ -691,46 +681,28 @@ enum StudyEngine {
     }
 
     static func bandPrior(_ s: LearningState, _ index: Int) -> Double {
-        if let st = s.bandStats?["\(index)"], st.a + st.b > 0 { return st.a / (st.a + st.b) }
-        let b = placementBands[index]
-        let center = Double(b.0 + b.1) / 2
-        if s.frontier > 0 { return max(0.05, min(0.95, logistic((Double(s.frontier) - center) / 400))) }
-        return 0.2   // 没有定级证据时保持保守先验，避免默认每档都“会一半”导致预计认识词数虚高
+        recognitionBandMean(recognitionCounts(s)[index])
     }
 
     static func knowledgeProb(_ s: LearningState, word: String, pos: Int) -> Double {
-        if let c = s.cards[word], let fsrs = c.fsrs {
-            let last = fsrs.lastReview ?? s.log.last { $0.word == word && ($0.kind == "learn" || $0.kind == "review") }?.d
-            let elapsed = last.flatMap { DayUtil.parseISO($0.count == 10 ? $0 + "T08:00:00Z" : $0).map { max(0, Date().timeIntervalSince($0) / 86400) } } ?? 0
-            return pow(1 + 0.9805 * elapsed / max(0.2, fsrs.stability), -0.1542)
-        }
-        if let k = s.knowledge?[word], k.a + k.b > 0 { return k.a / (k.a + k.b) }
+        // Retention after practice is not independent recognition evidence.
         return bandPrior(s, bandIndex(of: pos))
     }
 
     static func expectedKnown(_ s: LearningState) -> Int {
-        var total = 0.0
-        for i in placementBands.indices {
-            let b = placementBands[i]
-            total += Double(b.1 - b.0 + 1) * bandPrior(s, i)
-        }
-        let words = Set((s.knowledge ?? [:]).keys).union(s.cards.keys)
-        for w in words {
-            let pos = s.cards[w]?.pos ?? s.knowledge?[w]?.pos ?? s.pointer
-            let idx = bandIndex(of: pos)
-            total += knowledgeProb(s, word: w, pos: pos) - bandPrior(s, idx)
-        }
-        return max(0, Int(total.rounded()))
+        Int(recognitionEstimate(s).mean.rounded())
     }
 
     static func placementPointer(_ s: LearningState) -> Int {
+        let stats = recognitionCounts(s)
         for (i, b) in placementBands.enumerated() {
-            let p = bandPrior(s, i)
-            if p < 0.75 {
-                return max(b.0, min(b.1, b.0 + Int(Double(b.1 - b.0 + 1) * p)))
+            let p = recognitionBandMean(stats[i])
+            if stats[i].n == 0 || p < 0.75 {
+                let start = stats[i].n > 0 && Double(stats[i].k)/Double(stats[i].n) > 0.25 ? p : 0
+                return min(b.1, b.0 + Int(Double(b.1 - b.0) * start))
             }
         }
-        return placementBands[placementBands.count - 1].1 - 50
+        return placementBands.last!.0
     }
 
     static func recordKnowledge(_ s: inout LearningState, word: String, pos: Int, ok: Bool, isPlacement: Bool = false) {
@@ -780,6 +752,104 @@ enum StudyEngine {
             sum += v
         }
         if sum > 0 { s.posterior = out.map { $0 / sum } }
+    }
+
+    // MARK: Independent written recognition (see web/recognition.js and docs/recognition.md)
+    struct RecognitionCount { var n = 0; var k = 0 }
+    struct RecognitionEstimate {
+        var lower: Int, upper: Int, n: Int
+        var mean: Double
+        var preliminary: Bool
+        var rangeText: String { n > 0 ? "\(lower)～\(upper)" : "待校准" }
+        var note: String { n > 0 ? "\(preliminary ? "初步范围" : "模型估计范围") · \(n) 个不同词的抽测；不等于已掌握词数" : "旧记录不足以可靠估算，将通过每日少量新题继续校准" }
+    }
+
+    static func recognitionEvents(_ s: LearningState) -> [(String, RecognitionEvent)] {
+        var events = (s.recognitionEvidence ?? [:]).map { ($0.key,$0.value) }
+        var old: [(String, KnowledgeEvent)] = []
+        for band in (s.bandEvidence ?? [:]).values { for (id,event) in band.events { old.append((id,event)) } }
+        old.sort { $0.1.at == $1.1.at ? $0.0 < $1.0 : $0.1.at < $1.1.at }
+        let first = Array(old.prefix(12))
+        if first.count == 12, Set(first.map { $0.1.pos }).count == 12,
+           first.enumerated().allSatisfy({ bandIndex(of: $0.element.1.pos) == $0.offset / 2 }) {
+            events += first.map { ($0.0,RecognitionEvent(word:"",pos:$0.1.pos,at:$0.1.at,correct:$0.1.ok,source:"legacy",itemId:"legacy")) }
+        }
+        var seen = Set<Int>()
+        return events.sorted { $0.1.at == $1.1.at ? $0.0 < $1.0 : $0.1.at < $1.1.at }.filter {
+            $0.1.version == 1 && (1...10987).contains($0.1.pos) && seen.insert($0.1.pos).inserted
+        }
+    }
+
+    static func recognitionCounts(_ s: LearningState) -> [RecognitionCount] {
+        var out = Array(repeating: RecognitionCount(),count:6)
+        for (_,e) in recognitionEvents(s) { let i=bandIndex(of:e.pos);out[i].n += 1;if e.correct {out[i].k += 1} }
+        return out
+    }
+
+    static func recognitionBandMean(_ s: RecognitionCount) -> Double {
+        if s.n == 0 { return 0.5 }
+        let logs = (0...200).map { i -> Double in
+            let p=0.25+0.75*Double(i)/200
+            return (s.k>0 ? Double(s.k)*log(p):0)+(s.n>s.k ? Double(s.n-s.k)*log1p(-p):0)
+        }
+        let peak=logs.max()!,weights=logs.map { exp($0-peak) }
+        return weights.enumerated().reduce(0) { $0+Double($1.offset)/200*$1.element }/weights.reduce(0,+)
+    }
+
+    static func recognitionEstimate(_ s: LearningState) -> RecognitionEstimate {
+        let stats=recognitionCounts(s)
+        let observed=stats.enumerated().filter { $0.element.n>0 }
+        let sizes=placementBands.map { Double($0.1-$0.0+1) }
+        let unknown=stats.enumerated().reduce(0.0) { $0+($1.element.n==0 ? sizes[$1.offset]:0) }
+        func clamp(_ q: Double)->Double { max(0,min(1,q)) }
+        func ll(_ t: RecognitionCount,_ q: Double)->Double {
+            let p=0.25+0.75*q
+            return (t.k>0 ? Double(t.k)*log(p):0)+(t.n>t.k ? Double(t.n-t.k)*log1p(-p):0)
+        }
+        let best=observed.map { clamp((Double($0.element.k)/Double($0.element.n)-0.25)/0.75) }
+        let peak=observed.enumerated().reduce(0.0) { $0+ll($1.element.element,best[$1.offset]) }
+        func fit(_ lambda: Double)->(total:Double,drop:Double) {
+            var loss=0.0,total=0.0
+            for (i,t) in observed {
+                func d(_ q: Double)->Double {
+                    let p=0.25+0.75*q
+                    return 0.75*(Double(t.k)/p-Double(t.n-t.k)/(1-p))+lambda*sizes[i]
+                }
+                let q:Double
+                if d(0)<=0 {q=0}
+                else if t.k==t.n && 0.75*Double(t.k)+lambda*sizes[i]>=0 {q=1}
+                else {var a=0.0,b=1.0;for _ in 0..<35 {let m=(a+b)/2;if d(m)>0 {a=m}else{b=m}};q=(a+b)/2}
+                total+=sizes[i]*q;loss+=ll(t,q)
+            }
+            return (total,peak-loss)
+        }
+        func endpoint(_ sign:Double)->Double {
+            var a=0.0,b=1.0
+            while fit(sign*b).drop<6.295793621871989 && b<1024 {b*=2}
+            for _ in 0..<40 {let m=(a+b)/2;if fit(sign*m).drop>6.295793621871989 {b=m}else{a=m}}
+            return fit(sign*a).total
+        }
+        let excluded=Double(Set(s.cards.keys).union(s.pendingNew.map(\.word)).count)
+        let low=observed.isEmpty ? 0:endpoint(-1),high=(observed.isEmpty ? 0:endpoint(1))+unknown
+        let mean=observed.enumerated().reduce(0.0) {$0+sizes[$1.element.offset]*best[$1.offset]}+unknown/2
+        return RecognitionEstimate(lower:max(0,Int(floor((low-excluded)/100))*100),upper:min(10987,Int(ceil((high+excluded)/100))*100),
+            n:stats.reduce(0){$0+$1.n},mean:mean,preliminary:stats.contains{$0.n<5})
+    }
+
+    static func recognitionCandidates(_ s: LearningState, excluding: Set<Int> = []) -> [Int] {
+        let oldRanks=(s.posteriorHistory?.events ?? [:]).values.filter{$0.kind=="update"}.compactMap(\.rank)
+        let used=Set(recognitionEvents(s).map{$0.1.pos}).union(excluding).union(placementUsedPositions(s)).union(oldRanks),stats=recognitionCounts(s)
+        let order=(0..<6).sorted {stats[$0].n==stats[$1].n ? $0<$1:stats[$0].n<stats[$1].n}
+        for i in order {let b=placementBands[i],pool=(b.0...b.1).filter{!used.contains($0)};if !pool.isEmpty{return pool}}
+        return []
+    }
+
+    static func recordRecognition(_ s: inout LearningState, quiz: Quiz, ok: Bool, source: String) {
+        guard let item=quiz.item_id, item.count==64, quiz.matches(word:quiz.word),
+              !recognitionEvents(s).contains(where:{$0.1.pos==quiz.pos}) else {return}
+        if s.recognitionEvidence == nil {s.recognitionEvidence=[:]}
+        s.recognitionEvidence?[UUID().uuidString.lowercased()]=RecognitionEvent(word:quiz.word,pos:quiz.pos,
+            at:DayUtil.isoString(Date()),correct:ok,source:source,itemId:item)
     }
 
     // MARK: 薄弱词（近 7 天评分 ≤2 的词，当天个性化/织入用）

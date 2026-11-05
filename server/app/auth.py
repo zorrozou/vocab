@@ -4,6 +4,7 @@ users.db：users / tokens / user_state
 密码：Argon2id；旧 PBKDF2 密码在成功登录时升级；token 仅存哈希
 """
 import base64, copy, hashlib, json, os, re, secrets, sqlite3, threading, time
+from . import recognition_evidence
 from contextlib import contextmanager
 from argon2 import PasswordHasher, extract_parameters
 from argon2.exceptions import InvalidHashError, VerificationError, VerifyMismatchError
@@ -542,6 +543,7 @@ def merge_knowledge_evidence(old, new):
 
 
 def validate_band_evidence(state):
+    recognition_evidence.validate(state)
     ledgers = state.get("bandEvidence")
     view = {"knowledge": state.get("bandStats"), "knowledgeEvidence": ledgers}
     bands = validate_knowledge_evidence(view)
@@ -1312,6 +1314,9 @@ def merge_learning_states(old, new):
         bands, band_evidence = merge_band_evidence(old, new)
         out["bandStats"] = bands
         if band_evidence: out["bandEvidence"] = band_evidence
+    recognition = recognition_evidence.validate(old if stale_reset else new) if stale_reset or explicit_reset else recognition_evidence.merge(old, new)
+    if recognition: out["recognitionEvidence"] = recognition
+    else: out.pop("recognitionEvidence", None)
     validate_band_evidence(out)
     out["calibrated"] = bool((old if stale_reset else new).get("calibrated")) if stale_reset or explicit_reset else bool(old.get("calibrated") or new.get("calibrated"))
 
@@ -1385,7 +1390,7 @@ def checkpoint_learning_state(state):
     validate_band_evidence(state)
     validate_posterior(state)
     validate_streak(state)
-    result = copy.deepcopy(canonicalize_posterior(state))
+    result = copy.deepcopy(recognition_evidence.preserve_legacy(canonicalize_posterior(state)))
     cards = result.get("cards") or {}
     if not isinstance(cards, dict):
         raise HTTPException(422, "卡片格式无效")

@@ -158,6 +158,7 @@ extension Array where Element == SentenceItem {
 /// 待学新词（pendingNew 元素 / lexicon/at 返回元素同构）
 struct NewWord: Codable, Equatable {
     var lexiconRevision: String? = nil
+    var recognitionSample: Bool? = nil
     var word: String
     var pos: Int
     var sense: String?
@@ -225,6 +226,7 @@ struct PersonalJob: Codable, Equatable {
 
 /// 水平追踪状态（自适应水平追踪 v1.2/v1.3）：后验本体沿用 S.posterior
 struct TrackState: Codable, Equatable {
+    var recognitionVersion: Int?
     var evalDay: String?      // 今日位置重估是否已生效（每日最多一次）
     var lowSince: String?     // 游标持续超前于水平的起始日（连续 2 天触发减压）
     var throttle: Bool?       // 旧档兼容字段；不再自动降低新词目标
@@ -244,6 +246,7 @@ struct SharedStudyWord: Codable, Equatable {
     var word: String
     var kind: String
     var from_pending: Bool = false
+    var probe_sampler: String? = nil
 }
 
 struct SharedStudyPlan: Codable, Equatable {
@@ -251,6 +254,7 @@ struct SharedStudyPlan: Codable, Equatable {
         var word, kind: String
         var new_word, probe_word, completed, from_pending: Bool
         var probe_evidence_key, review_evidence_key: String
+        var probe_sampler: String? = nil
     }
     var account_id, day: String
     var cap, new_target: Int
@@ -284,6 +288,11 @@ struct SharedStudyPlan: Codable, Equatable {
 }
 
 struct EvalReport: Codable, Equatable {
+    var recognitionVersion: Int? = nil
+    var lower: Int? = nil
+    var upper: Int? = nil
+    var appLower: Int? = nil
+    var appUpper: Int? = nil
     var date: String
     var mean: Int
     var std: Int
@@ -304,6 +313,17 @@ struct KnowledgeEvent: Codable, Equatable {
     var at: String
     var ok: Bool
     var pos: Int
+}
+
+/// Separate, immutable assessment evidence. Never inferred from FSRS retention.
+struct RecognitionEvent: Codable, Equatable {
+    var version: Int = 1
+    var word: String
+    var pos: Int
+    var at: String
+    var correct: Bool
+    var source: String
+    var itemId: String
 }
 
 struct KnowledgeEvidence: Codable, Equatable {
@@ -408,6 +428,7 @@ struct LearningState: Codable, Equatable {
     var bandEvidence: [String: KnowledgeEvidence]? // 与定级词级事件关联的分档证据
     var knowledge: [String: KnowledgeStat]?   // 每词 a/b 证据（v2.0 词级模型）
     var knowledgeEvidence: [String: KnowledgeEvidence]? // 可合并的词级证据事件及共同基线
+    var recognitionEvidence: [String: RecognitionEvent]?
 
     init() {}
 
@@ -453,6 +474,7 @@ struct LearningState: Codable, Equatable {
         bandEvidence = try c.decodeIfPresent([String: KnowledgeEvidence].self, forKey: .bandEvidence)
         knowledge = try c.decodeIfPresent([String: KnowledgeStat].self, forKey: .knowledge)
         knowledgeEvidence = try c.decodeIfPresent([String: KnowledgeEvidence].self, forKey: .knowledgeEvidence)
+        recognitionEvidence = try c.decodeIfPresent([String: RecognitionEvent].self, forKey: .recognitionEvidence)
     }
 }
 
@@ -599,6 +621,7 @@ struct Quiz: Codable {
     var options: [QuizOption]
     var mode: String?      // "reverse"=反向回想（给中文选英文）；nil=正向再认
     var prompt: String?    // 反向模式的题干（中文词义）
+    var item_id: String? = nil
 
     func matches(word expected: String) -> Bool {
         word.caseInsensitiveCompare(expected) == .orderedSame && pos > 0 && options.count == 4 &&

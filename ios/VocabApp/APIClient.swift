@@ -2101,14 +2101,20 @@ actor APIClient {
         try await get("/api/v1/lexicon/word", ["word": word])
     }
 
-    func placementSet(seed: String) async throws -> PlacementSet {
-        try await get("/api/v1/placement/set", ["seed": seed])
+    func placementSet(seed: String, assessment: Bool = false, excluding: Set<Int> = []) async throws -> PlacementSet {
+        if assessment {
+            struct Body: Encodable { let seed: String; let exclude: [Int] }
+            return try await request("POST", "/api/v1/placement/assessment", body:Body(seed:seed,exclude:excluding.sorted()))
+        }
+        return try await get("/api/v1/placement/set", ["seed":seed])
     }
 
-    func quiz(pos: Int, seed: Int, mode: String = "forward", word: String? = nil) async throws -> Quiz {
+    func quiz(pos: Int, seed: Int, mode: String = "forward", word: String? = nil, assessment: Bool = false) async throws -> Quiz {
         var query = ["pos": "\(max(1, pos))", "seed": "\(seed)", "mode": mode]
         if let word { query["word"] = word }
+        if assessment { query["assessment"] = "true" }
         let result: Quiz = try await get("/api/v1/quiz", query)
+        if assessment, result.item_id?.count != 64 { throw APIError(message:"定级题版本不可用，请联网后重试") }
         if let word, !result.matches(word: word) {
             throw APIError(message: "题目与当前单词不一致，请重试")
         }
