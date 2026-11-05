@@ -572,7 +572,7 @@ mount_coach(app, lambda: PERSONAL_DB, personal_owner,
             lambda: not (DATA_DIR / "coach.disabled").exists(), lambda prompt: llm(prompt),
             author=lambda prompt: hunyuan_chat(prompt,temperature=0.55,max_tokens=5400),
             assess=lambda prompt: hunyuan_chat(prompt,temperature=0.15,max_tokens=360),
-            valid_word=lambda w: w in WORD2ID)
+            valid_word=lambda w: w in WORD2ID, warm=lambda text,voice: ensure_tts(text,voice), vocabulary=lambda context: warm_vocabulary(context))
 
 
 @app.get("/studio.css", include_in_schema=False)
@@ -1052,7 +1052,7 @@ def ensure_tts(text, voice=None):
 
 
 @app.get("/api/v1/tts")
-def tts(text: str = Query(min_length=1, max_length=200), v: str = "", request: Request = None):
+def tts(text: str = Query(min_length=1, max_length=600), v: str = "", request: Request = None):
     check_rate(request, "tts")
     import asyncio, hashlib
     import edge_tts
@@ -1235,9 +1235,39 @@ def today_str():
 TIER_RANGE = {1: (3, 10), 2: (10, 16), 3: (10, 20)}
 
 
+def warm_vocabulary(context):
+    # Speculative preparation creates only cached material, never cards or daily reservations.
+    news=list(context.get("new_words",[]))
+    position=context.get("position",0)
+    if position:
+        news.extend(w["word"] for w in lexicon_at(position,10)["words"])
+    voice=context.get("voice")
+    weak=",".join(context.get("words",[]))
+    for word in list(dict.fromkeys(news))[:10]:
+        if word not in WORD2ID:continue
+        result=sentence_trio(word,weak,position+10,None)
+        ensure_tts(word,voice)
+        for sentence in result["sentences"]:
+            ensure_tts(sentence["text"],voice)
+    for word in context.get("review_words",[]):
+        if word in WORD2ID:ensure_tts(word,voice)
+
+
+_TRIO_LOCKS = {}
+_TRIO_LOCKS_GUARD = threading.Lock()
+
+
 @app.get("/api/v1/sentence/trio")
 def sentence_trio(word: str = Query(min_length=1, max_length=40), weak: str = "", cap: int = 0, request: Request = None):
     check_rate(request, "sentence")
+    if word not in WORD2ID:return {"word":word,"sentences":[]}
+    with _TRIO_LOCKS_GUARD:
+        lock = _TRIO_LOCKS.setdefault(word, threading.Lock())
+    with lock:
+        return _sentence_trio(word,weak,cap)
+
+
+def _sentence_trio(word,weak,cap):
     wid = WORD2ID.get(word)
     if not wid:
         return {"word": word, "sentences": []}

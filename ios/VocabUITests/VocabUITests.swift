@@ -280,7 +280,7 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(settings.waitForExistence(timeout:6))
     }
 
-    func testCoachTimeLimitInClassic() throws {
+    func testCoachAdvisoryTimeInClassic() throws {
         let app=XCUIApplication()
         app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765"
         app.launch()
@@ -295,23 +295,32 @@ final class VocabUITests: XCTestCase {
             }.resume()
             wait(for:[ready],timeout:8)
         }
+        func setDelay(_ n:Int) throws {
+            var request=URLRequest(url:URL(string:"http://127.0.0.1:18765/__fixture/clock-delay/\(n)")!)
+            request.httpMethod="POST"
+            let ready=expectation(description:"isolated slow clock")
+            URLSession.shared.dataTask(with:request){_,r,_ in
+                XCTAssertEqual((r as? HTTPURLResponse)?.statusCode,200);ready.fulfill()
+            }.resume()
+            wait(for:[ready],timeout:8)
+        }
+        try setDelay(8)
+        defer {try? setDelay(0)}
         if app.buttons["home-section-3"].exists { app.buttons["home-section-3"].tap() }
         if app.buttons["切回经典界面"].exists {app.buttons["切回经典界面"].tap()}
         let start=app.buttons["开始定级"]
         XCTAssertTrue(start.waitForExistence(timeout:8))
         start.tap()
-        // Once a lease exists, the next heartbeat will see the injected boundary.
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format:"label CONTAINS %@", "今日练习")).firstMatch.waitForExistence(timeout:15))
-        try setBoundary(1799)
-        let extend=app.buttons["再练最多 10 分钟"]
-        XCTAssertTrue(extend.waitForExistence(timeout:25));extend.tap()
-        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format:"label CONTAINS %@", "/ 40 分钟")).firstMatch.waitForExistence(timeout:15))
-        try setBoundary(2399)
-        XCTAssertTrue(app.staticTexts["今天已到 40 分钟，明天再继续。"].waitForExistence(timeout:25))
-        XCTAssertFalse(extend.exists)
-        app.buttons["暂停并返回首页"].tap()
+        let clock=app.staticTexts.containing(NSPredicate(format:"label CONTAINS %@", "用时仅作参考")).firstMatch
+        XCTAssertTrue(clock.waitForExistence(timeout:5))
+        try setBoundary(3600)
+        XCTAssertFalse(app.buttons["再练最多 10 分钟"].exists)
+        XCTAssertFalse(app.staticTexts["正在核对今日练习时间…"].exists)
+        let choice=app.buttons["不认识"]
+        XCTAssertTrue(choice.waitForExistence(timeout:5));onScreen(choice,app:app);choice.tap()
+        XCTAssertTrue(app.staticTexts.containing(NSPredicate(format:"label CONTAINS %@", "今日已练 60")).firstMatch.waitForExistence(timeout:25))
+        XCTAssertTrue(choice.waitForExistence(timeout:6));onScreen(choice,app:app)
         try setBoundary(0)
-        XCTAssertTrue(app.buttons["coach-enable"].exists)
     }
 
     func testGuestPlacementAndFirstStudy() throws {

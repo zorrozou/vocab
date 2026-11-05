@@ -20,12 +20,18 @@ struct CoachBody: Encodable {
     var words:[String]?
     var text:String?
     var attempt:Int?
+    var position:Int?
+    var new_words:[String]?
+    var review_words:[String]?
+    var voice:String?
+    var segments:[CoachTimeSegment]?
 }
 struct CoachClockReply: Decodable {
     let day:String
     let used, limit:Int
     let credit:Double
     let busy, extended:Bool
+    let acknowledged:[String]?
 }
 struct CoachTask: Decodable {
     let id, passage, question, kind, purpose, hint:String
@@ -52,68 +58,81 @@ struct CoachLesson: Decodable {
 }
 struct CoachExplanation: Decodable { let text:String; let textEn:String?; let ai:Bool }
 
+struct CoachTimeSegment: Codable {
+    let id:String
+    let start,end:Double
+    let activity:String
+}
+
 @MainActor @Observable
 final class CoachClock {
     private(set) var client = ""
     var state:CoachClockReply?
-    var until:TimeInterval = 0
-    var error = ""
     private var boundToken:String?
+    private var storageKey=""
+    private var pending:[CoachTimeSegment]=[]
     private var worker:Task<Void,Never>?
-    var up: TimeInterval { ProcessInfo.processInfo.systemUptime }
+    private var uploader:Task<Void,Never>?
+    private var tick=ProcessInfo.processInfo.systemUptime
+    private var wall=Date().timeIntervalSince1970
     var isClass=false
-    func start(token:String?) {
-        if !client.isEmpty && boundToken != token { stop() }
-        guard client.isEmpty else { return }
-        let id=UUID().uuidString
-        client=id; boundToken=token; error=""; until=0; state=nil
+    var running:Bool { !client.isEmpty }
+    var minutes:Int {
+        let day=state?.day ?? DayUtil.today()
+        let local=pending.filter { DayUtil.localDay(Date(timeIntervalSince1970:$0.start)) == day }.reduce(0) { $0+$1.end-$1.start }
+        return (Int(local)+(state?.day == DayUtil.today() ? state?.used ?? 0:0))/60
+    }
+    func start(token:String?,account:String) {
+        if running && (boundToken != token || storageKey != "coach.time.v3."+account) {stop()}
+        guard !running else {return}
+        client=UUID().uuidString;boundToken=token;storageKey="coach.time.v3."+account
+        pending=(UserDefaults.standard.data(forKey:storageKey).flatMap {try? JSONDecoder().decode([CoachTimeSegment].self,from:$0)}) ?? []
+        state=nil;tick=ProcessInfo.processInfo.systemUptime;wall=Date().timeIntervalSince1970
+        upload()
+        let id=client
         worker=Task {
+            var count=0
             while !Task.isCancelled && id==client {
-                let sent=up
-                do {
-                    let reply:CoachClockReply = try await APIClient.shared.coach("clock",CoachBody(client:id,action:"pulse",activity:isClass ? "class":"vocab"),token:token)
-                    guard !Task.isCancelled,client==id else {
-                        await self.release(id,token);return
-                    }
-                    state=reply;until=sent+reply.credit;error=""
-                    if reply.busy { error="另一台设备正在练习，请先在那里暂停。" }
-                    if reply.credit==0 && reply.used>=reply.limit {return}
-                    if reply.busy {try await Task.sleep(for:.seconds(3));continue}
-                    try await Task.sleep(for:.seconds(max(0.2,min(10,until-up))))
-                } catch {
-                    guard !Task.isCancelled,client==id else {return}
-                    self.error="暂时无法核对练习时间。请联网后重试。";return
-                }
+                do { try await Task.sleep(for:.seconds(5)) } catch {return}
+                guard id==client else {return}
+                checkpoint();count+=1
+                if count%3==0 {upload()}
             }
         }
     }
-    private func release(_ id:String,_ token:String?) async {
-        let _:CoachClockReply? = try? await APIClient.shared.coach("clock",CoachBody(client:id,action:"stop"),token:token)
+    private func persist(){if let data=try? JSONEncoder().encode(pending){UserDefaults.standard.set(data,forKey:storageKey)}}
+    private func checkpoint(){
+        let now=ProcessInfo.processInfo.systemUptime,elapsed=now-tick
+        // Background suspension / host clock adjustment must never become study time.
+        if elapsed>0 && elapsed<=60 {
+            pending.append(CoachTimeSegment(id:UUID().uuidString.lowercased(),start:wall,end:wall+elapsed,activity:isClass ? "class":"vocab"))
+            persist()
+        }
+        tick=now;wall=Date().timeIntervalSince1970
+    }
+    private func upload(){
+        guard uploader == nil,!client.isEmpty else{return}
+        let id=client,token=boundToken,key=storageKey,batch=Array(pending.prefix(100))
+        uploader=Task {
+            defer {if client==id {uploader=nil}}
+            var body=CoachBody(client:id,action:"record");body.segments=batch
+            do {
+                let reply:CoachClockReply=try await APIClient.shared.coach("clock",body,token:token)
+                let ids=Set(reply.acknowledged ?? [])
+                // A late response only acknowledges its original account's persisted records.
+                if client==id {
+                    pending.removeAll {ids.contains($0.id)};persist();state=reply
+                } else if let data=UserDefaults.standard.data(forKey:key),var rows=try? JSONDecoder().decode([CoachTimeSegment].self,from:data) {
+                    rows.removeAll {ids.contains($0.id)}
+                    if let encoded=try? JSONEncoder().encode(rows){UserDefaults.standard.set(encoded,forKey:key)}
+                }
+            }catch { /* Time is advisory; retain intervals and retry without interrupting study. */ }
+        }
     }
     func stop(){
-        let id=client,token=boundToken
-        worker?.cancel();worker=nil;client="";until=0;state=nil;error=""
-        if !id.isEmpty {Task {await release(id,token)}}
-    }
-    func offline(token:String?) async {
-        let id=client,sent=up
-        guard !id.isEmpty else{return}
-        do{
-            let r:CoachClockReply=try await APIClient.shared.coach("clock",CoachBody(client:id,action:"offline"),token:token)
-            guard client==id else{return}
-            state=r;until=sent+r.credit
-        }catch{self.error="未预留离线时段，请保持联网"}
-    }
-    func retry(extend:Bool,token:String?) async {
-        let id=client
-        guard !id.isEmpty else {start(token:token);return}
-        if extend {
-            do { let _:CoachClockReply = try await APIClient.shared.coach("clock",CoachBody(client:id,action:"extend"),token:token) }
-            catch {self.error="无法延长时间，请重试";return}
-        }
-        guard client==id else {return}
-        stop()
-        start(token:token)
+        guard running else{return}
+        checkpoint();upload()
+        worker?.cancel();worker=nil;uploader=nil;client=""
     }
 }
 
@@ -125,41 +144,18 @@ struct CoachTimeGate: ViewModifier {
     func body(content: Content) -> some View {
         VStack(spacing:4) {
             if active {
-                TimelineView(.periodic(from:.now,by:0.25)) { _ in
-                    let allowed=scene == .active && clock.until>clock.up
-                    VStack(spacing:6){
-                        if let s=clock.state {
-                            Text("今日练习 \(s.used/60) / \(s.limit/60) 分钟").font(.caption).foregroundStyle(.secondary)
-                        }
-                        if allowed {
-                            if let s=clock.state,s.limit-s.used<=180 {Text("剩余不到 3 分钟，建议做完当前题就收课。").font(.caption)}
-                            if app.route != .coach {
-                                if let s=clock.state,s.credit>30 {Text("当前已预留离线时间，最多 10 分钟").font(.caption)}
-                                else {Button("预留离线练习时段"){Task{await clock.offline(token:app.auth?.token)}}.font(.caption)}
-                            }
-                            content
-                        }
-                        else {
-                            Spacer()
-                            if let s=clock.state,s.used>=s.limit {
-                                Text(s.extended ? "今天已到 40 分钟，明天再继续。" : "今天已练满 30 分钟，建议在这里结束。")
-                                if !s.extended {Button("再练最多 10 分钟"){Task {await clock.retry(extend:true,token:app.auth?.token)}}}
-                            } else {
-                                Text(clock.error.isEmpty ? "正在核对今日练习时间…" : clock.error)
-                                if !clock.error.isEmpty {Button("重新连接"){Task {await clock.retry(extend:false,token:app.auth?.token)}}}
-                            }
-                            Button("暂停并返回首页"){clock.stop();app.audio.stop();app.route = .home}
-                            Spacer()
-                        }
-                    }
-                    .onChange(of:allowed){_,ok in if !ok {app.audio.stop()}}
-                }
-            } else { content }
+                Text("今日已练 \(clock.minutes) 分钟 · 用时仅作参考")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            content
         }
-        .task(id:"\(active)-\(scene == .active)-\(app.auth?.accountId ?? "guest")"){
-            if active && scene == .active { clock.isClass=app.route == .coach;clock.start(token:app.auth?.token) } else {clock.stop()}
+        .task(id:"\(active)-\(scene == .active)-\(app.auth?.accountId ?? "guest")-\(app.route == .coach)") {
+            if active && scene == .active {
+                clock.isClass=app.route == .coach
+                clock.start(token:app.auth?.token,account:app.auth?.accountId ?? "guest")
+            } else {clock.stop()}
         }
-        .onDisappear{clock.stop()}
+        .onDisappear {clock.stop()}
     }
 }
 
@@ -184,17 +180,19 @@ struct CoachLessonView: View {
         let token=app.auth?.token
         let allowed=await SpeechService.requestPermissions()
         guard app.route == .coach,app.auth?.token==token,
-              feedback,lesson?.last?.id==id,recording==attempt,clock.until>clock.up else{return}
+              feedback,lesson?.last?.id==id,recording==attempt,clock.running else{return}
         guard allowed else {notice="未获得听写权限，可直接打字。";return}
         app.speech.start(target:""){result in
             guard recording==attempt,app.route == .coach,app.auth?.token==token,feedback,
-                  lesson?.last?.id==id,clock.until>clock.up else{return}
+                  lesson?.last?.id==id,clock.running else{return}
             if let text=result?.text {draft=String(text.prefix(180))}
             else {notice="本机未取得转写，可直接打字。"}
         }
     }
     private func send(_ action:String,_ choice:Int?=nil,aid:String?=nil) async {
-        guard !busy,app.route == .coach,!clock.client.isEmpty,clock.until>clock.up else {return}
+        guard !busy,app.route == .coach else {return}
+        clock.isClass=true
+        clock.start(token:app.auth?.token,account:app.auth?.accountId ?? "guest")
         let token=app.auth?.token,id=clock.client
         busy=true;notice=""
         defer {busy=false}

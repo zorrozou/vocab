@@ -16,7 +16,10 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
     sys.path.insert(0, str(isolated))
     from app import main
     import uvicorn
-    main.llm = lambda prompt: 'Apple is on the table. || 苹果在桌上。'
+    main.llm = lambda prompt: json.dumps({"en":"A price change would change the plan.","zh":"价格变化会改变计划。"}) if "en 是英文" in prompt else 'Apple is on the table. || 苹果在桌上。'
+    def isolated_model(*args,**kwargs):
+        raise RuntimeError("isolated UI fixture has no external model")
+    main.hunyuan_chat = isolated_model
     main.validate_multi = lambda *args: None
     main.quality_check = lambda *args: 5
     main.ensure_tts = lambda *args: True
@@ -27,13 +30,25 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
     def seed_coach_clock(used:int):
         from app import coach
         from fastapi import HTTPException
-        if used not in (0,1799,2399):
+        if used not in (0,1799,2399,3600):
             raise HTTPException(422)
         with sqlite3.connect(main.PERSONAL_DB) as conn:
             coach.init(conn)
             conn.execute("UPDATE coach_clock_v1 SET used=?,extra=?,client=NULL,start=NULL,end=NULL WHERE owner LIKE 'guest:%'",
                          (used,int(used>1800)))
         return {"ok":True}
+
+    time_delay = {"seconds":0}
+    @main.app.post('/__fixture/clock-delay/{seconds}')
+    def delay_clock(seconds:int):
+        assert seconds in (0,8)
+        time_delay["seconds"]=seconds
+        return {"ok":True}
+    @main.app.middleware("http")
+    async def delayed_time(request,call_next):
+        if request.url.path=='/api/v1/coach/clock':
+            await asyncio.sleep(time_delay["seconds"])
+        return await call_next(request)
 
     scheduler_resolve_gate = threading.Event()
     scheduler_resolve_started = threading.Event()

@@ -39,8 +39,12 @@ with tempfile.TemporaryDirectory() as tmp:
         assert call('dashboard',goal='work')['goal']=='work'
         d=call('dashboard');assert d['minutes']==[8,20,2] and d['signals']['listen']==0
         assert call('dashboard',owner='bob')['goal']=='life'
-        assert call('prepare',words=['raincoat','invalidword'],level=2000)['ready']
-        assert call('prepare')['ready'] and len(calls)==1 and 'raincoat' in calls[0] and 'invalidword' not in calls[0]
+        assert not call('prepare',words=['raincoat','invalidword'],level=2000)['ready']
+        for _ in range(3):
+            app.state.coach_worker.once()
+            with sqlite3.connect(path) as c:
+                if c.execute("SELECT 1 FROM coach_prep_v2 WHERE owner='alice' AND goal='work' AND body IS NOT NULL").fetchone():break
+        assert call('prepare')['ready'] and len(calls)==2 and 'raincoat' in calls[-1] and 'invalidword' not in calls[-1]
         assert call('dashboard')['title']==cards[0]['title'] and call('dashboard')['source']=='AI 定制'
         call('clock',action='pulse');l=call('lesson')
         assert l['source']=='AI 定制' and l['words']==['raincoat'] and l['track']=='work'

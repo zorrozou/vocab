@@ -41,7 +41,7 @@ window.VocabCoach = (() => {
   function learnerContext(){
     const weak=Object.entries(recentDifficult(S)).filter(([w])=>!isMastered(S.cards[w]||{}))
       .sort((a,b)=>(b[1].again*2+b[1].hard)-(a[1].again*2+a[1].hard)).slice(0,3).map(([word])=>word);
-    return {level:Math.max(0,Math.min(20000,Number(S.frontier)||0)),due:Math.min(100,dailyPlanSummary(S).duePlanned),words:weak};
+    return {level:Math.max(0,Math.min(20000,Number(S.frontier)||0)),due:Math.min(100,dailyPlanSummary(S).duePlanned),words:weak,voice:S.settings.voice||"en-US-AriaNeural"};
   }
   async function refreshHome(goal=null,study=null){
     const who=key(),seq=++homeRequest;
@@ -89,7 +89,7 @@ window.VocabCoach = (() => {
       hero.append(node('div','听读工作室  /  '+(goals[d?.currentGoal||'life']),'studio-kicker'),
         pair('h2',d?.titleEn||'Today’s lesson',d?.title||'准备今天的听读课','home-title'),node('p',d?.reason||'先听懂一则消息，再到新情境独立做决定。'));
       if(d){hero.append(node('span',d.focus+' · '+(d.source||(d.prepared?'AI 材料已就绪':'教研材料可用')),'studio-chip'));}
-      const primary=control(d?.complete?'View recap':d?.started?'Resume lesson':prepping?'Preparing lesson…':'Start lesson',d?.complete?'查看今日成果':d?.started?'继续今日课程':prepping?'正在为你备课…':'进入今日教练课',()=>{if(d?.started||d?.prepared||d?.study?.on)startCourse();else prepare(true);},'primary');primary.disabled=prepping||!d;actions.append(primary);
+      const primary=control(d?.complete?'View recap':d?.started?'Resume lesson':prepping?'Preparing lesson…':'Start lesson',d?.complete?'查看今日成果':d?.started?'继续今日课程':prepping?'正在为你备课…':'进入今日教练课',()=>startCourse(),'primary');primary.disabled=false;actions.append(primary);
       if(!d?.started&&!d?.prepared){const b=control('Use prepared material','直接使用教研课程',()=>startCourse());b.disabled=!d;actions.append(b);}
       const route=node('div','','studio-route');
       for(const [n,en,zh] of [['01','Understand','理解消息'],['02','Choose','核对行动'],['03','Try again','换境验证']]){const stop=node('span');stop.append(node('b',n),pair('small',en,zh));route.append(stop);}
@@ -99,7 +99,7 @@ window.VocabCoach = (() => {
       ['听读任务','词汇复习','可选回应'].forEach((label,i)=>grid.append(metric(nums[i]+' 分',label)));
       const band=node('div','','studio-allocation');band.setAttribute('aria-hidden','true');
       nums.forEach(n=>{const segment=node('i');segment.style.flexGrow=String(n);band.append(segment);});
-      body.append(band,grid,node('p','按当前剩余时间建议分配。30 分钟收课，主动延长最多至 40 分钟。','muted'));
+      body.append(band,grid,node('p','按约 30 分钟安排内容。30–40 分钟仅供参考，可随时继续或结束。','muted'));
       if(d?.weak.length)body.append(node('p','近期练词线索 · '+d.weak.join(' / '),'muted'));
       if(d?.legacy)body.append(action('接着完成上一版的课',()=>startCourse(1),'quiet'));
       wrap.append(body);
@@ -125,11 +125,11 @@ window.VocabCoach = (() => {
     }
     host.append(action('切回经典界面',classic,'quiet'));
   }
-  function closed(){return active()&&(!run||performance.now()>=run.until);}
+  function closed(){return active()&&(!run||document.hidden);}
   function stop() {
-    stopVoice();const old=run;run=null;version++;clearTimeout(timer);clearTimeout(expire);
+    stopVoice();const old=run;if(old){checkpoint(old);void pulse(old);}run=null;version++;clearTimeout(timer);clearTimeout(expire);
     app().inert=false;
-    if(old?.headers)api('clock',{action:'stop'},old.id,old.headers).catch(()=>{});
+
   }
   function classic() { cancelAutoStart();stopAudio();stop();localStorage.setItem(key(),'classic');home(); }
   function leave() { stopAudio();stop();home(); }
@@ -154,28 +154,45 @@ window.VocabCoach = (() => {
       if(r.ok){const flag=(await r.json()).enabled;if(flag!==availability){availability=flag;if(screen==='home')paintBar();}}
     }).catch(()=>{});
   }
+  const timePrefix=owner=>'vocab.study.intervals.v3.'+owner+'.';
+  function pendingTime(owner){
+    const prefix=timePrefix(owner),rows=[];
+    for(let i=0;i<localStorage.length;i++){
+      const k=localStorage.key(i);if(k?.startsWith(prefix)){try{rows.push(JSON.parse(localStorage.getItem(k)));}catch(_){}}
+    }
+    return rows.sort((a,b)=>a.start-b.start);
+  }
+  function checkpoint(c){
+    const now=performance.now(),elapsed=(now-c.tick)/1000;
+    if(elapsed>0&&elapsed<=60){
+      const row={id:uuid(),start:c.wall,end:c.wall+elapsed,activity:c.activity};
+      try{localStorage.setItem(timePrefix(c.owner)+row.id,JSON.stringify(row));}catch(_){/* Storage failure cannot block a lesson. */}
+    }
+    c.tick=now;c.wall=Date.now()/1000;
+  }
   async function begin() {
     if(run||!active()||document.hidden)return;
-    const c={id:uuid(),owner:key(),until:0,snapshot:null,headers:null};run=c;fault='';
-    app().inert=true;paintBar();
-    try{c.headers=await personalHeaders();if(run!==c||key()!==c.owner)return;await pulse(c);}
-    catch(e){if(run===c){fault=e.message;paintBar();}}
+    const c={id:uuid(),owner:key(),snapshot:null,headers:null,tick:performance.now(),wall:Date.now()/1000,activity:screen==='course'?'class':'vocab',uploading:false};
+    run=c;fault='';app().inert=false;paintBar();
+    const tick=()=>{if(run!==c)return;checkpoint(c);void pulse(c);paintBar();timer=setTimeout(tick,15000);};
+    timer=setTimeout(tick,15000);
+    try{
+      c.headers=await personalHeaders();if(run!==c||key()!==c.owner)return;
+      // Content and time use independent requests. A slow clock never delays lesson entry.
+      if(screen==='course'&&!lesson&&!working)void loadLesson();
+      void pulse(c);
+    }catch(e){if(run===c){note=e.message;render();}}
   }
-  async function pulse(c,extend=false,offline=false) {
-    if(run!==c||c.owner!==key()||document.hidden)return;
+  async function pulse(c) {
+    if(c.uploading||!c.headers)return;
+    c.uploading=true;
     try {
-      if(extend)await api('clock',{action:'extend'},c.id,c.headers);
-      const sent=performance.now(),snapshot=await api('clock',{action:offline?'offline':'pulse'},c.id,c.headers);
-      if(run!==c||key()!==c.owner){api('clock',{action:'stop'},c.id,c.headers).catch(()=>{});return;}
-      c.snapshot=snapshot;c.until=sent+snapshot.credit*1000;fault='';clearTimeout(timer);clearTimeout(expire);
-      if(snapshot.busy)fault='另一台设备正在练习。请先在那里暂停，或稍后重试。';
-      if(c.until>performance.now()){
-        expire=setTimeout(()=>{if(run===c&&closed()){stopVoice();stopAudio();app().inert=true;paintBar();}},c.until-performance.now());
-        timer=setTimeout(()=>pulse(c),Math.max(100,Math.min(10000,c.until-performance.now())));
-        if(screen==='course'&&!lesson&&!working)loadLesson();
-      }else if(snapshot.used<snapshot.limit)timer=setTimeout(()=>pulse(c),snapshot.busy?3000:500);
-      paintBar();
-    }catch(e){if(run===c){fault=e.message;paintBar();}}
+      const segments=pendingTime(c.owner).slice(0,100);
+      const snapshot=await api('clock',{action:'record',segments},c.id,c.headers);
+      for(const id of snapshot.acknowledged||[])localStorage.removeItem(timePrefix(c.owner)+id);
+      if(run===c&&key()===c.owner){c.snapshot=snapshot;paintBar();}
+    }catch(_){/* Persisted intervals retry on the next tick or visit. */}
+    finally{c.uploading=false;}
   }
   function paintBar() {
     const host=box();host.replaceChildren();
@@ -185,32 +202,21 @@ window.VocabCoach = (() => {
     const panel=node('div','', 'card');host.append(panel);
     if(screen==='home') {
       if(!availability){host.hidden=true;return;}
-      if(!enabled()){panel.append(node('small','经典词航 · 与教练课共用每日时间 '),button('开启听读教练',()=>{localStorage.setItem(key(),'on');refreshHome();paintBar();}));return;}
+      if(!enabled()){panel.append(node('small','经典词航 · 与教练课合并记录用时 '),button('开启听读教练',()=>{localStorage.setItem(key(),'on');refreshHome();paintBar();}));return;}
       host.replaceChildren();studioHome(host);
       return;
     }
-    const c=run,s=c?.snapshot,blocked=closed();app().inert=blocked;
-    const spent=s?Math.min(s.limit,s.used+Math.max(0,Math.floor((s.credit*1000-(c.until-performance.now()))/1000))):0;
-    panel.append(node('strong',s?'今日练习 '+Math.floor(spent/60)+' / '+s.limit/60+' 分钟':'正在核对今日练习时间…'));
-    if(!blocked&&s&&s.limit-spent<=180)panel.append(node('p','剩余不到 3 分钟，建议做完手头这题就收课。','muted'));
-    if(blocked){
-      if(s&&s.used>=s.limit)panel.append(node('p',s.extended?'今天已到 40 分钟，明天再继续。':'今天已练满 30 分钟，建议在这里结束。'));
-      else panel.append(node('p',fault||'等待时间确认后继续。','muted'));
-      if(s&&s.used>=TARGET_SECONDS&&!s.extended)panel.append(button('再练最多 10 分钟',()=>pulse(c,true)));
-      else if(fault)panel.append(button('重新连接',()=>{stop();begin();}));
-    }
-    if(!blocked&&screen==='practice') {
-      if(s.credit>30)panel.append(node('p','已预留当前离线时段。断网后可在当前页继续，最多 10 分钟；提前退出请联网释放余额。','muted'));
-      else panel.append(button('预留当前离线练习时段（最多 10 分钟）',()=>pulse(c,false,true)));
-    }
+    const c=run,s=c?.snapshot;app().inert=closed();
+    const local=c?pendingTime(c.owner).filter(x=>new Date(x.start*1000).toLocaleDateString('en-CA')===today()).reduce((n,x)=>n+x.end-x.start,0):0;
+    const spent=(s?.day===today()?s.used:0)+local;
+    panel.append(node('strong','今日已练 '+Math.floor(spent/60)+' 分钟 · 用时仅作参考'));
     if(screen==='course'){panel.classList.add('lesson-toolbar');panel.append(control('Pause lesson','暂停并回首页',leave,'quiet'));}
     else {panel.append(button('暂停并回首页',leave));if(enabled())panel.append(button('切回经典界面',classic));}
   }
-  const TARGET_SECONDS=1800;
   async function perform(fn) {
     if(working||closed()||screen!=='course')return;
     const v=version,c=run;working=true;note='';render();
-    try{const value=await fn(c);if(version===v&&screen==='course'&&run===c)value();}
+    try{if(!c.headers)c.headers=await personalHeaders();const value=await fn(c);if(version===v&&screen==='course'&&run===c)value();}
     catch(e){if(version===v)note=e.message;}
     finally{if(version===v){working=false;render();}}
   }
@@ -311,5 +317,10 @@ window.VocabCoach = (() => {
     if(note){body.append(node('p',note,'warn'),control('Reload lesson','取回最新进度',loadLesson));}
     if(working)card.querySelectorAll('button').forEach(b=>b.disabled=true);
   }
-  return {page:switchPage};
+  async function finish(){
+    const who=key(),context={...learnerContext(),position:S.pointer,new_words:(S.pendingNew||[]).slice(0,10).map(x=>x.word),
+      review_words:Object.entries(S.cards).filter(([,c])=>!isMastered(c)).sort((a,b)=>String(scheduledDue(a[1],S.fsrsSchedulers)||'9999').localeCompare(String(scheduledDue(b[1],S.fsrsSchedulers)||'9999'))).slice(0,15).map(([w])=>w)};
+    try{const headers=await personalHeaders();if(who===key())await api('finish',context,uuid(),headers);}catch(_){}
+  }
+  return {page:switchPage,finish};
 })();

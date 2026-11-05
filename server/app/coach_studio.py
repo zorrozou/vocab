@@ -10,6 +10,7 @@ from uuid import uuid4
 from fastapi import HTTPException
 from app.coach_curriculum import CASES, GOALS, SKILLS, TRANSFER
 from app.coach_english import SCENES
+from app import coach_time as timing
 
 TABLE = "coach_course_v2"
 
@@ -42,9 +43,10 @@ def participation(conn,owner,change=None):
 def active_seconds(conn,owner,day,now):
     row=conn.execute("""SELECT t.seconds,t.activity,t.client,c.client,c.start,c.end FROM coach_phase_time_v2 t
         JOIN coach_clock_v1 c USING(owner,day) WHERE t.owner=? AND t.day=?""",(owner,day)).fetchone()
-    if not row:return 0
+    recorded=timing.seconds(conn,owner,day,"class")
+    if not row:return recorded
     seconds,activity,client,holder,start,end=row
-    return seconds+(max(0,min(now,end)-start) if activity=="class" and client==holder else 0)
+    return recorded+seconds+(max(0,min(now,end)-start) if activity=="class" and client==holder else 0)
 
 
 def history(conn, owner, day):
@@ -131,6 +133,18 @@ def material(skill,goal,lessons):
     return [CASES[skill][g] for g in contexts]
 
 
+def preparation_key(conn,owner,day,goal):
+    # Raw learner responses and time heartbeats are deliberately not part of the fingerprint.
+    prior=[l for l in history(conn,owner,day) if l["day"]<day]
+    evidence=[(l["day"],l["skill"],l["track"],l.get("reviewOf"),l.get("interval"),
+               [(a.get("id"),a["ok"],a["mode"],a.get("replay"),a.get("chosen")) for a in l["answers"]]) for l in prior]
+    return sha256(json.dumps([goal,evidence],ensure_ascii=False,sort_keys=True).encode()).hexdigest()
+
+
+def valid_preparation(conn,owner,day,goal,prepared):
+    return not prepared.get("context") or prepared["context"]==preparation_key(conn,owner,day,goal)
+
+
 def make(conn,owner,day,goal,level,words):
     prior=history(conn,owner,day)
     skill,reason,ref,interval=choose(prior,day)
@@ -144,7 +158,7 @@ def make(conn,owner,day,goal,level,words):
                     not l.get("reviewOf") and bool(l["answers"]) for l in prior)
         first=sha256(f"{seed}/{goal}/{skill}/{ordinal//2}".encode()).digest()[0]%2
         arm=("fixed","adaptive")[(first+ordinal)%2]
-    customized=bool(not seed and prepared and prepared["skill"]==skill)
+    customized=bool(not seed and prepared and prepared["skill"]==skill and valid_preparation(conn,owner,day,goal,prepared))
     cards=list(prepared["cards"] if customized else material(skill,goal,prior))
     new_transfer=False
     if interval:

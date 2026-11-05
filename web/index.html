@@ -1084,6 +1084,7 @@ async function review(word, rating, allowUndo = false, acceptance = false, verif
     if (learned.every(w => S.quizCompleted.includes(w))) S.quizDay = day;
   }
   await scheduleFsrs(c, body, rating, grade);
+  if(rating<=2)prepareWeakExamples();
 }
 
 const isMastered = c => {
@@ -1511,6 +1512,7 @@ async function buildQueue(stillOnPage = () => true, retrySharedSync = true) {
 
 /* 队列确定后立即后台预生成：例句三句套装 + TTS 音频预热，不等翻卡 */
 function prefetchDay(news, reviewWords) {
+  prepareWeakExamples();
   const weak = [...new Set(S.log.filter(l => l.kind !== "shadow" && l.rating <= 2 && l.d >= addDays(today(), -7)).map(l => l.word))].slice(0, 15).join(",");
   const jobs = news.map(w =>
     fetch(`${API}/api/v1/sentence/trio?word=${encodeURIComponent(w.word)}&weak=${encodeURIComponent(weak)}&cap=${S.pointer + 10}`)
@@ -2331,7 +2333,7 @@ function doneDay(refreshOnly = false) {
   if (!refreshOnly) prunePersonalized();
   const day = today();
   if (!refreshOnly && S.log.some(e => e.d === day && (["learn", "review", "probe", "placement", "shadow"].includes(e.kind) || (e.kind === "exposure" && e.source === "shadow" && e.score != null)))) recordStudyDay(day);
-  if (!refreshOnly) save(); renderChips();
+  if (!refreshOnly) {save();globalThis.VocabCoach?.finish();} renderChips();
   if (!refreshOnly && AUTH) pushState();   // 当日完成立即推服务器（不等防抖），手机端马上同步得到
   const summary = dailyPlanSummary(S);
   const capped = summary.completed >= S.settings.dailyCap && summary.dueAvailable > 0 && summary.duePlanned === 0;
@@ -2532,10 +2534,15 @@ function showPersonalJobResults(job, target) {
   }
 }
 let personalLastFailure=false;
-async function autoPersonalize() {
+let examplePreparation=null;
+function prepareWeakExamples(){
+  clearTimeout(examplePreparation);const state=S,owner=deviceId();
+  examplePreparation=setTimeout(()=>{if(state===S&&owner===deviceId()&&!undoSnapshot)void autoPersonalize(true);},10000);
+}
+async function autoPersonalize(background=false) {
   if (AUTH && !AUTH.accountId) return;
   const date = today(), state = S, owner = deviceId();
-  const status = message => { const el = document.querySelector("#genOut"); if (el && S === state) el.textContent = message; };
+  const status = message => { if(background)return;const el = document.querySelector("#genOut"); if (el && S === state) el.textContent = message; };
   const weakToday = [...new Set(state.log.filter(l => l.kind !== "shadow" && l.d === date && l.rating <= 2).map(l => l.word))]
     .filter(w => { const c = state.cards[w]; return !c || !isMastered(c); });
   const weakKey = [...weakToday].sort().join(",");
@@ -2563,6 +2570,7 @@ async function autoPersonalize() {
     await save(); // 请求之前记录任务与幂等键，重启后可以重试。
     if (localSaveFailed || S !== state || deviceId() !== owner) { status("无法保存任务，请先导出进度并释放空间。"); return; }
   }
+  if(background){await refreshPersonalJobs();return;}
   for (let k = 0; k < 10; k++) {
     status("正在为薄弱词定制例句…");
     personalLastFailure=false;

@@ -25,6 +25,7 @@ enum StudioTheme {
     static let names=["life":"日常听说","work":"职场沟通","read":"阅读理解"]
     static let gradient=LinearGradient(colors:[Theme.heroStart,Theme.heroEnd],startPoint:.topLeading,endPoint:.bottomTrailing)
     @MainActor static func context(_ body:inout CoachBody,_ app:AppState) {
+        body.voice=app.S.settings.voice
         body.edition=2;body.level=min(20000,max(0,app.S.frontier))
         body.due=min(100,StudyEngine.dailyPlanSummary(app.S,day:DayUtil.today(),now:Date()).duePlanned)
         body.words=Array(StudyEngine.recentWeakWords(app.S,today:DayUtil.today()).prefix(3))
@@ -58,15 +59,10 @@ struct CoachHomeCard:View {
         app.coachEdition=edition;app.coachTrack=report?.goal ?? "life";app.route = .coach
     }
     private func begin() async {
-        guard let d=report,!preparing else{return}
-        if d.started || d.prepared || d.study.on {enter();return}
-        let token=app.auth?.token,request=UUID()
-        waiting=request;preparing=true;message="正在编写和审校材料，也可以直接进入教研课程。"
-        var body=CoachBody(client:UUID().uuidString);StudioTheme.context(&body,app)
-        _ = try? await APIClient.shared.coach("prepare",body,token:token) as StudioPreparation
-        guard request==waiting,!classic,app.route == .home,app.auth?.token==token else{return}
-        preparing=false;enter()
+        // Dashboard preparation runs independently; entering a course never waits for generation.
+        enter()
     }
+
     private func metric(_ v:String,_ label:String)->some View {
         VStack(alignment:.leading,spacing:4){Text(v).font(.title3.bold());Text(label).font(.caption).foregroundStyle(.secondary)}
           .frame(maxWidth:.infinity,alignment:.leading).padding(10).background(Theme.cardDeep,in:RoundedRectangle(cornerRadius:10))
@@ -106,7 +102,7 @@ struct CoachHomeCard:View {
                                     metric("\(d.minutes[2]) 分", "可选回应")
                                 }
                             }
-                            Text("按剩余时间安排，30 分钟收课，最多 40 分钟。").font(.caption).foregroundStyle(.secondary)
+                            Text("按约 30 分钟安排内容，30–40 分钟仅供参考，可随时继续或结束。").font(.caption).foregroundStyle(.secondary)
                             if !d.weak.isEmpty { Text("近期练词线索 · " + d.weak.joined(separator: " / ")).font(.caption) }
                             if d.legacy { Button("接着完成上一版的课") { enter(1) } }
                         } else {

@@ -26,14 +26,14 @@ def test_clock():
         assert call(NOW+110,B,action="stop")["used"]==26
         s=call(NOW+120)
         c.execute("UPDATE coach_clock_v1 SET used=1796,client=NULL,start=NULL,end=NULL")
-        assert call(NOW+121)["credit"]==4
-        assert call(NOW+125,B)["credit"]==0
+        assert call(NOW+121)["credit"]==25
+        assert call(NOW+125,B)["busy"]
         assert call(NOW+126,B,action="extend")["limit"]==2400
         c.execute("UPDATE coach_clock_v1 SET used=2398,client=NULL,start=NULL,end=NULL")
-        assert call(NOW+127,B)["credit"]==2
+        assert call(NOW+127,B)["credit"]==25
         for offset in (-720,0,840):
             s=call(NOW+500,A,offset=offset)
-            assert s["used"]==2400 and not s["credit"]
+            assert s["used"]>=2400 and s["credit"]>0
         assert call(NOW+86400)["used"]==0
         # Lease ends on the registered learning-day boundary.
         _,midnight=coach.local_day(NOW+86400,480)
@@ -59,7 +59,7 @@ def test_lessons():
             except HTTPException as e:
                 return SimpleNamespace(status_code=e.status_code)
         with patch.object(coach.time,'time',return_value=NOW):
-            assert post("lesson").status_code==409
+            assert post("lesson").status_code==200
             assert post("clock",action="pulse").is_success
             l=post("lesson").json();t=l["task"]
             assert t['kind']=='listen' and len(t['options'])==2
@@ -70,6 +70,7 @@ def test_lessons():
             result=post("answer",task=t['id'],choice=1-correct,mode="listen").json()
             assert result["count"]==3 and result["step"]==1 and result["task"]["hint"]
             assert post("answer",task=t["id"],choice=1-correct,mode="listen").json()==result
+            for _ in range(4):app.state.coach_worker.once()
             explanation=post("explanation").json()
             assert explanation["ai"] and explanation["textEn"].startswith("Unless")
             assert post("clock",client=B,action="pulse").json()["busy"]
@@ -81,7 +82,7 @@ def test_lessons():
             assert post("clock",client=B,action="pulse").json()["credit"]>0
             flag["on"]=True
             assert post("lesson",client=B).json()["task"]==result["task"]
-            assert post("lesson",client=B,who="bob").status_code==409
+            assert post("lesson",client=B,who="bob").status_code==200
             assert post("clock",who="stranger",action="pulse").status_code==401
             for _ in range(2):
                 result=post("answer",client=B,task=result['task']['id'],choice=0,mode="assisted").json()
@@ -98,4 +99,4 @@ def test_lessons():
         with sqlite3.connect(path) as db:
             assert all(row[0].startswith('coach_') for row in db.execute("SELECT name FROM sqlite_master WHERE type='table'"))
 if __name__=="__main__":
-    test_clock();test_lessons();print("PASS shared 30/40-minute limits, midnight, pause, adaptive lesson, retries and cross-device evidence")
+    test_clock();test_lessons();print("PASS advisory time without 30/40-minute limits, midnight, pause, adaptive lesson, retries and cross-device evidence")

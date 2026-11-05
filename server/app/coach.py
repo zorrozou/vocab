@@ -9,7 +9,7 @@ import sqlite3
 import time
 from typing import Literal
 from uuid import UUID, uuid4
-from threading import BoundedSemaphore
+from contextlib import contextmanager
 
 from fastapi import Header, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from app.coach_material import PACK
 from app.coach_english import LEGACY
 from app import coach_studio as studio
+from app import coach_jobs as jobs, coach_time as timing
 from app.limits import check_rate
 
 TARGET, LIMIT, LEASE = 1800, 2400, 25
@@ -25,8 +26,9 @@ TARGET, LIMIT, LEASE = 1800, 2400, 25
 class ClockIn(BaseModel):
     client: UUID
     offset: int = Field(ge=-720, le=840)
-    action: Literal["status", "pulse", "stop", "extend", "offline"]
+    action: Literal["status", "pulse", "stop", "extend", "offline", "record"]
     activity: Literal["class","vocab"]="vocab"
+    segments: list[timing.Segment] = Field(default_factory=list, max_length=100)
 
 
 class LessonIn(BaseModel):
@@ -37,6 +39,10 @@ class LessonIn(BaseModel):
     level: int = Field(default=0,ge=0,le=20000)
     due: int = Field(default=0,ge=0,le=100)
     words: list[str] = Field(default_factory=list,max_length=3)
+    position: int = Field(default=0,ge=0,le=50000)
+    new_words: list[str] = Field(default_factory=list,max_length=10)
+    review_words: list[str] = Field(default_factory=list,max_length=15)
+    voice: Literal["en-US-AriaNeural","en-US-GuyNeural","en-US-JennyNeural","en-GB-SoniaNeural"] = "en-US-AriaNeural"
 
 
 class HomeIn(LessonIn):
@@ -70,6 +76,8 @@ class AnswerIn(LessonIn):
 
 def init(conn):
     studio.init(conn)
+    timing.init(conn)
+    jobs.init(conn)
     conn.execute("CREATE TABLE IF NOT EXISTS coach_zone_v1(owner TEXT PRIMARY KEY, minutes INTEGER NOT NULL)")
     conn.execute("""CREATE TABLE IF NOT EXISTS coach_clock_v1(
         owner TEXT,day TEXT,used REAL NOT NULL DEFAULT 0,extra INTEGER NOT NULL DEFAULT 0,
@@ -106,30 +114,27 @@ def budget(conn, owner, body, now):
             holder = start = end = None
     if body.action == "extend" and used >= TARGET:
         extra = 1
-    limit = LIMIT if extra else TARGET
+    limit = LIMIT
     credit = 0
     if body.action == "stop" and holder == client:
         holder = start = end = None
-    if body.action in ("pulse","offline") and used < limit and holder in (None,client):
+    if body.action in ("pulse","offline") and holder in (None,client):
         requested_end = now + (600 if body.action=="offline" else LEASE)
         if holder == client:
             requested_end = max(requested_end,end)
-        holder,start,end = client, now, min(requested_end,now+limit-used,midnight)
+        holder,start,end = client, now, min(requested_end,midnight)
         credit = max(0,end-now)
         conn.execute("INSERT INTO coach_phase_time_v2 VALUES(?,?,?,?,0) ON CONFLICT(owner,day) DO UPDATE SET client=excluded.client,activity=excluded.activity",
                      (owner,day,client,body.activity))
     conn.execute("UPDATE coach_clock_v1 SET used=?,extra=?,client=?,start=?,end=? WHERE owner=? AND day=?",
                  (used,extra,holder,start,end,owner,day))
-    return {"day":day,"used":math.floor(used),"limit":limit,"credit":credit,
+    acknowledged = timing.record(conn, owner, body.segments, now) if body.action == "record" else []
+    return {"advisory":True,"acknowledged":acknowledged,"day":day,"used":math.floor(used + timing.seconds(conn, owner, day)),"limit":limit,"credit":credit,
             "busy":bool(holder and holder != client),"extended":bool(extra)}
 
 
 def active(conn, owner, body, now):
-    day,_ = account_day(conn,owner,body.offset,now)
-    row=conn.execute("SELECT client,end FROM coach_clock_v1 WHERE owner=? AND day=?",(owner,day)).fetchone()
-    if not row or row[0]!=str(body.client) or row[1]<=now:
-        raise HTTPException(409,"请先恢复本机学习计时")
-    return day
+    return account_day(conn,owner,body.offset,now)[0]
 
 
 def load_lesson(conn,owner,day,edition=1):
@@ -221,8 +226,7 @@ def present(lesson):
             "independent":sum(a["ok"] and a["mode"]!="assisted" and not a.get("replay") for a in answers)}
 
 
-def mount_coach(app, database, identify, enabled, explain, author=None, assess=None, valid_word=None):
-    workers=BoundedSemaphore(2)
+def mount_coach(app, database, identify, enabled, explain, author=None, assess=None, valid_word=None, warm=None, vocabulary=None):
     def inputs(body):
         return list(dict.fromkeys(w.lower() for w in body.words if re.fullmatch(r"[a-zA-Z]{2,30}",w) and (not valid_word or valid_word(w.lower()))))
 
@@ -230,11 +234,73 @@ def mount_coach(app, database, identify, enabled, explain, author=None, assess=N
         if not enabled():
             raise HTTPException(503,"教练暂未开放，可以返回经典词航")
         return identify("coach",auth,guest)
+    @contextmanager
     def connect():
         conn=sqlite3.connect(database(), timeout=10)
-        conn.execute("BEGIN IMMEDIATE")
-        init(conn)
-        return conn
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            init(conn)
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
+    def remember(conn, who, body):
+        context={"level":body.level,"words":inputs(body),"voice":body.voice,"offset":body.offset}
+        conn.execute("INSERT OR REPLACE INTO coach_context_v3 VALUES(?,?)",(who,json.dumps(context)))
+        return context
+
+    def schedule(conn,who,day,body=None):
+        if body:
+            context=remember(conn,who,body)
+        else:
+            row=conn.execute("SELECT body FROM coach_context_v3 WHERE owner=?",(who,)).fetchone()
+            context=json.loads(row[0]) if row else {"level":0,"words":[],"voice":"en-US-AriaNeural","offset":480}
+        if studio.participation(conn,who) or load_lesson(conn,who,day,2):return
+        goal=studio.profile(conn,who)
+        signature=studio.preparation_key(conn,who,day,goal)
+        jobs.enqueue(conn,who,day,"prepare",goal,{**context,"signature":signature},1 if day==account_day(conn,who,context["offset"],time.time())[0] else 5)
+
+    def tomorrow(conn,who,day):
+        schedule(conn,who,(datetime.fromisoformat(day)+timedelta(days=1)).date().isoformat())
+
+    def audio(conn,who,day,lesson,voice):
+        for card in lesson.get("cards",[]):
+            for text in (card["passage"],card["reply"]):
+                key=sha256((voice+"|"+text).encode()).hexdigest()
+                jobs.enqueue(conn,who,day,"audio",key,{"text":text,"voice":voice},3)
+
+    def work(who,day,kind,key,payload):
+        if kind=="vocabulary":
+            if vocabulary:vocabulary(payload)
+            return
+        if kind=="audio":
+            if warm and not warm(payload["text"],payload["voice"]):raise RuntimeError("audio unavailable")
+            return
+        if kind=="explanation":
+            generate_explanation(who,day,payload["edition"],key)
+            return
+        with connect() as conn:
+            today=account_day(conn,who,payload["offset"],time.time())[0]
+            if day<today or load_lesson(conn,who,day,2) or studio.profile(conn,who)!=key or studio.participation(conn,who):return
+            if studio.preparation_key(conn,who,day,key)!=payload["signature"]:return
+            cached=conn.execute("SELECT body FROM coach_prep_v2 WHERE owner=? AND day=? AND goal=?",(who,day,key)).fetchone()
+            if cached and cached[0] and json.loads(cached[0]).get("context")==payload["signature"]:return
+            past=studio.history(conn,who,day)
+            skill,reason,_,_=studio.choose(past,day)
+            previous=[c["passage"] for lesson in past for c in lesson.get("cards",[])]
+        doc=studio.prepare_material(author or explain,assess or explain,skill,key,payload["level"],payload["words"],reason,previous,studio.prior_evidence(past,skill))
+        doc["context"]=payload["signature"]
+        with connect() as conn:
+            if load_lesson(conn,who,day,2) or studio.profile(conn,who)!=key or studio.participation(conn,who):return
+            if studio.preparation_key(conn,who,day,key)!=payload["signature"]:return
+            conn.execute("INSERT OR REPLACE INTO coach_prep_v2 VALUES(?,?,?,?,?,?)",(who,day,key,time.time(),uuid4().hex,json.dumps(doc,ensure_ascii=False)))
+            audio(conn,who,day,doc,payload["voice"])
+
+    worker=jobs.Worker(connect,work,enabled)
+    app.state.coach_worker=worker
+    app.router.on_startup.append(worker.start)
+    app.router.on_shutdown.append(worker.close)
 
     @app.get("/api/v1/coach/availability")
     def availability():
@@ -255,57 +321,44 @@ def mount_coach(app, database, identify, enabled, explain, author=None, assess=N
             day=info["day"]
             goal=studio.profile(conn,who,body.goal)
             studio.participation(conn,who,body.study)
-            report=studio.dashboard(conn,who,day,goal,info["limit"]-info["used"],body.due)
+            remember(conn,who,body)
+            schedule(conn,who,day)
+            current=load_lesson(conn,who,day,2)
+            if current and present(current)["task"] is None:tomorrow(conn,who,day)
+            report=studio.dashboard(conn,who,day,goal,TARGET,body.due)
             prep=conn.execute("SELECT body FROM coach_prep_v2 WHERE owner=? AND day=? AND goal=?",(who,day,goal)).fetchone()
             cached=json.loads(prep[0]) if prep and prep[0] and not report["study"]["on"] else None
-            ready=bool(cached and studio.SKILLS[cached["skill"]]==report["focus"])
+            ready=bool(cached and studio.valid_preparation(conn,who,day,goal,cached) and studio.SKILLS[cached["skill"]]==report["focus"])
             if ready and not report["started"]:
                 report.update(title=cached["cards"][0]["title"],titleEn=studio.english_copy(cached["cards"][0]).get("title"),source="AI 定制")
             previous=load_lesson(conn,who,day)
             report.update(used=info["used"],limit=info["limit"],prepared=ready,
                           legacy=bool(previous and present(previous)["task"]),weak=inputs(body))
+            worker.wake.set()
             return report
 
     @app.post("/api/v1/coach/prepare")
     def prepare(body:LessonIn,authorization:str=Header(default=""),x_guest_token:str=Header(default=""),request:Request=None):
         who=owner(authorization,x_guest_token)
-        now=time.time()
         with connect() as conn:
-            info=budget(conn,who,ClockIn(client=body.client,offset=body.offset,action="status"),now)
-            day=info["day"];goal=studio.profile(conn,who)
-            if info["limit"]-info["used"]<360:raise HTTPException(409,"今日剩余时间不足以开始新课")
-            if studio.participation(conn,who):
-                return {"ready":False,"message":"学习验证使用共同教研材料，避免教材难度干扰比较。"}
-            if load_lesson(conn,who,day,2):raise HTTPException(409,"今天的课堂已经开始，教材已固定")
-            last=conn.execute("SELECT started,body FROM coach_prep_v2 WHERE owner=? AND day=? AND goal=?",(who,day,goal)).fetchone()
-            if last and last[1]:return {"ready":True,"message":"今日定制材料已就绪"}
-            if last and now-last[0]<180:return {"ready":False,"message":"本轮备课中或暂未通过审校。也可以直接开始教研课程。"}
-            check_rate(request,"personalize")
-            if not workers.acquire(blocking=False):raise HTTPException(429,"教练暂忙，可以直接开始教研课程")
-            try:
-                stamp=str(uuid4())
-                past=studio.history(conn,who,day)
-                skill,reason,_,_=studio.choose(past,day)
-                previous=[c["passage"] for lesson in past for c in lesson.get("cards",[])]
-                conn.execute("INSERT OR REPLACE INTO coach_prep_v2 VALUES(?,?,?,?,?,NULL)",(who,day,goal,now,stamp))
-            except BaseException:
-                workers.release()
-                raise
-        try:
-            doc=studio.prepare_material(author or explain,assess or explain,skill,goal,body.level,inputs(body),reason,
-                                        previous,studio.prior_evidence(past,skill))
-        except Exception as exc:
-            reason=str(exc) if isinstance(exc,studio.MaterialRejected) else type(exc).__name__
-            logging.getLogger(__name__).warning("教练备课未采用：%s",reason)
-            return {"ready":False,"message":"本次定制未通过或服务暂不可用，已为你保留教研课程。"}
-        finally:
-            workers.release()
+            day=account_day(conn,who,body.offset,time.time())[0]
+            schedule(conn,who,day,body)
+            row=conn.execute("SELECT body FROM coach_prep_v2 WHERE owner=? AND day=? AND goal=?",(who,day,studio.profile(conn,who))).fetchone()
+            ready=bool(row and row[0] and studio.valid_preparation(conn,who,day,studio.profile(conn,who),json.loads(row[0])))
+        worker.wake.set()
+        return {"ready":ready,"message":"定制材料已就绪" if ready else "后台正在准备，可以立即开始已有课程。"}
+
+    @app.post("/api/v1/coach/finish")
+    def finish(body:LessonIn,authorization:str=Header(default=""),x_guest_token:str=Header(default="")):
+        who=owner(authorization,x_guest_token)
         with connect() as conn:
-            if load_lesson(conn,who,day,2) or studio.profile(conn,who)!=goal:
-                return {"ready":False,"message":"目标或课程已经更新，保留已打开的教材。"}
-            changed=conn.execute("UPDATE coach_prep_v2 SET body=? WHERE owner=? AND day=? AND goal=? AND token=?",
-                                 (json.dumps(doc,ensure_ascii=False),who,day,goal,stamp)).rowcount
-            return {"ready":bool(changed),"message":"三则情境与题目已备好并通过审校。" if changed else "备课已更新，请刷新。"}
+            day=account_day(conn,who,body.offset,time.time())[0]
+            remember(conn,who,body)
+            tomorrow(conn,who,day)
+            payload=body.model_dump(mode="json",exclude={"client","edition","track","due"})
+            jobs.enqueue(conn,who,day,"vocabulary","next",payload,6)
+        worker.wake.set()
+        return {"ready":False,"message":"下一课已交给后台准备"}
 
     @app.post("/api/v1/coach/lesson")
     def lesson(body: LessonIn, authorization:str=Header(default=""), x_guest_token:str=Header(default="")):
@@ -314,16 +367,14 @@ def mount_coach(app, database, identify, enabled, explain, author=None, assess=N
             day=active(conn,who,body,time.time())
             current=load_lesson(conn,who,day,body.edition)
             if not current:
-                used,extra,start=conn.execute("SELECT used,extra,start FROM coach_clock_v1 WHERE owner=? AND day=?",(who,day)).fetchone()
-                remaining=(LIMIT if extra else TARGET)-used-max(0,time.time()-start)
-                minimum=360 if body.edition==2 else 180
-                if remaining<minimum:
-                    raise HTTPException(409,f"剩余时间不足 {minimum//60} 分钟，建议今天收课。已完成的进度已保留。")
                 if body.edition==2:
                     current=studio.make(conn,who,day,studio.profile(conn,who),body.level,inputs(body))
                 else:
                     current=make_lesson(conn,who,day,"life" if body.track=="read" else body.track)
                 save(conn,who,day,current)
+            remember(conn,who,body)
+            audio(conn,who,day,current,body.voice)
+            worker.wake.set()
             return present(current)
 
     @app.post("/api/v1/coach/aid")
@@ -370,6 +421,9 @@ def mount_coach(app, database, identify, enabled, explain, author=None, assess=N
             if current.get("edition")==2:
                 current["activeSeconds"]=max(0,int(studio.active_seconds(conn,who,day,time.time())-current.get("beganAtSeconds",0)))
             save(conn,who,day,current)
+            jobs.enqueue(conn,who,day,"explanation",body.task,{"edition":body.edition},0)
+            if present(current)["task"] is None:tomorrow(conn,who,day)
+            worker.wake.set()
             return present(current)
 
     @app.post("/api/v1/coach/explanation")
@@ -385,10 +439,18 @@ def mount_coach(app, database, identify, enabled, explain, author=None, assess=N
             fallback={"text":answer["explanation"],"textEn":present(current)["last"].get("explanationEn"),"ai":False}
             if answer.get("ai") and answer.get("aiEn"):
                 return {"text":answer["ai"],"textEn":answer["aiEn"],"ai":True}
-            if answer.get("requested",0)>time.time()-120:
-                return fallback
-            answer["requested"]=time.time()
-            save(conn,who,day,current)
+            jobs.enqueue(conn,who,day,"explanation",answer["id"],{"edition":body.edition},0)
+        worker.wake.set()
+        return fallback
+
+    def generate_explanation(who,day,edition,ident):
+        with connect() as conn:
+            current=load_lesson(conn,who,day,edition)
+            if not current:return
+            index=next((i for i,a in enumerate(current["answers"]) if a["id"]==ident),None)
+            if index is None:return
+            answer=current["answers"][index]
+            if answer.get("ai") and answer.get("aiEn"):return
             prompt,_,_=task(current,index)
         # Scores, dates, and memory never come from a model. No identity or raw learner text is sent.
         try:
@@ -398,11 +460,11 @@ def mount_coach(app, database, identify, enabled, explain, author=None, assess=N
             data=studio.json_result(raw)
             en,zh=data["en"],data["zh"]
             if not all(studio.string(v,400) for v in (en,zh)) or not re.search(r"[A-Za-z]",en) or re.search(r"[\u3400-\u9fff]",en) or not re.search(r"[\u3400-\u9fff]",zh):
-                return fallback
+                raise ValueError("invalid explanation")
         except Exception:
-            return fallback
+            raise
         with connect() as conn:
-            latest=load_lesson(conn,who,day,body.edition)
+            latest=load_lesson(conn,who,day,edition)
             if latest and len(latest["answers"])>index and latest["answers"][index]["id"]==answer["id"]:
                 latest["answers"][index].update(ai=zh.strip(),aiEn=en.strip())
                 save(conn,who,day,latest)
@@ -422,6 +484,8 @@ def mount_coach(app, database, identify, enabled, explain, author=None, assess=N
             # Keep earlier exposure visible; a corrected answer after feedback is assisted.
             l.setdefault("corrected",{})[str(len(l["answers"]))]=True
             save(conn,who,day,l)
+            tomorrow(conn,who,day)
+            worker.wake.set()
             return present(l)
 
     @app.post("/api/v1/coach/reply")

@@ -1599,6 +1599,7 @@ final class AppState {
         // Seeing the definition and self-rating changes this word's memory,
         // not the estimate of knowledge of hundreds of unseen words.
         await scheduleFsrs(word: word, body: body, rating: rating, event: event)
+        if rating<=2 {prepareWeakExamples()}
     }
 
     /// 水平观测（v1.2）：每次反馈都是对词汇量后验的一次带权观测
@@ -1664,6 +1665,7 @@ final class AppState {
             if learned.isSubset(of: Set(S.quizCompleted ?? [])) { S.quizDay = today }
         }
         await scheduleFsrs(word: word, body: body, rating: rating, event: event)
+        if rating<=2 {prepareWeakExamples()}
     }
 
     /// 每天首次 buildQueue 时运行：T=后验均值。
@@ -1988,6 +1990,7 @@ final class AppState {
 
     /// 队列确定后立即后台预生成三句套装 + TTS 预热（不等翻卡）
     private func prefetchDay(news: [NewWord], reviewWords: [String]) {
+        prepareWeakExamples()
         let weak = StudyEngine.recentWeakWords(S, today: DayUtil.today()).prefix(15).joined(separator: ",")
         let api = self.api
         let cap = S.pointer + 10
@@ -2036,6 +2039,14 @@ final class AppState {
         // 否则同一天二次学习的新词会永远错过验收。
         prunePersonalized()
         save()
+        var body=CoachBody(client:UUID().uuidString);StudioTheme.context(&body,self)
+        body.position=S.pointer
+        body.new_words=Array(S.pendingNew.prefix(10).map(\.word))
+        body.review_words=Array(S.cards.filter { !StudyEngine.isMastered($0.value) }.sorted {
+            (StudyEngine.scheduledDue($0.value,configurations:S.fsrsSchedulers ?? [:]) ?? "9999") < (StudyEngine.scheduledDue($1.value,configurations:S.fsrsSchedulers ?? [:]) ?? "9999")
+        }.prefix(15).map(\.key))
+        let token=auth?.token
+        Task {let _:StudioPreparation? = try? await api.coach("finish",body,token:token)}
     }
 
     /// 今日稍后到期且尚未计入当日学习上限的单词。
@@ -2154,8 +2165,19 @@ final class AppState {
     }
 
     /// 生成任务在提交前保存，完成后按任务 ID 取回全部结果。
+    private var examplePreparation:Task<Void,Never>?
+    private func prepareWeakExamples(){
+        examplePreparation?.cancel()
+        let token=auth?.token,slot=slotKey
+        examplePreparation=Task {
+            do {try await Task.sleep(for:.seconds(10))} catch {return}
+            guard token==auth?.token,slot==slotKey,undoSnapshot == nil else{return}
+            await autoPersonalize(onStatus:{_ in},background:true)
+        }
+    }
+
     func autoPersonalize(onStatus: @escaping (String) -> Void,
-                         onRows: (([PersonalizedOut.Row]) -> Void)? = nil) async {
+                         onRows: (([PersonalizedOut.Row]) -> Void)? = nil, background:Bool = false) async {
         if let auth, auth.accountId == nil { onStatus("请重新登录并核对旧存档"); return }
         let date = DayUtil.today(), owner = deviceId(), slot = slotKey
         let weakToday = StudyEngine.recentWeakWords(S, today: date)
@@ -2185,6 +2207,7 @@ final class AppState {
             job = created
         }
         guard let job else { return }
+        if background {await refreshPersonalJobs();return}
         for _ in 0..<10 {
             onStatus("正在为薄弱词定制例句…")
             await refreshPersonalJobs()

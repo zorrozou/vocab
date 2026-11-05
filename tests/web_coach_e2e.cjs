@@ -34,18 +34,22 @@ const {chromium} = require('playwright');
     await page.getByRole('heading',{name:/今日教练课完成$/}).waitFor();
     await page.getByRole('button',{name:/返回首页$/}).click();
     await page.getByRole('button',{name:'切回经典界面'}).click();
-    // Force clock boundary responses only. Navigation and input blocking use real app code.
-    let extra=false;
+    // A slow/failing clock and a spent hour must never make a study screen inert.
+    const clockDay=await page.evaluate(()=>today());
     await page.route('**/api/v1/coach/clock',async route=>{
-      const b=route.request().postDataJSON(); if(b.action==='extend')extra=true;
-      await route.fulfill({json:{day:'2026-11-04',used:extra?2400:1800,limit:extra?2400:1800,credit:0,busy:false,extended:extra}});
+      await new Promise(r=>setTimeout(r,6000));
+      await route.fulfill({json:{day:clockDay,used:3600,limit:2400,credit:0,busy:true,extended:true,acknowledged:[]}}).catch(()=>{});
     });
     await page.locator('#bPlace').click();
-    await page.getByText('今天已练满 30 分钟，建议在这里结束。').waitFor();
-    assert(await page.locator('#app').evaluate(e=>e.inert));
-    await page.getByRole('button',{name:'再练最多 10 分钟'}).click();
-    await page.getByText('今天已到 40 分钟，明天再继续。').waitFor();
-    assert(await page.locator('#app').evaluate(e=>e.inert));
-    assert.deepEqual(errors,[]);console.log('PASS mobile Web course, guided follow-up, reload, original interface, shared 30/40-minute gates');
+    await page.getByText('用时仅作参考',{exact:false}).waitFor();
+    assert.equal(await page.locator('#app').evaluate(e=>e.inert),false);
+    const known=page.getByRole('button',{name:'不认识',exact:true});
+    await known.waitFor();await known.click();
+    assert.equal(await page.locator('#app').evaluate(e=>e.inert),false);
+    await page.waitForTimeout(16000);
+    assert.equal(await page.locator('#app').evaluate(e=>e.inert),false);
+    assert.equal(await page.getByText('正在核对今日练习时间…',{exact:true}).count(),0);
+    assert(await page.evaluate(()=>Object.keys(localStorage).some(k=>k.startsWith('vocab.study.intervals.v3.'))));
+    assert.deepEqual(errors,[]);console.log('PASS mobile Web course, guided follow-up, reload, original interface, nonblocking advisory clock and durable pending time');
   }finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exitCode=1});
