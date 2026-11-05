@@ -1,0 +1,7 @@
+[
+ {"name":"upper ceiling skips facilitator","probeCount":12,"gridIndex":48,"used":[10987],"excludedRanges":[],"low":10687,"high":10986,"count":300,"ceiling":true},
+ {"name":"lower ceiling skips first word","probeCount":12,"gridIndex":0,"used":[1],"excludedRanges":[],"low":2,"high":301,"count":300,"ceiling":false},
+ {"name":"resume second band","probeCount":3,"gridIndex":24,"used":[2001,2002,4000],"excludedRanges":[],"low":2003,"high":3999,"count":1997,"ceiling":false},
+ {"name":"empty nearest window expands","probeCount":20,"gridIndex":48,"used":[10987],"excludedRanges":[[10687,10986]],"low":9787,"high":10686,"count":900,"ceiling":true},
+ {"name":"all positions unavailable terminates","probeCount":20,"gridIndex":48,"used":[],"excludedRanges":[[1,10987]],"low":null,"high":null,"count":0,"ceiling":true}
+]

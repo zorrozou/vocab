@@ -226,6 +226,12 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
         if request.url.path == '/api/v1/fsrs/review' and (fixture['fsrs_offline'] or fixture.get('study_plan_offline')):
             fixture['fsrs_failures'] += 1
             return JSONResponse({'detail': 'test fixture: FSRS unavailable'}, status_code=503)
+        if request.url.path == '/api/v1/quiz' and fixture.get('placement_ceiling'):
+            pos=int(request.query_params['pos'])
+            fixture.setdefault('placement_positions',[]).append(pos)
+            return JSONResponse({'word':main.ID2WORD[main.seq[pos-1]['id']],'pos':pos,'mode':'forward',
+                'options':[{'text':'correct fixture answer','ok':True},{'text':'wrong one','ok':False},
+                           {'text':'wrong two','ok':False},{'text':'wrong three','ok':False}]})
         if request.url.path == '/api/v1/quiz' and fixture['fixed_quiz']:
             target = request.query_params.get('word', 'apple')
             return JSONResponse({'word':target,'pos':main.POS_OF.get(main.WORD2ID.get(target), 1), 'mode':'forward',
@@ -676,7 +682,7 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
                  'cards':{'apple':{'pos':position,'stage':1,'due':'2099-01-01T00:00:00Z'}},
                  'log':[],'pendingNew':[],'settings':{'newPerDay':0,'dailyCap':10},'streak':0}
         put_state(state, 'Bearer ' + account['token'])
-        fixture.update(fsrs_offline=False, fixed_quiz=False, personal_offline=False, fsrs_delay=0, fsrs_attempts=0)
+        fixture.update(fsrs_offline=False, fixed_quiz=False, personal_offline=False, fsrs_delay=0, fsrs_attempts=0, placement_ceiling=False)
         return {'username':username,'password':password,'token':account['token']}
 
     @main.app.post('/api/v1/__ui_fixture/staged-ui-setup')
@@ -763,6 +769,31 @@ with tempfile.TemporaryDirectory(prefix='vocab-ui-server-') as directory:
     @main.app.get('/api/v1/__ui_fixture/interop-case')
     def get_interop_case():
         return dict(interop)
+
+    @main.app.post('/api/v1/__ui_fixture/placement-ceiling-case')
+    def seed_placement_ceiling():
+        from datetime import datetime, timezone
+        account=seed_recovery_case()
+        get_state=next(r.endpoint for r in main.app.routes if getattr(r,'path',None)=='/api/v1/me/state' and 'GET' in getattr(r,'methods',set()))
+        put_state=next(r.endpoint for r in main.app.routes if getattr(r,'path',None)=='/api/v1/me/state' and 'PUT' in getattr(r,'methods',set()))
+        state=get_state('Bearer '+account['token'])['state']
+        posterior=[0.0]*49;posterior[-1]=1.0
+        state.update(calibrated=False,probeCount=12,posterior=posterior,
+            placementVersion={"counter":1,"device":"ceiling-fixture","id":str(uuid.uuid4())},
+            posteriorHistory={'algorithm':'bayes-grid-1','baseId':uuid.uuid4().hex,'base':posterior,'baseCount':12,'events':{}},
+            bandEvidence={},bandStats={},knowledge={},knowledgeEvidence={})
+        at=datetime.now(timezone.utc).isoformat();device=str(uuid.uuid4())
+        for i,hi in enumerate([2000,4000,6000,8000,10000,10987]):
+            events={str(uuid.uuid4()):{'pos':p,'ok':True,'device':device,'at':at} for p in [hi-1,hi]}
+            state['bandEvidence'][str(i)]={'baseId':'empty','base':{'a':0,'b':0},'events':events}
+            for event_id,event in events.items():
+                word=main.ID2WORD[main.seq[event['pos']-1]['id']]
+                state['knowledgeEvidence'][word]={'baseId':'empty','base':{'a':0,'b':0,'pos':event['pos']},'events':{event_id:event}}
+                state['knowledge'][word]={'a':1,'b':0,'pos':event['pos']}
+            state['bandStats'][str(i)]={'a':2,'b':0}
+        put_state(state,'Bearer '+account['token'])
+        fixture.update(placement_ceiling=True,placement_positions=[])
+        return account
 
     @main.app.post('/api/v1/__ui_fixture/offline-case')
     def seed_offline_case():

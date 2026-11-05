@@ -2422,6 +2422,53 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(start.waitForExistence(timeout: 20))
     }
 
+    @MainActor func testPlacementCeilingDoesNotRepeat() async throws {
+        continueAfterFailure = false
+        let seed = try await fixtureRequest("/api/v1/__ui_fixture/placement-ceiling-case",method:"POST")
+        let token = try XCTUnwrap(seed["token"] as? String)
+        let app = vocabularyApp()
+        app.launchEnvironment["VOCAB_UI_TEST_API"]="http://127.0.0.1:18765"
+        func enter() {
+            app.launch()
+            if app.buttons["登录"].waitForExistence(timeout:3) {
+                app.buttons["登录"].tap()
+                let user=app.textFields["auth-username"],pass=app.secureTextFields["auth-password"]
+                user.tap();user.typeText(seed["username"] as! String)
+                pass.tap();pass.typeText(seed["password"] as! String);app.buttons["登录"].tap()
+            }
+            XCTAssertTrue(app.buttons["继续定级"].waitForExistence(timeout:20));app.buttons["继续定级"].tap()
+        }
+        enter();var words=Set(["facilitator"])
+        for i in 13...30 {
+            let progress=app.staticTexts["placement-progress"]
+            expectation(for:NSPredicate(format:"label CONTAINS %@","第 \(i)/30"),evaluatedWith:progress)
+            waitForExpectations(timeout:20)
+            let word=app.staticTexts["placement-word"]
+            XCTAssertTrue(word.waitForExistence(timeout:20));XCTAssertTrue(words.insert(word.label).inserted,"repeated \(word.label)")
+            for j in 0..<4 {XCTAssertTrue(onScreen(app.buttons["quiz-option-\(j)"],app:app))}
+            if i==13 {capture("placement-ceiling-unseen-word",app:app)}
+            app.buttons["quiz-option-0"].tap()
+            if i==18 {
+                expectation(for:NSPredicate(format:"label CONTAINS %@","第 19/30"),evaluatedWith:progress);waitForExpectations(timeout:20)
+                app.buttons["退出"].tap();app.terminate();enter()
+            }
+        }
+        XCTAssertTrue(app.staticTexts["定级完成"].waitForExistence(timeout:20))
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format:"label CONTAINS %@","已接近词库测量上限")).firstMatch.exists)
+        capture("placement-ceiling-finished",app:app)
+        var state:[String:Any]=[:]
+        for _ in 0..<100 {
+            state=(try await fixtureRequest("/api/v1/me/state",token:token))["state"] as? [String:Any] ?? [:]
+            if state["calibrated"] as? Bool == true {break}
+            try await Task.sleep(for:.milliseconds(200))
+        }
+        XCTAssertEqual(state["probeCount"] as? Int,30)
+        let bands=state["bandEvidence"] as? [String:[String:Any]] ?? [:]
+        let events=bands.values.flatMap {($0["events"] as? [String:[String:Any]] ?? [:]).values}
+        XCTAssertEqual(events.count,30);XCTAssertEqual(Set(events.compactMap {$0["pos"] as? Int}).count,30)
+        XCTAssertNotNil((state["cards"] as? [String:Any])?["apple"],"placement must preserve learned cards")
+    }
+
     @MainActor func testReplacementPlacementResume() async throws {
         continueAfterFailure = false
         let seed = try await fixtureRequest("/api/v1/__ui_fixture/recovery-case", method: "POST")

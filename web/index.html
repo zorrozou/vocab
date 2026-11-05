@@ -1640,20 +1640,28 @@ const PLACEMENT_BANDS = [
   { lo: 1, hi: 2000 }, { lo: 2001, hi: 4000 }, { lo: 4001, hi: 6000 },
   { lo: 6001, hi: 8000 }, { lo: 8001, hi: 10000 }, { lo: 10001, hi: 10987 }
 ];
-let placePositions = [];
 let placeAnswers = [];
-
-function makePlacementPositions() {
-  const out = [];
-  for (const [i, b] of PLACEMENT_BANDS.entries()) {
-    const used = new Set(Object.values(S.bandEvidence?.[i]?.events || {}).map(e => e.pos));
-    const all = Array.from({length: b.hi - b.lo + 1}, (_, n) => b.lo + n);
-    let candidates = all.filter(p => !used.has(p));
-    if (candidates.length < 2) candidates = all;
-    for (let n = 0; n < 2; n++) out.push(candidates.splice(Math.floor(Math.random() * candidates.length), 1)[0]);
-  }
-  return out;
+let placementRequest = 0;
+function placementUsedPositions(state) {
+  return new Set(Object.values(state.bandEvidence || {}).flatMap(b => Object.values(b.events || {}).map(e => e.pos)));
 }
+function placementCandidatePool(state, excluding = []) {
+  const used = new Set([...placementUsedPositions(state), ...excluding]);
+  const upper = PLACEMENT_BANDS.at(-1).hi;
+  if (state.probeCount < 12) {
+    const b = PLACEMENT_BANDS[Math.floor(Math.max(0, state.probeCount) / 2)];
+    return Array.from({length:b.hi-b.lo+1}, (_,i) => b.lo+i).filter(p => !used.has(p));
+  }
+  const center = Math.min(upper, Math.max(1, Math.round(posteriorMean(state.posterior))));
+  for (const radius of [150,600,2000,upper]) {
+    const width = Math.min(upper, radius*2+1);
+    const lo = Math.max(1, Math.min(center-radius, upper-width+1));
+    const candidates = Array.from({length:width}, (_,i) => lo+i).filter(p => !used.has(p));
+    if (candidates.length) return candidates;
+  }
+  return [];
+}
+function placementAtCeiling(state) { return posteriorMean(state.posterior) >= PLACEMENT_BANDS.at(-1).hi; }
 
 function catFinalMean() {
   const a = catMeans.slice(-5).sort((x, y) => x - y);
@@ -1688,23 +1696,30 @@ function placementScoreText() {
 
 async function place() {
   globalThis.VocabCoach?.page("practice");
-  const current = viewGuard();
+  const request = ++placementRequest, count = S.probeCount;
+  const guardView = viewGuard(), current = () => request === placementRequest && guardView();
   if (S.probeCount === 0 && !S.posterior) {
-    placePositions = makePlacementPositions();
     placeAnswers = [];
     catMeans = [];
   }
-  if (placePositions.length !== 12) placePositions = makePlacementPositions();
   if (S.probeCount >= 30) { finishPlace(catFinalMean()); return; }
-  // 前 12 题每档 2 题覆盖全部级别；后 18 题在当前估计边界附近集中探测
-  const pos = S.probeCount < placePositions.length
-    ? placePositions[S.probeCount]
-    : Math.min(Math.max(Math.round(postMean()) + Math.floor(Math.random() * 301) - 150, 1), 10987);
+  const unavailable = new Set();
   let w = null;
   for (let k = 0; k < 3; k++) {
-    try { w = await fetch(`${API}/api/v1/quiz?pos=${pos}&seed=${Date.now() % 99991}`).then(r => r.json()); } catch (e) {}
+    const pool = placementCandidatePool(S, unavailable);
+    if (!pool.length) break;
+    const pos = pool[Math.floor(Math.random() * pool.length)];
+    try {
+      const response = await fetch(`${API}/api/v1/quiz?pos=${pos}&seed=${Date.now() % 99991}`);
+      if (!response.ok) throw new Error('quiz unavailable');
+      w = await response.json();
+    } catch (_) { w = null; }
     if (!current()) return;
-    if (w && w.options && w.options.length >= 4) break;
+    if (S.probeCount !== count) return place();
+    if (w && w.pos === pos && typeof w.word === 'string' && w.word.trim() &&
+        Array.isArray(w.options) && w.options.length === 4 && w.options.filter(o=>o.ok===true).length === 1 &&
+        !placementUsedPositions(S).has(w.pos)) break;
+    if (w) unavailable.add(pos);
     w = null;
   }
   if (!w) {
@@ -1725,8 +1740,11 @@ async function place() {
   bindPlays();
   playText(w.word);
   const answerCurrent = viewGuard();
+  let answered = false;
   const answer = (ok, guessed, btn) => {
-    if (!answerCurrent()) return;
+    if (answered || !answerCurrent() || request !== placementRequest) return;
+    answered = true;
+    if (S.probeCount !== count || placementUsedPositions(S).has(w.pos)) { place(); return; }
     document.querySelectorAll(".opt").forEach(x => {
       x.disabled = true;
       if (w.options[+x.dataset.i].ok) x.classList.add("right");
@@ -1756,8 +1774,8 @@ function finishPlace(r) {
   save();
   $("#app").innerHTML = `<div class="card center">
     <h2>定级完成</h2>
-    <div class="score">预计认识 ${expectedKnown()} 词</div>
-    <p class="muted">当前级别：${LVL_NAME[lvlOfPos(S.frontier)]} · 发词位置 ${escapeHTML(S.frontier)}<br>${placementScoreText()}<br>新词将从这个位置开始，${S.pendingNew.length} 个答错词会优先补学。估值会随学习逐步调整。</p>
+    <div class="score">${placementAtCeiling(S) ? "接近词库上限" : `预计认识 ${expectedKnown()} 词`}</div>
+    <p class="muted">当前级别：${LVL_NAME[lvlOfPos(S.frontier)]} · 发词位置 ${escapeHTML(S.frontier)}<br>${placementScoreText()}<br>新词将从这个位置开始，${S.pendingNew.length} 个答错词会优先补学。${placementAtCeiling(S) ? "已接近词库测量上限，更高水平暂无法可靠区分。" : "估值会随学习逐步调整。"}</p>
     <div class="row"><button class="act" id="bGo">开始学习</button></div>
   </div>`;
   renderChips();

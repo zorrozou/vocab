@@ -7,7 +7,8 @@ struct PlacementView: View {
     @State private var quiz: Quiz?
     @State private var loading = true
     @State private var loadFailed = false
-    @State private var positions: [Int] = []
+    @State private var unavailablePositions: Set<Int> = []
+    @State private var requestID = UUID()
     @State private var recentMeans: [Double] = []
     @State private var finished: Int? = nil
     @State private var answering = false
@@ -50,14 +51,14 @@ struct PlacementView: View {
                             GhostButton(title: "重试") { Task { await loadNext() } }
                         } else if let quiz {
                             HStack(alignment: .center, spacing: 10) {
-                                BigWord(word: quiz.word)
+                                BigWord(word: quiz.word).accessibilityIdentifier("placement-word")
                             }
                             Text("选出正确词义").font(.subheadline).foregroundStyle(Theme.muted)
                         }
                     }
                     if let quiz, !loading {
-                        QuizOptionsView(options: quiz.options,spokenWord:quiz.word) { ok in answer(quiz, ok: ok) }
-                        GhostButton(title: "不认识") { answer(quiz, ok: false, guessed: false) }
+                        QuizOptionsView(options: quiz.options,spokenWord:quiz.word) { ok in answer(quiz, ok: ok) }.id(quiz.pos).disabled(answering)
+                        GhostButton(title: "不认识") { answer(quiz, ok: false, guessed: false) }.disabled(answering)
                     }
                     Text("不确定请点「不认识」，不要猜")
                         .font(.caption).foregroundStyle(Theme.muted)
@@ -65,18 +66,7 @@ struct PlacementView: View {
             }
         }
         .task { await loadNext() }
-        .onDisappear { app.audio.stop() }
-    }
-
-    private func makePositions() -> [Int] {
-        var out: [Int] = []
-        for (index, (lo, hi)) in bands.enumerated() {
-            let used = Set(app.S.bandEvidence?["\(index)"]?.events.values.map(\.pos) ?? [])
-            var candidates = (lo...hi).filter { !used.contains($0) }
-            if candidates.count < 2 { candidates = Array(lo...hi) }
-            for _ in 0..<2 { out.append(candidates.remove(at: Int.random(in: 0..<candidates.count))) }
-        }
-        return out
+        .onDisappear { requestID = UUID(); app.audio.stop() }
     }
 
     private func posteriorAround(_ mean: Int, sd: Double = 500) -> [Double] {
@@ -98,35 +88,51 @@ struct PlacementView: View {
     }
 
     private func loadNext() async {
-        answering = false
-        if positions.isEmpty { positions = makePositions() }
-        if probeCount >= 30 {
-            finish(boundary: finalMean)
-            return
+        let id = UUID(); requestID = id
+        let owner = app.auth, epoch = app.S.placementVersion, session = app.placementSession
+        let count = probeCount
+        func active() -> Bool {
+            !Task.isCancelled && requestID == id && app.route == .placement &&
+            app.auth == owner && app.S.placementVersion == epoch && app.placementSession == session
         }
+        answering = false
+        quiz = nil
+        if probeCount >= 30 { finish(boundary: finalMean); return }
         loading = true
         loadFailed = false
-        // 前 12 题每档 2 题覆盖全部级别；后 18 题在当前估计边界附近集中探测
-        let pos = probeCount < positions.count
-            ? positions[probeCount]
-            : min(max(Int(StudyEngine.postMean(app.S).rounded()) + Int.random(in: -150...150), 1), 10987)
         for _ in 0..<3 {
-            if let cand = try? await APIClient.shared.quiz(
-                pos: pos, seed: Int(Date().timeIntervalSince1970) % 99991),
-               cand.options.count >= 4 {
+            guard active() else { return }
+            if probeCount != count { await loadNext(); return }
+            guard let pos = StudyEngine.placementCandidatePool(app.S, excluding: unavailablePositions).randomElement() else { break }
+            do {
+                let cand = try await APIClient.shared.quiz(pos: pos, seed: Int.random(in: 1...99990))
+                guard active() else { return }
+                if probeCount != count { await loadNext(); return }
+                guard cand.pos == pos, cand.matches(word: cand.word),
+                      !StudyEngine.placementUsedPositions(app.S).contains(cand.pos) else {
+                    unavailablePositions.insert(pos); continue
+                }
                 quiz = cand
                 loading = false
                 app.audio.play(cand.word, voice: app.S.settings.voice)
                 return
+            } catch {
+                // A network error does not make a word unavailable.
+                guard active() else { return }
             }
         }
+        guard active() else { return }
         loadFailed = true
         loading = false
     }
 
     private func answer(_ q: Quiz, ok: Bool, guessed: Bool = true) {
-        guard !answering else { return }
+        guard !answering, !loading, app.route == .placement,
+              quiz?.pos == q.pos, quiz?.word == q.word else { return }
         answering = true
+        guard !StudyEngine.placementUsedPositions(app.S).contains(q.pos) else {
+            Task { await loadNext() }; return
+        }
         StudyEngine.recordKnowledge(&app.S, word: q.word, pos: q.pos, ok: ok, isPlacement: true)
         StudyEngine.posteriorUpdate(&app.S, rank: q.pos, resp: ok ? 1 : 0, guess: guessed ? 0.25 : 0)
         recentMeans.append(StudyEngine.postMean(app.S))
@@ -150,14 +156,16 @@ struct PlacementView: View {
     private func doneView(boundary: Int) -> some View {
         ScreenPages {
             Text("定级完成").font(.title2.weight(.bold)).foregroundStyle(Theme.text)
-            Text("预计认识 \(StudyEngine.expectedKnown(app.S)) 词")
+            Text(StudyEngine.placementAtCeiling(app.S) ? "接近词库上限" : "预计认识 \(StudyEngine.expectedKnown(app.S)) 词")
                 .font(.largeTitle.weight(.bold)).foregroundStyle(Theme.accentLight)
             Text(
                 "当前级别：\(levelDisplayName(levelForPos(boundary))) · 发词位置 \(boundary)\n\(scoreText)\n新词将从这个位置开始，\(app.S.pendingNew.count) 个答错词会优先补学"
             )
             .font(.subheadline).foregroundStyle(Theme.muted)
             .multilineTextAlignment(.center)
-            Text("这是近似估计，可随学习逐步调整。")
+            Text(StudyEngine.placementAtCeiling(app.S)
+                 ? "已接近词库测量上限，更高水平暂无法可靠区分；此结果仅为近似估计。"
+                 : "这是近似估计，可随学习逐步调整。")
                 .font(.footnote).foregroundStyle(Theme.muted)
             PrimaryButton(title: startingStudy ? "正在准备…" : "开始学习") {
                 guard !startingStudy else { return }

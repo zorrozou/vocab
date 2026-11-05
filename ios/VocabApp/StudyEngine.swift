@@ -657,6 +657,34 @@ enum StudyEngine {
     static let placementBands = [(1, 2000), (2001, 4000), (4001, 6000),
                                  (6001, 8000), (8001, 10000), (10001, 10987)]
 
+    /// Answered ranks belong to the current placement epoch and survive restarts.
+    static func placementUsedPositions(_ s: LearningState) -> Set<Int> {
+        Set((s.bandEvidence ?? [:]).values.flatMap { $0.events.values.map(\.pos) })
+    }
+
+    /// Shift the whole sampling window at either edge; never clamp each draw
+    /// onto the same endpoint. Exhausted windows expand to unseen vocabulary.
+    static func placementCandidatePool(_ s: LearningState, excluding: Set<Int> = []) -> [Int] {
+        let used = placementUsedPositions(s).union(excluding)
+        let upper = placementBands.last!.1
+        if s.probeCount < 12 {
+            let band = placementBands[max(0, s.probeCount) / 2]
+            return (band.0...band.1).filter { !used.contains($0) }
+        }
+        let center = min(upper, max(1, Int(postMean(s).rounded())))
+        for radius in [150, 600, 2000, upper] {
+            let width = min(upper, radius * 2 + 1)
+            let lo = max(1, min(center - radius, upper - width + 1))
+            let candidates = (lo..<(lo + width)).filter { !used.contains($0) }
+            if !candidates.isEmpty { return candidates }
+        }
+        return []
+    }
+
+    static func placementAtCeiling(_ s: LearningState) -> Bool {
+        postMean(s) >= Double(placementBands.last!.1)
+    }
+
     static func bandIndex(of pos: Int) -> Int {
         for (i, b) in placementBands.enumerated() where pos >= b.0 && pos <= b.1 { return i }
         return placementBands.count - 1
