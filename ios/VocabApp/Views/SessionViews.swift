@@ -55,9 +55,6 @@ struct LearnCardView: View {
     @State private var personal: PersonalizedSentence?
     @State private var sentences: [SentenceItem] = []
     @State private var weave: (text: String, zh: String?, weak: String)?
-    @State private var section = 0
-    @State private var shadowMsg = ""
-    @State private var shadowResult: ShadowResult?
     @State private var acted = false
     @State private var detail: NewWord?
     @State private var detailError = ""
@@ -77,22 +74,10 @@ struct LearnCardView: View {
                 title:
                     "新词 \(app.session.idx + 1)/\(app.session.queue.count) · \(levelDisplayName(currentItem.level ?? levelForPos(currentItem.pos)))",
                 progress: Double(app.session.idx) / Double(max(1, app.session.queue.count)))
-            SectionChoice(titles: ["词义", "例句", "跟读"], selected: $section)
-            ScreenPages {
-                if section == 0 {
-                    HStack {
-                        BigWord(word: item.word); PlayButton(text: item.word)
-                    }
-                    if let ph = currentItem.phonetic, !ph.isEmpty { Text("/\(ph)/").font(.subheadline) }
-                    sensesView
-                } else if section == 1 {
-                    sentenceArea
-                } else {
-                    ReadingText(text: shadowTarget(), font: .title3)
-                    ShadowHoldButton(target: shadowTarget(), onBusy: { shadowMsg = $0 }, onResult: handleShadow)
-                    shadowArea
-                }
-            }.id(section).padding(.top, 8)
+            WordStudyPanel(word:item.word,phonetic:currentItem.phonetic,meaning:meaningText,examples:studyExamples,
+                           notice:trioError.isEmpty ? "例句正在准备中…":trioError,
+                           retry:{if !hasMeaning {loadDetail()} else {loadTrio()}},onSwap:replaceExample)
+                .padding(.top,6)
         }.padding(.horizontal, 14)
             // 交互区：钉死在底部拇指区，不随内容长度浮动
             .safeAreaInset(edge: .bottom) {
@@ -113,98 +98,19 @@ struct LearnCardView: View {
             .onDisappear { sideTasks.forEach { $0.cancel() } }
     }
 
-    @ViewBuilder private var sensesView: some View {
-        Group {
-            let senses = (currentItem.senses ?? []).filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
-            ForEach(Array(senses.enumerated()), id: \.offset) { _, s in
-                HStack(alignment: .top, spacing: 6) {
-                    Text(s.pos ?? "·").font(.footnote.weight(.medium)).foregroundStyle(Theme.accentLight)
-                    ReadingText(text: s.text, font: .subheadline, title: "完整词义").foregroundStyle(Theme.text)
-                }
-            }
-            if senses.isEmpty, let sense = currentItem.sense, !sense.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                ReadingText(text: sense, font: .subheadline, title: "完整词义").foregroundStyle(Theme.text)
-            } else if senses.isEmpty && detailError.isEmpty {
-                HStack {
-                    Text("正在加载词义…"); ProgressView().scaleEffect(0.7)
-                }
-                .font(.subheadline).foregroundStyle(Theme.muted)
-            }
-            if !senses.isEmpty { MeaningFeedbackButton(word: item.word, text: senses.map(\.text).joined(separator: "；")) }
-            if !detailError.isEmpty {
-                Text(detailError).font(.footnote).foregroundStyle(Theme.bad)
-                Button("重新加载词义") { loadDetail() }
-                    .font(.subheadline.weight(.semibold))
-            }
-        }
+    private var meaningText:String {
+        let senses=(currentItem.senses ?? []).filter {!$0.text.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty}
+        return senses.isEmpty ? currentItem.sense ?? detailError:senses.map { [ $0.pos,$0.text ].compactMap{$0}.joined(separator:" ") }.joined(separator:"；")
     }
-
-    @ViewBuilder private var sentenceArea: some View {
-        Group {
-            if let p = personal {
-                SentenceRow(
-                    word: item.word, tag: "个性化", tagColor: Theme.warn,
-                    sentence: SentenceItem(tier: nil, text: p.text, zh: p.zh),
-                    kind: "personal"
-                ) { fresh in
-                    if let fresh { personal = PersonalizedSentence(text: fresh.text, recall: nil, zh: fresh.zh) } else { personal = nil }
-                }
-            }
-            ForEach(Array(sentences.enumerated()), id: \.offset) { i, s in
-                SentenceRow(
-                    word: item.word, tag: tierLabel(s.tier), tagColor: Theme.accentLight,
-                    sentence: s, kind: "static",
-                    displayedSentences: sentences.map(\.text) + [personal?.text, weave?.text].compactMap { $0 }
-                ) { fresh in
-                    if let fresh, sentences.contains(where: { $0.text == fresh.text }) { return }
-                    sentences.replaceSentence(s, with: fresh)
-                }
-            }
-            if let w = weave {
-                SentenceRow(
-                    word: item.word, tag: "巩固", tagColor: Theme.accentLight,
-                    sentence: SentenceItem(tier: nil, text: w.text, zh: w.zh),
-                    kind: "weave", recallNote: "（复习词：\(w.weak)）"
-                ) { _ in weave = nil }
-            }
-            if personal == nil && trioLoading {
-                HStack {
-                    TagLabel(text: "例句", color: Theme.muted)
-                    Text("正在补充例句…").font(.subheadline).foregroundStyle(Theme.muted)
-                    ProgressView().scaleEffect(0.7)
-                }
-            } else if personal == nil && !trioError.isEmpty {
-                Text(trioError).font(.footnote).foregroundStyle(Theme.muted)
-                Button("重新加载例句") { loadTrio() }.font(.subheadline.weight(.semibold))
-            }
-        }
+    private var studyExamples:[StudyExample] {
+        (personal.map {[StudyExample(sentence:.init(tier:nil,text:$0.text,zh:$0.zh),kind:"personal",tag:"个性化")]} ?? [])
+        + sentences.map {StudyExample(sentence:$0,kind:"static",tag:$0.tier==3 ? "挑战":$0.tier==2 ? "进阶":"基础")}
+        + (weave.map {[StudyExample(sentence:.init(tier:nil,text:$0.text,zh:$0.zh),kind:"weave",tag:"巩固")]} ?? [])
     }
-
-    private var shadowArea: some View {
-        Group {
-            if app.speech.state == .listening {
-                ReadingText(text: app.speech.liveText.isEmpty ? "请朗读例句，读完松开手…" : app.speech.liveText, font: .footnote, title: "完整跟读记录").foregroundStyle(Theme.accentLight)
-            } else if let r = shadowResult {
-                ShadowResultDisplay(result: r)
-            } else if !shadowMsg.isEmpty {
-                if shadowMsg.contains("权限") {
-                    Button(shadowMsg + "（点我去开启）") {
-                        #if canImport(UIKit)
-                            if let u = URL(string: UIApplication.openSettingsURLString) {
-                                UIApplication.shared.open(u)
-                            }
-                        #endif
-                    }
-                    .font(.footnote).foregroundStyle(Theme.accentLight)
-                } else {
-                    Text(shadowMsg).font(.footnote).foregroundStyle(Theme.muted)
-                }
-            }
-        }
-    }
-
-    private func tierLabel(_ t: Int?) -> String {
-        switch t { case 2: return "进阶"; case 3: return "挑战"; default: return "基础" }
+    private func replaceExample(_ old:StudyExample,_ fresh:SentenceItem?) {
+        if old.kind=="personal" {personal=fresh.map {PersonalizedSentence(text:$0.text,recall:nil,zh:$0.zh)}}
+        else if old.kind=="weave" {weave=nil}
+        else {sentences.replaceSentence(old.sentence,with:fresh)}
     }
 
     private func setup() {
@@ -215,11 +121,11 @@ struct LearnCardView: View {
         } else if let st = currentItem.static, !st.isEmpty {
             sentences = [SentenceItem(tier: 1, text: st, zh: nil)]
         }
-        // 自动连播：单词 → 全部例句；同时记录薄弱词的真实展示/播放曝光
+        // 自动连播：单词 → 当前可见例句；同时记录薄弱词的真实展示/播放曝光
         let texts = [personal?.text].compactMap { $0 } + sentences.map { $0.text }
         if let p = personal { app.logSentenceExposures(p.text, source: "personal", played: true) }
-        sentences.forEach { app.logSentenceExposures($0.text, source: "trio", played: true) }
-        app.audio.playSequence(word: item.word, sentences: texts, voice: app.S.settings.voice)
+        if personal==nil,let first=sentences.first {app.logSentenceExposures(first.text,source:"trio",played:true)}
+        app.audio.playSequence(word: item.word, sentences: Array(texts.prefix(1)), voice: app.S.settings.voice)
         // 例句不足三条且非个性化：按需补三句套装。
         if personal == nil && sentences.count < 3 { loadTrio() }
         // 巩固句：40% 概率织入近期薄弱词
@@ -229,7 +135,6 @@ struct LearnCardView: View {
                     await MainActor.run {
                         guard !Task.isCancelled else { return }
                         weave = w
-                        app.logExposure(word: w.weak, source: "weave", text: w.text, played: false)
                     }
                 }
             }
@@ -251,9 +156,9 @@ struct LearnCardView: View {
                 if personal == nil {
                     let had = !sentences.isEmpty
                     sentences = r.sentences
-                    r.sentences.forEach { app.logSentenceExposures($0.text, source: "trio", played: true) }
+                    if !had,let first=r.sentences.first {app.logSentenceExposures(first.text,source:"trio",played:true)}
                     if !had {
-                        app.audio.playSequence(word: item.word, sentences: r.sentences.map { $0.text }, voice: app.S.settings.voice)
+                        app.audio.playSequence(word: item.word, sentences: Array(r.sentences.prefix(1).map { $0.text }), voice: app.S.settings.voice)
                     }
                     if r.sentences.count < 3 { trioError = "部分例句暂不可用。" }
                 }
@@ -279,7 +184,7 @@ struct LearnCardView: View {
                 if let fresh = full.sentences, !fresh.isEmpty {
                     sentences = fresh
                     if !hadSentences {
-                        app.audio.playSequence(word: item.word, sentences: fresh.map { $0.text }, voice: app.S.settings.voice)
+                        app.audio.playSequence(word: item.word, sentences: Array(fresh.prefix(1).map { $0.text }), voice: app.S.settings.voice)
                     }
                 }
             } catch {
@@ -287,20 +192,6 @@ struct LearnCardView: View {
             }
         }
         sideTasks.append(t)
-    }
-
-    /// 跟读目标句：选最短的（挑战句 15~20 词一口气读不下来，基础句最适合跟读）
-    private func shadowTarget() -> String {
-        ([personal?.text].compactMap { $0 } + sentences.map { $0.text })
-            .min { $0.count < $1.count } ?? ""
-    }
-
-    /// 跟读结果处理：展示逐词反馈 + 入档（<60% 记薄弱，当晚定制例句）
-    private func handleShadow(_ res: ShadowResult?) {
-        guard let res else { shadowMsg = "未听清，再试一次"; return }
-        shadowMsg = ""
-        shadowResult = res
-        app.recordShadow(word: item.word, result: res)
     }
 
     private func deferWord() {
@@ -392,12 +283,11 @@ struct ReviewQuizView: View {
                 } else {
                     HStack(alignment: .center, spacing: 10) {
                         BigWord(word: word)
-                        PlayButton(text: word)
                     }
                     Text("选出正确词义").font(.subheadline).foregroundStyle(Theme.muted)
                 }
             }
-            if let quiz { QuizOptionsView(options: quiz.options) { ok in phase = .answering(ok) } }
+            if let quiz { QuizOptionsView(options: quiz.options,spokenWord:quiz.mode=="reverse" ? nil:word) { ok in phase = .answering(ok) } }
         }.padding(14)
             .onAppear {
                 // 反向回想不播单词（会泄题）；正向照旧自动朗读
@@ -488,7 +378,6 @@ struct ProbeQuizView: View {
                         } else {
                             HStack(alignment: .center, spacing: 10) {
                                 BigWord(word: item.word)
-                                PlayButton(text: item.word)
                             }
                             Text("选出正确词义").font(.subheadline).foregroundStyle(Theme.muted)
                         }
@@ -500,7 +389,7 @@ struct ProbeQuizView: View {
                 }
             }
             if let quiz {
-                QuizOptionsView(options: quiz.options) { ok in
+                QuizOptionsView(options: quiz.options,spokenWord:reverse ? nil:item.word) { ok in
                     var observed = item
                     observed.pos = quiz.pos
                     guard app.answerProbe(observed, ok: ok, reverse: reverse) else { return }
@@ -541,75 +430,15 @@ struct AnswerCardView: View {
     @State private var detail: NewWord?
     @State private var personal: PersonalizedSentence?
     @State private var sentences: [SentenceItem] = []
-    @State private var section = 0
-    @State private var shadowMsg = ""
-    @State private var shadowResult: ShadowResult?
     @State private var rated = false
     @State private var detailError = ""
 
     var body: some View {
         VStack(spacing: 0) {
-            SectionChoice(titles: ["答案", "例句", "跟读"], selected: $section)
-            ScreenPages {
-                if section == 0 {
-                    Text(quizOk ? "✓ 答对了——这次掌握程度？" : "✗ 正确答案")
-                        .font(.headline.weight(.bold))
-                        .foregroundStyle(quizOk ? Theme.ok : Theme.bad)
-                    HStack(alignment: .center, spacing: 10) {
-                        BigWord(word: word)
-                        PlayButton(text: word)
-                    }
-                    if let ph = detail?.phonetic, !ph.isEmpty {
-                        Text("/\(ph)/").font(.subheadline).foregroundStyle(Theme.muted)
-                    }
-                    Group {
-                        ForEach(Array((detail?.senses ?? []).enumerated()), id: \.offset) { _, s in
-                            HStack(alignment: .top, spacing: 6) {
-                                Text(s.pos ?? "·").font(.footnote.weight(.medium)).foregroundStyle(Theme.accentLight)
-                                ReadingText(text: s.text, font: .subheadline, title: "完整词义").foregroundStyle(Theme.text)
-                            }
-                        }
-                        if let senses = detail?.senses, !senses.isEmpty {
-                            MeaningFeedbackButton(word: word, text: senses.map(\.text).joined(separator: "；"))
-                        }
-                        if detail == nil {
-                            if detailError.isEmpty {
-                                HStack {
-                                    Text("正在加载词义…"); ProgressView().scaleEffect(0.7)
-                                }
-                                .font(.subheadline).foregroundStyle(Theme.muted)
-                            } else {
-                                Text(detailError).font(.footnote).foregroundStyle(Theme.bad)
-                                Button("重新加载词义") { Task { await loadDetail() } }
-                                    .font(.subheadline.weight(.semibold))
-                            }
-                        }
-                    }
-                } else if section == 1 {
-                    sentenceArea
-                } else {
-                    ReadingText(text: shadowTarget(), font: .title3)
-                    ShadowHoldButton(target: shadowTarget(), onBusy: { shadowMsg = $0 }, onResult: handleShadow)
-                    if app.speech.state == .listening {
-                        ReadingText(text: app.speech.liveText.isEmpty ? "请朗读例句，读完松开手…" : app.speech.liveText, font: .footnote, title: "完整跟读记录").foregroundStyle(Theme.accentLight)
-                    } else if let r = shadowResult {
-                        ShadowResultDisplay(result: r)
-                    } else if !shadowMsg.isEmpty {
-                        if shadowMsg.contains("权限") {
-                            Button(shadowMsg + "（点我去开启）") {
-                                #if canImport(UIKit)
-                                    if let u = URL(string: UIApplication.openSettingsURLString) {
-                                        UIApplication.shared.open(u)
-                                    }
-                                #endif
-                            }
-                            .font(.footnote).foregroundStyle(Theme.accentLight)
-                        } else {
-                            Text(shadowMsg).font(.footnote).foregroundStyle(Theme.muted)
-                        }
-                    }
-                }
-            }.id(section).padding(.top, 8)
+            Text(quizOk ? "✓ 答对了 · 这次掌握程度？":"✗ 正确答案")
+                .font(.subheadline.weight(.semibold)).foregroundStyle(quizOk ? Theme.ok:Theme.bad).padding(.vertical,6)
+            WordStudyPanel(word:word,phonetic:detail?.phonetic,meaning:meaningText,examples:studyExamples,
+                           notice:detailError,retry:{Task {await loadDetail()}},onSwap:replaceExample)
         }.padding(.horizontal, 14)
             // 评分/继续：钉死底部拇指区
             .safeAreaInset(edge: .bottom) {
@@ -644,41 +473,17 @@ struct AnswerCardView: View {
         // 卡片级不做 onDisappear stop：旧卡的 stop 可能晚于新卡开播触发，误杀新卡音频；新卡开播时会自行 stop 旧链
     }
 
-    @ViewBuilder private var sentenceArea: some View {
-        Group {
-            if let p = personal {
-                SentenceRow(
-                    word: word, tag: "个性化", tagColor: Theme.warn,
-                    sentence: SentenceItem(tier: nil, text: p.text, zh: p.zh),
-                    kind: "personal"
-                ) { fresh in
-                    if let fresh { personal = PersonalizedSentence(text: fresh.text, recall: nil, zh: fresh.zh) } else { personal = nil }
-                }
-            }
-            ForEach(Array(sentences.enumerated()), id: \.offset) { i, s in
-                SentenceRow(
-                    word: word,
-                    tag: {
-                        switch s.tier {
-                        case 2: return "进阶";
-                        case 3: return "挑战";
-                        default: return "基础"
-                        }
-                    }(),
-                    tagColor: Theme.accentLight, sentence: s, kind: "static",
-                    displayedSentences: sentences.map(\.text) + [personal?.text].compactMap { $0 }
-                ) { fresh in
-                    if let fresh, sentences.contains(where: { $0.text == fresh.text }) { return }
-                    sentences.replaceSentence(s, with: fresh)
-                }
-            }
-            if personal == nil && sentences.isEmpty {
-                HStack {
-                    TagLabel(text: "例句", color: Theme.muted)
-                    Text("生成中…").font(.subheadline).foregroundStyle(Theme.muted)
-                }
-            }
-        }
+    private var meaningText:String {
+        let senses=detail?.senses ?? []
+        return senses.isEmpty ? detail?.sense ?? detailError:senses.map {[$0.pos,$0.text].compactMap{$0}.joined(separator:" ")}.joined(separator:"；")
+    }
+    private var studyExamples:[StudyExample] {
+        (personal.map {[StudyExample(sentence:.init(tier:nil,text:$0.text,zh:$0.zh),kind:"personal",tag:"个性化")]} ?? [])
+        + sentences.map {StudyExample(sentence:$0,kind:"static",tag:$0.tier==3 ? "挑战":$0.tier==2 ? "进阶":"基础")}
+    }
+    private func replaceExample(_ old:StudyExample,_ fresh:SentenceItem?) {
+        if old.kind=="personal" {personal=fresh.map {PersonalizedSentence(text:$0.text,recall:nil,zh:$0.zh)}}
+        else {sentences.replaceSentence(old.sentence,with:fresh)}
     }
 
     private func setup() async {
@@ -700,8 +505,8 @@ struct AnswerCardView: View {
         guard !Task.isCancelled else { return }
         let texts = [personal?.text].compactMap { $0 } + sentences.map { $0.text }
         if let p = personal { app.logSentenceExposures(p.text, source: "personal", played: true) }
-        sentences.forEach { app.logSentenceExposures($0.text, source: "trio", played: true) }
-        app.audio.playSequence(word: word, sentences: texts, voice: app.S.settings.voice)
+        if personal==nil,let first=sentences.first {app.logSentenceExposures(first.text,source:"trio",played:true)}
+        app.audio.playSequence(word: word, sentences: Array(texts.prefix(1)), voice: app.S.settings.voice)
     }
 
     private func loadDetail() async {
@@ -714,20 +519,6 @@ struct AnswerCardView: View {
         } catch {
             if !Task.isCancelled { detailError = "词义加载失败，请检查网络后重试" }
         }
-    }
-
-    /// 跟读目标句：选最短的（挑战句 15~20 词一口气读不下来，基础句最适合跟读）
-    private func shadowTarget() -> String {
-        ([personal?.text].compactMap { $0 } + sentences.map { $0.text })
-            .min { $0.count < $1.count } ?? ""
-    }
-
-    /// 跟读结果处理：展示逐词反馈 + 入档（<60% 记薄弱）
-    private func handleShadow(_ res: ShadowResult?) {
-        guard let res else { shadowMsg = "未听清，再试一次"; return }
-        shadowMsg = ""
-        shadowResult = res
-        app.recordShadow(word: word, result: res)
     }
 
     private func rate(_ r: Int) {
@@ -766,11 +557,10 @@ struct AcceptanceQuizView: View {
                 progress: Double(i) / Double(max(1, words.count)))
             HStack {
                 BigWord(word: words[min(i, words.count - 1)])
-                PlayButton(text: words[min(i, words.count - 1)])
             }.padding(8)
             if loading { ProgressView() }
             if !loading, let quiz {
-                QuizOptionsView(options: quiz.options) { ok in answer(ok: ok) }
+                QuizOptionsView(options: quiz.options,spokenWord:words[min(i,words.count-1)]) { ok in answer(ok: ok) }
             } else if !loading {
                 Text("题目加载失败，验收尚未完成。请重试或稍后再做。")
                     .foregroundStyle(Theme.muted)

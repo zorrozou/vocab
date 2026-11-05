@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 enum AppAppearance:String,CaseIterable,Identifiable {
     static let storageKey = "vocab.appearance.v1"
@@ -334,29 +335,34 @@ struct SentenceRow: View {
 /// 4 选 1 选项按钮（答题后高亮对错）
 struct QuizOptionsView: View {
     let options: [QuizOption]
+    var spokenWord:String? = nil
     let onPick: (Bool) -> Void
-    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var reading: Int?
     @State private var feedback = QuizAnswerFeedback()
 
     var body: some View {
-        ScreenPages(spacing: 8) {
+        GeometryReader { geometry in
+          let height = min(68, max(44, (geometry.size.height - (spokenWord==nil ? 0:52) - CGFloat(max(0, options.count - 1)) * 8) / CGFloat(max(1, options.count))))
+          VStack(spacing: 8) {
+            Spacer(minLength: 0)
+            if let spokenWord {HStack {Spacer();Text("重听单词").font(.footnote).foregroundStyle(Theme.muted);PlayButton(text:spokenWord)}.frame(height:44)}
             ForEach(Array(options.enumerated()), id: \.offset) { i, o in
-                let long = o.text.count > (typeSize.isAccessibilitySize ? 30 : 100)
+                let textHeight = (o.text as NSString).boundingRect(with: CGSize(width: max(1, geometry.size.width - 102), height: 1000), options: [.usesLineFragmentOrigin, .usesFontLeading], attributes: [.font:UIFont.preferredFont(forTextStyle:.body)], context: nil).height
+                let long = textHeight > height - 16
                 Button {
                     if long { reading = i } else { feedback.choose(i, correct: o.ok, commit: onPick) }
                 } label: {
                     HStack(spacing:12) {
                         Text(String(UnicodeScalar(65+i)!)).font(.caption.monospaced().bold())
                             .frame(minWidth:26,minHeight:26).background(Theme.card,in:RoundedRectangle(cornerRadius:7)).accessibilityHidden(true)
-                        Text(o.text).font(.body).lineLimit(long ? 2 : nil)
+                        Text(o.text).font(.body).lineLimit(long ? 1 : 2)
                         if long { Image(systemName: "book.pages").accessibilityLabel("查看完整选项") }
                         if feedback.picked != nil && (o.ok || feedback.picked==i) {
                             Image(systemName:o.ok ? "checkmark.circle.fill":"xmark.circle").accessibilityLabel(o.ok ? "正确":"错误")
                         }
                     }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 12).padding(.horizontal, 14)
+                        .padding(.horizontal, 14).frame(height: height)
                         .background(bg(for: i, ok: o.ok))
                         .foregroundStyle(Theme.text)
                         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -364,6 +370,7 @@ struct QuizOptionsView: View {
                 .accessibilityIdentifier("quiz-option-\(i)")
                 .disabled(feedback.picked != nil)
             }
+          }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         }
         .sheet(isPresented: Binding(get: { reading != nil }, set: { if !$0 { reading = nil } })) {
             if let i = reading, options.indices.contains(i) {
@@ -413,5 +420,146 @@ struct NavigationAction:View {
                 .padding(.horizontal,12).frame(minWidth:44,minHeight:44)
                 .background(Theme.cardDeep,in:RoundedRectangle(cornerRadius:12)).contentShape(Rectangle())
         }.buttonStyle(.plain).foregroundStyle(Theme.accent)
+    }
+}
+
+/// One complete study surface: meaning and a bilingual example stay together;
+/// reading, audio and practice actions live just above the grading controls.
+struct StudyExample: Identifiable {
+    let sentence: SentenceItem
+    let kind, tag: String
+    var id: String { kind + "|" + sentence.text }
+}
+
+struct WordStudyPanel: View {
+    @Environment(AppState.self) private var app
+    let word: String
+    let phonetic: String?
+    let meaning: String
+    let examples: [StudyExample]
+    var notice = ""
+    var retry: (() -> Void)?
+    var onSwap: (StudyExample, SentenceItem?) -> Void
+    @State private var selected = 0
+    @State private var reading: String?
+    @State private var readTitle = ""
+    @State private var shadow = false
+    @State private var shadowMessage = ""
+    @State private var shadowResult: ShadowResult?
+    @State private var working = false
+    @State private var message = ""
+    private var example: StudyExample? { examples.isEmpty ? nil : examples[min(selected,examples.count-1)] }
+    private func open(_ text:String,_ title:String) { readTitle=title;reading=text }
+
+    var body: some View {
+        GeometryReader { geometry in
+            let compact=geometry.size.height<350
+            VStack(alignment:.leading,spacing:compact ? 6:12) {
+                HStack(alignment:.firstTextBaseline,spacing:10) {
+                    Text(word).font(.system(size:compact ? 32:38,weight:.semibold,design:.serif))
+                        .lineLimit(1).minimumScaleFactor(0.65).accessibilityIdentifier("study-word")
+                    if let phonetic,!phonetic.isEmpty {
+                        Text("/\(phonetic)/").font(.footnote).foregroundStyle(Theme.muted).lineLimit(1).minimumScaleFactor(0.8)
+                    }
+                }.padding(.top,compact ? 2:12)
+                Text(meaning.isEmpty ? "正在加载词义…":meaning).font(.subheadline)
+                    .lineLimit(compact ? 2:3).foregroundStyle(Theme.text).accessibilityIdentifier("study-meaning")
+                Divider().padding(.vertical,compact ? 2:6)
+                if let e=example {
+                    HStack {
+                        Text(e.tag+"例句").font(.caption.weight(.semibold)).foregroundStyle(Theme.accent)
+                        Spacer()
+                        if examples.count>1 {Text("\(min(selected,examples.count-1)+1) / \(examples.count)").font(.caption.monospacedDigit()).foregroundStyle(Theme.muted)}
+                    }
+                    Text(e.sentence.text).font(.body).lineLimit(compact ? 4:6)
+                        .foregroundStyle(Theme.text).accessibilityIdentifier("study-example")
+                    if let zh=e.sentence.zh,!zh.isEmpty {
+                        Text(zh).font(.footnote).lineLimit(compact ? 2:3)
+                            .foregroundStyle(Theme.muted).accessibilityIdentifier("study-example-translation")
+                    }
+                } else {
+                    Text(notice.isEmpty ? "例句正在准备中…":notice).font(.subheadline).foregroundStyle(Theme.muted)
+                }
+                Spacer(minLength:0)
+                if !message.isEmpty {Text(message).font(.caption).foregroundStyle(Theme.muted).lineLimit(2)}
+                HStack(spacing:0) {
+                    action("单词",icon:"speaker.wave.2") {app.audio.play(word,voice:app.S.settings.voice)}
+                    action("例句",icon:"play.circle") {
+                        if let e=example {app.audio.play(e.sentence.text,voice:app.S.settings.voice);app.logSentenceExposures(e.sentence.text,source:e.kind,played:true)}
+                    }.disabled(example==nil)
+                    action("跟读",icon:"mic") {shadow=true}.disabled(example==nil).accessibilityIdentifier("study-shadow")
+                    action("下一句",icon:"arrow.right.circle") {
+                        selected=(selected+1)%max(1,examples.count)
+                        if let e=example {app.audio.play(e.sentence.text,voice:app.S.settings.voice);app.logSentenceExposures(e.sentence.text,source:e.kind,played:true)}
+                    }.disabled(examples.count<2).accessibilityIdentifier("study-next-example")
+                    Menu {
+                        Button("完整词义") {open(meaning,"完整词义")}.disabled(meaning.isEmpty)
+                        if let e=example {
+                            Button("完整例句") {open(e.sentence.text,"完整例句")}
+                            if let zh=e.sentence.zh,!zh.isEmpty {Button("完整译文") {open(zh,"完整译文")}}
+                            Button("换一句") {swap(e)}.disabled(working).accessibilityIdentifier("swap-\(e.kind)-\(word)")
+                            Menu("例句纠错") {
+                                ForEach([("meaning","词义不匹配"),("translation","翻译有误"),("grammar","语法问题"),("unnatural","表达不自然")],id:\.0) { reason,title in
+                                    Button(title) {report(e.sentence.text,kind:e.kind=="static" ? "static":"personal",reason:reason)}
+                                }
+                            }
+                        }
+                        Button("报告词义问题") {report(meaning,kind:"meaning",reason:"meaning")}.disabled(meaning.isEmpty)
+                        if let retry {Button("重新加载") {retry()}}
+                    } label: {Label("更多",systemImage:"ellipsis.circle").labelStyle(.iconOnly).frame(maxWidth:.infinity,minHeight:44)}
+                        .accessibilityLabel("更多学习操作").accessibilityIdentifier("study-more")
+                }.foregroundStyle(Theme.accent).background(Theme.cardDeep,in:RoundedRectangle(cornerRadius:12))
+            }.frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)
+        }
+        .onChange(of:example?.id,initial:true) {_,_ in
+            if let e=example {app.logSentenceExposures(e.sentence.text,source:e.kind,played:false)}
+        }
+        .sheet(isPresented:Binding(get:{reading != nil},set:{if !$0 {reading=nil}})) {
+            FullTextReader(text:reading ?? "",title:readTitle)
+        }
+        .sheet(isPresented:$shadow) {
+            VStack(spacing:12) {
+                Text("跟读 · \(word)").font(.headline)
+                ScreenPages {
+                    if let e=example {ReadingText(text:e.sentence.text,font:.title3,title:"完整例句")}
+                    if let result=shadowResult {ShadowResultDisplay(result:result)}
+                    else if !shadowMessage.isEmpty {ReadingText(text:shadowMessage,font:.footnote)}
+                    if app.speech.state == .listening {ReadingText(text:app.speech.liveText,font:.footnote,title:"完整跟读记录")}
+                }
+                if let e=example {
+                    ShadowHoldButton(target:e.sentence.text,onBusy:{shadowMessage=$0},onResult:{result in
+                        guard let result else {shadowMessage="未听清，再试一次";return}
+                        shadowResult=result;shadowMessage="";app.recordShadow(word:word,result:result)
+                    })
+                }
+                if shadowMessage.contains("权限") {
+                    GhostButton(title:"打开权限设置") {
+                        if let url=URL(string:UIApplication.openSettingsURLString) {UIApplication.shared.open(url)}
+                    }
+                }
+                GhostButton(title:"返回学习") {shadow=false}
+            }.padding(16).background(Theme.bg).presentationDetents([.large])
+                .onDisappear {app.speech.stopCapture(finalize:false);app.audio.stop()}
+        }
+    }
+    private func action(_ title:String,icon:String,perform:@escaping ()->Void)->some View {
+        Button(action:perform) {
+            VStack(spacing:3) {Image(systemName:icon).font(.body);Text(title).font(.caption2)}.frame(maxWidth:.infinity,minHeight:44)
+        }.buttonStyle(.plain).accessibilityLabel(title)
+    }
+    private func swap(_ e:StudyExample) {
+        working=true;message=""
+        Task {
+            let result=await app.swapSentence(word:word,oldText:e.sentence.text,kind:e.kind,tier:e.sentence.tier ?? 1,displayedSentences:examples.map(\.sentence.text))
+            if e.kind=="static" && result==nil {message="暂时无法换句，原例句仍可使用。"}
+            else {onSwap(e,result)}
+            working=false
+        }
+    }
+    private func report(_ text:String,kind:String,reason:String) {
+        Task {
+            do {try await APIClient.shared.reportContent(word:word,text:String(text.prefix(500)),kind:kind,reason:reason);message="已进入内容复核队列。"}
+            catch {message="未提交："+error.localizedDescription}
+        }
     }
 }

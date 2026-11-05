@@ -206,6 +206,23 @@ const Appearance = (() => {
     .plays.bad { top: 8px; right: 60px; }
   }
   @media (prefers-reduced-motion: reduce) { .progress i { transition: none; } }
+
+  @media (max-width:700px) {
+    body:has(.thumb-quiz) { padding: 0 12px; display:flow-root; min-height:100dvh; }
+    body:has(.thumb-quiz) > header, body:has(.thumb-quiz) > #chips, body:has(.thumb-quiz) > #foot { display:none; }
+    body:has(.thumb-quiz) #coachControls > .card { margin-top:4px; padding:6px 10px; display:flex; flex-wrap:wrap; gap:4px 8px; align-items:center; justify-content:space-between; }
+    body:has(.thumb-quiz) #coachControls strong { font-size:12px; font-weight:500; }
+    body:has(.thumb-quiz) #coachControls button { padding:6px 10px; min-height:44px; font-size:13px; }
+    .thumb-quiz { height:calc(100dvh - var(--quiz-top, 110px) - max(10px,env(safe-area-inset-bottom))); display:flex; flex-direction:column; padding:12px; margin-top:6px; }
+    .thumb-quiz .thumb-options { margin-top:auto !important; padding-top:12px; flex-shrink:0; }
+    .thumb-quiz .quiz-replay { display:flex; justify-content:flex-end; align-items:center; gap:8px; font-size:12px; color:var(--caption); }
+    .thumb-quiz .quiz-replay .playw { margin-left:0; }
+    .thumb-quiz .opt { min-height:46px; margin:4px 0; padding:10px 12px; font-size:16px; line-height:1.25; }
+    .thumb-quiz > .progress { order:-1; margin:0 0 8px; flex-shrink:0; }
+    .thumb-quiz h2 { margin-bottom:8px; }
+    .thumb-quiz > .muted { font-size:12px; line-height:1.35; margin-top:4px !important; }
+    .thumb-quiz > .row { margin-top:6px !important; flex-shrink:0; }
+  }
 </style>
 <link rel="stylesheet" href="./studio.css">
 </head>
@@ -1701,9 +1718,9 @@ async function place() {
     <h2>智能定级 · 第 ${escapeHTML(S.probeCount + 1)}/30 题 · 第 ${band} 区间</h2>
     <div><span class="big">${escapeHTML(w.word)}</span><button class="playw" aria-label="朗读单词" data-t="${escapeHTML(w.word)}">▶</button></div>
     <div style="text-align:left;margin-top:10px">${w.options.map((o, i) => `<button class="opt" data-i="${i}">${escapeHTML(o.text)}</button>`).join("")}</div>
-    <div class="row" style="margin-top:10px"><button class="act ghost" id="bUnknown">不认识</button></div>
+    <p class="muted" style="margin-top:10px">不确定请点「不认识」；进度会保存。</p>
+    <div class="row" style="margin-top:10px"><button class="act ghost" id="bUnknown">不认识</button><button class="ghost" id="bPlaceExit">退出定级</button></div>
     <div class="progress"><i style="width:${S.probeCount / 30 * 100}%"></i></div>
-    <p class="muted" style="margin-top:10px">不确定请点「不认识」，不要猜；进度会保存，可以稍后继续。</p><div class="row"><button class="ghost" id="bPlaceExit">退出定级</button></div>
   </div>`;
   bindPlays();
   playText(w.word);
@@ -2088,7 +2105,23 @@ function showContentFeedback(word,text,kind) {
   };
 }
 
+function positionQuizActions() {
+  const card=document.querySelector('#app .thumb-quiz');
+  if(card&&matchMedia('(max-width:700px)').matches)card.style.setProperty('--quiz-top',Math.max(0,card.getBoundingClientRect().top)+'px');
+}
+window.addEventListener('resize',positionQuizActions);
+new ResizeObserver(positionQuizActions).observe(document.getElementById('coachControls'));
 function bindPlays() {
+  const options=document.querySelector('#app .opt')?.parentElement;
+  if(options&&!document.body.classList.contains('studio-course')){
+    const card=options.closest('.card');card?.classList.add('thumb-quiz');options.classList.add('thumb-options');
+    if(matchMedia('(max-width:700px)').matches){
+      const play=card?.querySelector('.playw');
+      if(play&&!options.contains(play)){const replay=document.createElement('div');replay.className='quiz-replay';replay.append('重听单词',play);options.prepend(replay);}
+      window.scrollTo(0,0);
+    }
+    positionQuizActions();
+  }
   document.querySelectorAll('#app .sent').forEach(el=>{
     const source=el.querySelector('.plays.bad');
     if(!source||el.querySelector('.content-feedback'))return;

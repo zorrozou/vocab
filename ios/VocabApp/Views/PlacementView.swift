@@ -51,13 +51,12 @@ struct PlacementView: View {
                         } else if let quiz {
                             HStack(alignment: .center, spacing: 10) {
                                 BigWord(word: quiz.word)
-                                PlayButton(text: quiz.word)
                             }
                             Text("选出正确词义").font(.subheadline).foregroundStyle(Theme.muted)
                         }
                     }
                     if let quiz, !loading {
-                        QuizOptionsView(options: quiz.options) { ok in answer(quiz, ok: ok) }
+                        QuizOptionsView(options: quiz.options,spokenWord:quiz.word) { ok in answer(quiz, ok: ok) }
                         GhostButton(title: "不认识") { answer(quiz, ok: false, guessed: false) }
                     }
                     Text("不确定请点「不认识」，不要猜")

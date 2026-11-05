@@ -686,7 +686,6 @@ struct ValidationView: View {
                                 } else {
                                     HStack(spacing: 10) {
                                         BigWord(word: v.words[v.idx].word)
-                                        PlayButton(text: v.words[v.idx].word)
                                     }
                                     Text("选出正确词义").font(.subheadline).foregroundStyle(Theme.muted)
                                 }
@@ -702,7 +701,7 @@ struct ValidationView: View {
                 }
             }
                 if let q = quiz, let v = app.validation, v.idx < v.words.count {
-                    QuizOptionsView(options: q.options) { ok in
+                    QuizOptionsView(options: q.options,spokenWord:v.idx%2==1 ? nil:v.words[v.idx].word) { ok in
                         app.answerValidation(ok: ok, verifiedPos: q.pos)
                         quiz = nil
                         loading = true

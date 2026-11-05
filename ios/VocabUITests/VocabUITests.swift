@@ -49,6 +49,13 @@ final class VocabUITests: XCTestCase {
     }
 
     private func selectSection(_ name: String, in app: XCUIApplication) {
+        if ["词义","答案","例句","跟读"].contains(name) {
+            if app.buttons["返回学习"].exists {app.buttons["返回学习"].tap()}
+            if app.staticTexts["study-word"].waitForExistence(timeout:10) {
+                if name=="跟读" {app.buttons["study-shadow"].tap()}
+                return
+            }
+        }
         if app.buttons["section-menu"].waitForExistence(timeout: 0.5) {
             app.buttons["section-menu"].tap()
             let target = app.buttons[name].firstMatch
@@ -140,6 +147,7 @@ final class VocabUITests: XCTestCase {
         let choice = app.buttons["quiz-option-0"]; XCTAssertTrue(choice.waitForExistence(timeout: 20)); choice.tap()
         let remember = app.buttons["记得"]; XCTAssertTrue(remember.waitForExistence(timeout: 20))
         selectSection("例句", in: app)
+        app.buttons["study-more"].tap()
         let read = app.buttons["完整例句"].firstMatch; reveal(read, in: app); read.tap()
         let text = app.textViews["reader-page"]
         XCTAssertTrue(text.waitForExistence(timeout: 10))
@@ -2069,11 +2077,26 @@ final class VocabUITests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@", "复习 1/3")).firstMatch.waitForExistence(timeout: 30))
         XCTAssertFalse(app.staticTexts["book"].exists, "a mastered card must not be queued")
         let option = app.buttons["quiz-option-0"]
-        XCTAssertTrue(option.waitForExistence(timeout: 20)); option.tap()
+        XCTAssertTrue(option.waitForExistence(timeout: 20))
+        for i in 0..<4 {XCTAssertTrue(onScreen(app.buttons["quiz-option-\(i)"],app:app))}
+        let last=app.buttons["quiz-option-3"]
+        XCTAssertGreaterThan(last.frame.maxY,app.frame.height-100)
+        XCTAssertFalse(app.buttons["page-next"].exists)
+        capture("thumb-review-options",app:app)
+        option.tap()
         let remember = app.buttons["记得"]
-        XCTAssertTrue(remember.waitForExistence(timeout: 20)); remember.tap()
+        XCTAssertTrue(remember.waitForExistence(timeout: 20))
+        let example=app.staticTexts["study-example"]
+        XCTAssertTrue(example.waitForExistence(timeout:20));XCTAssertTrue(onScreen(example,app:app))
+        XCTAssertTrue(onScreen(app.staticTexts["study-meaning"],app:app));XCTAssertTrue(onScreen(remember,app:app))
+        XCTAssertFalse(app.buttons["page-next"].exists);capture("thumb-answer-with-example",app:app)
+        remember.tap()
         XCTAssertTrue(app.staticTexts["dog"].waitForExistence(timeout: 30), "the first reserved new word must be present")
-        XCTAssertTrue(app.buttons["学会了 →"].waitForExistence(timeout:30)); app.buttons["学会了 →"].tap()
+        XCTAssertTrue(app.buttons["学会了 →"].waitForExistence(timeout:30))
+        XCTAssertTrue(example.waitForExistence(timeout:20));XCTAssertTrue(onScreen(example,app:app))
+        XCTAssertTrue(onScreen(app.staticTexts["study-meaning"],app:app));XCTAssertTrue(onScreen(app.buttons["study-more"],app:app))
+        XCTAssertFalse(app.buttons["page-next"].exists);capture("thumb-new-word-with-example",app:app)
+        app.buttons["学会了 →"].tap()
         XCTAssertTrue(app.staticTexts["cat"].waitForExistence(timeout:30), "a skipped-range random word replaced the reserved new word")
         var reviewGuess: Double?
         for _ in 0..<100 {
@@ -2331,12 +2354,13 @@ final class VocabUITests: XCTestCase {
         selectSection("例句", in: app)
         let sentence = app.staticTexts["An apple is here."]
         XCTAssertTrue(sentence.waitForExistence(timeout: 30))
+        app.buttons["study-more"].tap()
         let swap = app.buttons.matching(identifier: "swap-static-apple").firstMatch
         XCTAssertTrue(swap.waitForExistence(timeout: 10)); swap.tap()
-        XCTAssertTrue(app.staticTexts["暂时无法换句，请稍后重试。"].waitForExistence(timeout: 20))
+        XCTAssertTrue(app.staticTexts["暂时无法换句，原例句仍可使用。"].waitForExistence(timeout: 20))
         XCTAssertTrue(sentence.exists, "the original sentence should remain visible on failure")
         _ = try await fixtureRequest("/api/v1/__ui_fixture/static-swap-online", method: "POST")
-        swap.tap()
+        app.buttons["study-more"].tap();swap.tap()
         XCTAssertTrue(app.staticTexts["A different apple sentence."].waitForExistence(timeout: 20))
         XCTAssertFalse(sentence.exists, "an available alternative should replace the original")
     }
@@ -2364,6 +2388,7 @@ final class VocabUITests: XCTestCase {
         selectSection("例句", in: app)
         let sentence = app.staticTexts["An old sentence."]
         XCTAssertTrue(sentence.waitForExistence(timeout: 30))
+        app.buttons["study-more"].tap()
         let replace = app.buttons["swap-personal-apple"]
         XCTAssertTrue(replace.waitForExistence(timeout: 10)); replace.tap()
         var recorded = false
